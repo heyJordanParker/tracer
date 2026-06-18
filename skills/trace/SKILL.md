@@ -69,6 +69,7 @@ trace docs <path> --graph               # whole-repo docs graph: every recognize
 trace docs load <path> [--source <s>] [--triggering-tool <t>] [--triggering-command <c>]
                                         # hook-facing alias forwarding to path-mode (--source defaults to trace_docs_load)
 trace docs status [<path>]              # pure read; no path → session manifest, with path → ancestor chain partitioned loaded/not_loaded
+trace docs reset [--source <s>]         # clear the session's surfaced-docs state so subsequent `trace docs` re-surfaces docs as new (post-compaction/clear); preserves append-only history
 trace diff [--base <ref>] [--symbols]   # files (or module-level symbols) changed vs base ref; load-bearing first. Default base: origin/development
 trace status [--state added|renamed|modified|deleted|untracked]
                                         # working-tree dirty set ordered by blast radius
@@ -155,7 +156,7 @@ The architecture graph treats project-docs as first-class nodes: `CLAUDE.md` / `
 
 `trace docs status` is a pure read. Without a path, returns the full session manifest (`{ scope: "session", session_active, loaded[], loaded_count, by_source }`). With a path, returns the ancestor chain partitioned into `loaded` and `not_loaded` (`{ scope: "path", path, session_active, loaded[], not_loaded[], loaded_count, not_loaded_count, chain_size }`). Status never records — only `trace docs <path>` / `docs load` / `read --docs` write to the log.
 
-`trace docs load` is the hook-facing alias: same `{ docs, doc_count, already_loaded? }` shape as path-mode, with `--source` defaulting to `trace_docs_load`. `inject-docs.sh` invokes path-mode directly with `--source trace_inject_hook`.
+`trace docs load` is the hook-facing alias: same `{ docs, doc_count, already_loaded? }` shape as path-mode, with `--source` defaulting to `trace_docs_load`. `inject_docs.py` invokes path-mode directly with `--source trace_inject_hook`.
 
 ## `trace read` and project-docs injection
 
@@ -179,7 +180,7 @@ The architecture graph treats project-docs as first-class nodes: `CLAUDE.md` / `
   the value in-process (requires `--json` explicitly; never implied).
   Raw `cat`/`grep`/`rg`/`find`/`sed`/`awk`/`head`/`tail` on an in-repo path is
   also blocked — use the matching trace subcommand. Enforced by the
-  `guard-trace.sh` PreToolUse hook.
+  `guard_trace.py` PreToolUse hook.
 - Run `trace doctor` first if any command errors with a missing-dependency error.
 - Use `trace info` and `trace structure` for architectural orientation **before** deep reads.
 - Use `trace read` instead of raw Read whenever you want fluff-stripped output.
@@ -212,6 +213,7 @@ The architecture graph treats project-docs as first-class nodes: `CLAUDE.md` / `
 | See which top-level symbols changed between a ref and worktree | `trace read <file> --at <ref> --diff` |
 | Get the project docs (Claude.md / Agents.md / rules) for a path | `trace docs <path>` |
 | Check which docs the agent already has in context | `trace docs status` or `trace docs status <path>` |
+| Reset surfaced-docs state after a context reset so docs re-surface | `trace docs reset` |
 | Browse the whole-repo docs graph | `trace docs --graph` |
 | See what's changed vs a base ref, ordered by impact | `trace diff` (defaults to `origin/development`) |
 | See the working-tree dirty set by blast radius | `trace status` |
@@ -233,20 +235,21 @@ In `--path` mode, the ranking inverts the natural-language framing:
 
 ## Hook surface
 
-Six tracer hooks are wired locally in `settings.json` (never in plugin `hooks.json` — tracer hooks are the local experimental surface; plugin users get the binary, not the hooks):
+Six tracer hooks (Python, under `packages/agents/hooks/`) are wired locally in `settings.json` by absolute `~/.agents/hooks/<module>.py` path (never in plugin `hooks.json` — tracer hooks are the local experimental surface; plugin users get the binary, not the hooks):
 
-- **`load-trace-context.sh`** — SessionStart matcher `startup|resume|clear|compact`. Runs `trace context` (no args) and injects the eight-section repo primer as `hookSpecificOutput.additionalContext`.
-- **`reload-harness-context.sh`** — SessionStart matcher `startup|resume|clear|compact`. Runs `trace context prime --reason {session_start|post_compact}` (compact → `post_compact`, else `session_start`) so the session log mirrors what the harness re-emitted at session start or after compaction. Content-hash dedupe means unchanged docs add no events.
-- **`enrich-on-read.sh`** — PreToolUse matcher `Read|Glob|Grep`. For Read → `trace context <file>` (passive shoulder + docs-awareness line). For Glob → `trace glob <pattern> <base> --details`. Grep is a no-op for now. 5s timeout, silent fallback.
-- **`guard-trace.sh`** — PreToolUse matcher `Bash`. Blocks (a) `trace …` piped into `grep|rg|sed|awk|head|tail|cut|sort|uniq|wc|column|fold|tr|jq` or redirected into a repo file, and (b) raw `cat`/`grep`/`rg`/`find`/`sed`/`awk`/`head`/`tail` against any in-repo path. Whitelists `/tmp`, `/dev/null`, paths under `.claude/shaping/`, `.claude/plans/`, and `.tracer-cache/`. Block message names the trace subcommand to use instead.
-- **`inject-docs.sh`** — PreToolUse matcher `Bash`. When the agent runs a path-taking `trace` subcommand (`read|info|list|tree|structure|grep|struct|find|glob|blame|history|diff`), resolves the path argument and runs `trace docs <path> --source trace_inject_hook --triggering-tool Bash --triggering-command <cmd>` as a direct subprocess; injects the response as `additionalContext`. **Blocks the trace command (exit 2) if `trace docs` itself fails** — the agent must not run trace without docs context. Non-path-taking subcommands and unresolvable paths are clean no-ops.
-- **`archive-subagent-log.sh`** — Invoked from UserPromptSubmit's `<task-notification>` parse when a subagent completes. Moves `<repo>/.tracer-cache/sessions/<sid>/<aid>/` to `<repo>/.tracer-cache/sessions/<sid>/archived/<aid>/`. The tracer's read path falls back to the archived directory when the active one is missing, so post-stop log queries keep working.
+- **`load_trace_context.py`** — SessionStart matcher `startup|resume|clear|compact`. Runs `trace context` (no args) and injects the eight-section repo primer as `hookSpecificOutput.additionalContext`.
+- **`reload_harness_context.py`** — SessionStart matcher `startup|resume|clear|compact`. Runs `trace context prime --reason {session_start|post_compact}` (compact → `post_compact`, else `session_start`) so the session log mirrors what the harness re-emitted at session start or after compaction. Content-hash dedupe means unchanged docs add no events.
+- **`enrich_on_read.py`** — PreToolUse matcher `Read|Glob|Grep|Edit|Write`. Read/Edit/Write → one `trace context <file>` for the touched file (passive shoulder + docs-awareness line). Glob/Grep → resolve the matched files and emit a full `trace context` shoulder for each, capped at 20. All branches inject as `additionalContext`; 5s timeout, silent fallback.
+- **`guard_trace.py`** — PreToolUse matcher `Bash`. Blocks (a) `trace …` piped into `grep|rg|sed|awk|head|tail|cut|sort|uniq|wc|column|fold|tr|jq` or redirected into a repo file, and (b) raw `cat`/`grep`/`rg`/`find`/`sed`/`awk`/`head`/`tail` against any in-repo path. Whitelists `/tmp`, `/dev/null`, paths under `.claude/shaping/`, `.claude/plans/`, and `.tracer-cache/`. Block message names the trace subcommand to use instead.
+- **`inject_docs.py`** — PreToolUse matcher `Bash`. When the agent runs a path-taking `trace` subcommand (`read|info|list|tree|structure|grep|struct|find|glob|blame|history|diff`), resolves the path argument and runs `trace docs <path> --source trace_inject_hook --triggering-tool Bash --triggering-command <cmd>` as a direct subprocess; injects the response as `additionalContext`. **Blocks the trace command (exit 2) if `trace docs` itself fails** — the agent must not run trace without docs context. Non-path-taking subcommands and unresolvable paths are clean no-ops.
+- **`inject_rules.py`** — SessionStart + PreToolUse matcher `Read|Write|Edit|apply_patch`. Codex-only, because Claude Code loads `Claude.md` (root and nested) itself: injects the nearest `Claude.md` via `trace docs` — repo-root rules on SessionStart (with a `trace docs reset` on `clear`/`compact`), the touched file's rules on a file edit — wrapped in a `hookSpecificOutput.additionalContext` envelope. Best-effort: never blocks, silent fallback.
+- **`archive_subagent_log.py`** — Invoked from UserPromptSubmit's `<task-notification>` parse when a subagent completes. Moves `<repo>/.tracer-cache/sessions/<sid>/<aid>/` to `<repo>/.tracer-cache/sessions/<sid>/archived/<aid>/`. The tracer's read path falls back to the archived directory when the active one is missing, so post-stop log queries keep working.
 
-Identity propagation: `inject-docs.sh`, `enrich-on-read.sh`, and `reload-harness-context.sh` each export `CLAUDE_CODE_SESSION_ID` and `TRACER_AGENT_ID` from the hook payload before calling `trace`. Without those env vars the session log no-ops and dedupe stops working.
+Identity propagation: `inject_docs.py`, `inject_rules.py`, `enrich_on_read.py`, and `reload_harness_context.py` set `AGENT_SESSION_ID` and `TRACER_AGENT_ID` from the hook payload on a **local env copy** passed to `trace` — never mutating `os.environ`. `AGENT_SESSION_ID` is the harness-neutral carrier `trace` resolves first, so it keys the session log to the run. The launcher's `CLAUDE_CODE_SESSION_ID` is left untouched in the process env, so on a nested codex run the proposal/commit guards can still resolve the governing proposing/executing mode through `owner_session`. Without a session id the log no-ops and dedupe stops working.
 
 ## Environment variables
 
-- `CLAUDE_CODE_SESSION_ID` / `CLAUDE_SESSION_ID` / `TRACER_SESSION_ID` — session id for the log; resolved in that order.
+- `AGENT_SESSION_ID` / `CODEX_THREAD_ID` / `CLAUDE_CODE_SESSION_ID` — session id for the log; resolved in that order. `AGENT_SESSION_ID` is the harness-neutral carrier our hooks set; the harness-native names are the fallback, innermost (codex thread) before outermost (claude session).
 - `TRACER_AGENT_ID` — agent id within the session; defaults to `root` when absent.
 - `TRACER_TRIGGERING_TOOL` / `TRACER_TRIGGERING_COMMAND` — stamped on log events at append time. `trace docs` sets these from its `--triggering-tool` / `--triggering-command` flags.
 - `TRACE_BIN` — override the binary path used by the plugin launcher.
