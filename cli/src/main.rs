@@ -285,12 +285,13 @@ enum Command {
     },
     /// Project-docs surface: path-scoped deduped set (default), `--graph` for
     /// the whole-repo docs graph, `status` for the session manifest, `reset`
-    /// to forget what was loaded, or `prime` to record what the harness loaded.
+    /// to forget what was loaded, `archive` to set a stopped agent's log aside,
+    /// or `prime` to record what the harness loaded.
     #[command(args_conflicts_with_subcommands = true)]
     Docs {
         /// Paths for the default path-mode (`trace docs <paths>`), or the one
         /// path for `--graph` (optional; defaults to the cwd's repo root).
-        /// Replaced by any present sub-verb (`status`, `reset`, `prime`).
+        /// Replaced by any present sub-verb (`status`, `reset`, `archive`, `prime`).
         paths: Vec<PathBuf>,
         /// A doc the triggering command delivers itself, never sent here.
         #[arg(long = "skip", value_name = "PATH")]
@@ -417,6 +418,13 @@ enum DocsCommand {
         /// verbatim in the log event's `source` field.
         #[arg(long, default_value = "trace_docs_reset")]
         source: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move the agent's session log under `archived/` when the agent stops,
+    /// so the active sessions directory stays bounded. A resumed agent's first
+    /// write takes it back. The agent is `--agent`, else `TRACER_AGENT_ID`.
+    Archive {
         #[arg(long)]
         json: bool,
     },
@@ -681,6 +689,9 @@ fn run() -> Result<()> {
             }),
             Some(DocsCommand::Reset { source, json }) => {
                 output::run_value(json, filter, || commands::docs::run_reset(&source, json))
+            }
+            Some(DocsCommand::Archive { json }) => {
+                output::run_value(json, filter, || commands::docs::run_archive(json))
             }
             Some(DocsCommand::Prime { files, reason, json }) => output::run_value(json, filter, || {
                 let parsed = commands::docs_prime::parse_reason(&reason)?;

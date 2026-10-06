@@ -1590,7 +1590,7 @@ fn a_commit_refreshes_the_summary_with_no_content_change() {
 /// The bulk git map is keyed by HEAD and the 30-day cutoff date, so every
 /// commit and every new day writes a fresh entry. Without the eviction the
 /// superseded ones stay forever: 64 of them at ~800 KB each had accumulated
-/// in the dotfiles repo.
+/// in one repository.
 #[test]
 fn superseded_git_activity_entries_are_evicted() {
     let f = Fixture::new();

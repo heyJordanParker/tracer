@@ -38,8 +38,5 @@ IF a trace command errors with missing dependencies:
 ### Run `trace doctor`
 `trace doctor` verifies ast-grep, scc, universal-ctags, ripgrep, and git, then prints per-platform install instructions.
 
-### Plugin users get the binary on PATH
-When the plugin is enabled, the `trace` binary lands on PATH automatically.
-
-### Standalone users build from `tools/tracer`
-Build with `cargo build --release`, put `target/release/trace` on PATH, then run `trace doctor`.
+### The mod installs `trace` on PATH
+Installing the tracer mod puts the `trace` release for the machine at `~/.local/bin/trace`. Homebrew installs it with `brew install heyJordanParker/tracer/tracer`, and a source build is `cargo build --release` in `cli/`, which writes `cli/.target/release/trace`.

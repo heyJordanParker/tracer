@@ -1,0 +1,6 @@
+{
+  "ignorePatterns": [
+    ".claude-plugin/types/**",
+    "cli/**"
+  ]
+}

@@ -91,7 +91,7 @@ Template:
     },
     "context": {
       "already_loaded": [
-        { "path": "packages/agents/Claude.md", "kind": "claude_md", "size": 15388, "large": false, "source": "inject_docs" }
+        { "path": "src/Claude.md", "kind": "claude_md", "size": 15388, "large": false, "source": "tracer_project_docs" }
       ]
     },
     "results": [
@@ -104,6 +104,9 @@ Template:
 ### `trace docs prime` records what the harness loaded
 With files it records exactly those files as loaded, source `instructions_loaded`. With no file it records the root-to-cwd `Claude.md` chain.
 
+### `trace docs archive` moves a stopped Subagent's log aside
+It moves the session log of `TRACER_AGENT_ID` under `archived/`, and does nothing for an Agent that never wrote one. Reads fall back to the archived log, and the Agent's first write after a resume takes it back.
+
 ### `trace docs <path> --graph` projects the docs graph
 The path is optional with `--graph`; it defaults to the repository root for the current working directory.
 
@@ -112,7 +115,7 @@ Template:
   {
     "query": { "path": "relative/path", "scope": "repo" },
     "context": {
-      "available_not_loaded": [ "Claude.md", "tools/tracer/Claude.md" ]
+      "available_not_loaded": [ "Claude.md", "src/Claude.md" ]
     },
     "results": {
       "head": "git HEAD",

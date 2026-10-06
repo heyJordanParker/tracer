@@ -21,16 +21,16 @@ Never: pipe `trace` into `grep`, `rg`, `head`, `tail`, `sed`, `awk`, `cut`, `sor
 Never: `--json` or `--filter` on `trace read` to get bare content.
 
 ### Do not use raw file-search or listing commands on repository paths
-Use the matching `trace` subcommand instead. `guard_trace.py` blocks raw `cat`, `grep`, `rg`, `find`, `sed`, `awk`, `head`, and `tail` against in-repo paths, and blocks `ls` and `tree` reaching the repo.
+Use the matching `trace` subcommand instead of raw `cat`, `grep`, `rg`, `find`, `sed`, `awk`, `head`, `tail`, `ls`, and `tree` on repository paths.
 Example: `trace list src/` replaces `ls src/`; `trace tree src/` replaces `tree src/`.
 
 ### Do not read repository code with git
-Use the matching `trace` subcommand. `guard_trace.py` blocks the git forms trace already answers.
+Use the matching `trace` subcommand for the git forms trace already answers.
 Example: `trace read <path> --at <ref>` replaces `git show <ref>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --at <ref>` replaces `git grep <pattern> <ref>`; `trace blame <file>` replaces `git blame`; `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S`; `trace diff` replaces `git diff --name-status`.
 Every other git command passes, including `git status`, `git branch`, `git tag`, `git rev-parse`, `git reflog`, `git stash`, `git merge-base`, `git describe`, `git ls-files`, plain `git diff`, `git log -p`, and `git log -G`.
 
 ### Bound a search before sorting it
-A search piped into `sort` or `uniq` holds its whole output in memory, so `guard_trace.py` blocks one that is not bounded. Count with `rg -c`, cap with `rg --max-count <n>`, or put `head -<n>` before the sort.
+A search piped into `sort` or `uniq` holds its whole output in memory. Count with `rg -c`, cap with `rg --max-count <n>`, or put `head -<n>` before the sort.
 
 ### Find the newest artifact with `trace list --recent`
 `trace list` lists the filesystem, so gitignored artifact directories (test runs, logs, builds) list too. `--recent` orders newest-first by mtime, `--limit N` caps the rows, and `entries=N` always carries the full count.
@@ -58,9 +58,9 @@ Template:
   ```bash
   trace context
   trace stats
-  trace list packages/agents/skills
-  trace info packages/agents/skills/trace/SKILL.md --brief
-  trace structure tools/tracer/src/main.rs tools/tracer/src/output.rs
+  trace list src
+  trace info src/Entity/Loan.php --brief
+  trace structure src/Entity/Loan.php src/Service/Notifier.php
   ```
 
 ## 4. Choose the smallest matching command
@@ -259,5 +259,5 @@ Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md`
 ## References
 
 - Full command selection, flags, JSON payload shapes, `trace docs`, and `trace read` modes → [commands.md](references/commands.md)
-- Hook events, identity propagation, and session-log environment variables → [hooks.md](references/hooks.md)
-- Disk cache namespaces, invalidation, prebuild, `trace doctor`, and install checks → [cache.md](references/cache.md)
+- The tracer mod's Hooks, identity propagation, and session-log environment variables → [hooks.md](references/hooks.md)
+- Disk cache namespaces, invalidation, `trace doctor`, and install checks → [cache.md](references/cache.md)

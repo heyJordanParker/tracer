@@ -1,0 +1,24 @@
+{
+  "name": "tracer",
+  "version": "0.1.0",
+  "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
+  "author": {
+    "name": "Jordan Parker",
+    "email": "jordan@parkerlabs.co"
+  },
+  "homepage": "https://github.com/heyJordanParker/tracer",
+  "repository": "https://github.com/heyJordanParker/tracer",
+  "documentationUrl": "https://github.com/heyJordanParker/tracer/tree/main/docs",
+  "supportUrl": "https://github.com/heyJordanParker/tracer/issues",
+  "license": "MIT",
+  "keywords": [
+    "code-intelligence",
+    "search",
+    "navigation",
+    "context",
+    "tree-sitter"
+  ],
+  "dependencies": [
+    "cmod"
+  ]
+}

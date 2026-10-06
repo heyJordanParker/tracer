@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  trace:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the programs trace runs
+        run: brew install ast-grep ripgrep scc universal-ctags
+
+      - name: Build trace
+        working-directory: cli
+        run: cargo build --release --locked
+
+      - name: Run the unit tests
+        working-directory: cli
+        run: cargo test --release --locked --workspace
+
+      - name: Run the command-line suite against the build
+        working-directory: cli/tests
+        env:
+          TRACE_BIN: ${{ github.workspace }}/cli/.target/release/trace
+        run: cargo test --locked
+
+  mod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install the mod's packages
+        run: bun install --frozen-lockfile
+
+      - name: Run the mod's tests
+        run: bun test
+
+  formula:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check Formula/tracer.rb against Homebrew's style rules
+        run: brew style Formula/tracer.rb

@@ -293,7 +293,7 @@ pub fn save<T: serde::Serialize + ?Sized>(
 
 /// Remove one entry. The mtime index calls this for the per-file key it just
 /// superseded, so the namespace holds one entry per file instead of one per
-/// version ever written: dotfiles had reached 17,736 entries for 795 files.
+/// version ever written: one repository had reached 17,736 entries for 795 files.
 pub fn remove(namespace: &str, key: &str, repo_root: &Path) {
     if let Ok(dir) = schema_directory(namespace, repo_root) {
         let _ = fs::remove_file(dir.join(format!("{key}.json")));

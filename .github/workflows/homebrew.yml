@@ -1,0 +1,38 @@
+name: Homebrew
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  formula:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Download the release's SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release download "$TAG" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+
+      - name: Point Formula/tracer.rb at the release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: scripts/update-formula.sh "${TAG#v}" "$RUNNER_TEMP/SHA256SUMS"
+
+      - name: Commit the formula
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/tracer.rb
+          git diff --cached --quiet && exit 0
+          git commit --message "chore: brew install tracer installs $TAG"
+          git push origin HEAD

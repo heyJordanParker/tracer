@@ -22,9 +22,8 @@
 //! repo).
 //!
 //! Subagent stop archives the active log to
-//! `<repo>/.tracer-cache/sessions/<session_id>/archived/<agent_id>/` via the
-//! `archive_subagent_log.py` hook. The move is a directory rename at the
-//! harness layer. Reads fall back to the archived log while the active one is
+//! `<repo>/.tracer-cache/sessions/<session_id>/archived/<agent_id>/` through
+//! `trace docs archive`, a directory rename. Reads fall back to the archived log while the active one is
 //! absent; the first write of a resumed Subagent renames it back, so its
 //! record carries on whole. Writes always target the active directory.
 
@@ -469,12 +468,24 @@ fn lock(path: &Path, phase: &str) -> Option<fs::File> {
     Some(file)
 }
 
-/// Archived log directory for the current (session, agent).
-/// Subagent stores are moved here on subagent stop by the
-/// `archive_subagent_log.py` hook so the active sessions directory stays
-/// bounded over a long-running orchestrator's lifetime. Reads fall back
-/// here when the active directory is absent, and `writable_log_dir` moves it
-/// back before a write.
+/// Moves this (session, agent)'s active log under `archived/` when that agent
+/// stops, replacing the copy an earlier stop left, so the active sessions
+/// directory stays bounded over a long-running orchestrator's lifetime. True
+/// when a log moved; an agent that never wrote one leaves nothing behind.
+pub fn archive() -> bool {
+    let (Some(active), Some(archived)) = (log_dir(), archived_log_dir()) else {
+        return false;
+    };
+    let Some(parent) = archived.parent().filter(|_| active.is_dir()) else {
+        return false;
+    };
+    let _ = fs::remove_dir_all(&archived);
+    fs::create_dir_all(parent).is_ok() && fs::rename(&active, &archived).is_ok()
+}
+
+/// Archived log directory for the current (session, agent), where `archive`
+/// moves it. Reads fall back here when the active directory is absent, and
+/// `writable_log_dir` moves it back before a write.
 fn archived_log_dir() -> Option<PathBuf> {
     let sid = nested_memory::session_id()?;
     Some(

@@ -4,9 +4,8 @@ Local code-intelligence command-line interface for Agents working in a repositor
 
 # Facts
 
-- The Rust package is named `tracer`.
-- The binary is named `trace`.
-- `tools/tracer` is a Cargo workspace with an `xtask` member.
+- The Rust package and its binary are both named `trace`, because cmod names a Rust program by its package.
+- `cli/` is a Cargo workspace with an `xtask` member, and builds into `cli/.target/`.
 - `trace` works without Claude Code.
 - `doctor` verifies required external binaries.
 - The external binaries are `ast-grep`, `scc`, `universal-ctags`, `ripgrep`, and `git`.
@@ -264,15 +263,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `list --recent` orders directories and files newest first, and `--limit N` keeps the first N of both, the way `ls -t | head` does.
 - `tree` prints each directory on its own line above its files.
 - `jsonfmt` owns the stable JavaScript Object Notation byte format for command output and cache entries.
-- `setup.sh` builds the release binary and installs it to `~/.local/bin/trace` by writing `~/.local/bin/.trace.new` and renaming it over the old binary, so an Agent spawning `trace` mid-install runs the whole old binary or the whole new one; a plain `install` deletes and rewrites the file, and `install -S` sets the execute bit after its rename, and both fail spawns during the swap.
-- `packages/claude/bin/trace` is the plugin-distributed launcher.
-- `packages/claude/bin/tracer-dist/crate/` is the plugin build-from-source fallback mirror.
-- `cargo xtask sync-dist` regenerates the plugin fallback mirror.
-- `cargo xtask build-bin` builds every prebuilt the plugin ships from that mirror.
-- The shipped prebuilts are `mac-arm64`, `linux-x86_64`, and `linux-arm64`.
-- The Linux prebuilts cross-compile on the host through `cargo-zigbuild`.
-- The Linux prebuilts pin their glibc floor at 2.17 through the target triple.
-- `build-bin` runs every compile through `rustup run stable cargo`.
-- `packages/claude/bin/tracer-dist/bin/source.sha256` records the crate the prebuilts were built from.
-- `scripts/sync.py` rebuilds a mirror or prebuilt that has fallen behind the tracer source.
-- `tools/tracer/tests` contains the black-box command-line test suite.
+- `cargo xtask dist` builds the release files `dist/trace-darwin-arm64`, `dist/trace-darwin-x64`, `dist/trace-linux-arm64`, and `dist/trace-linux-x64`; `[package.metadata.cmod]` names it as the build `cmod publish` runs.
+- The Linux files cross-compile on a Mac through `cargo-zigbuild`, with their glibc floor pinned at 2.17 through the target triple.
+- `dist` runs every compile through `rustup run stable cargo`, because Homebrew's `rust` holds only the host target.
+- `cli/tests` contains the black-box command-line test suite.

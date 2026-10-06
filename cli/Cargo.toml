@@ -3,13 +3,20 @@ members = ["xtask"]
 exclude = ["tests"]
 
 [package]
-name = "tracer"
+name = "trace"
 version = "0.1.0"
 edition = "2021"
+description = "Code intelligence for coding agents: search, read, and navigate a repository with the facts an agent needs in every answer."
+license = "MIT"
+repository = "https://github.com/heyJordanParker/tracer"
+homepage = "https://github.com/heyJordanParker/tracer"
+readme = "../README.md"
+keywords = ["code-intelligence", "agents", "claude-code", "tree-sitter", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
-[[bin]]
-name = "trace"
-path = "src/main.rs"
+[package.metadata.cmod]
+build = "cargo xtask dist"
+output = "dist"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

@@ -619,50 +619,25 @@ fn no_repo_root_means_no_log_is_written() {
 
 // --- archive lifecycle (subagent stop) -------------------------------------
 //
-// Contract being pinned: when `archive_subagent_log.py` moves a
-// subagent's active log from `sessions/<sid>/<aid>/` to
+// Contract being pinned: when `trace docs archive` moves a subagent's
+// active log from `sessions/<sid>/<aid>/` to
 // `sessions/<sid>/archived/<aid>/`, the on-disk events and view survive
 // the move and the tracer's read path follows them — `trace docs` against
 // the archived log sees the same set of already-emitted
 // paths as before the move.
 
-fn dotfiles_root() -> PathBuf {
-    // The test binary lives in tools/tracer/tests/target/...; walk up four
-    // levels to reach the dotfiles repo root so the hook script path is
-    // anchored even when CARGO_TARGET_DIR or HOME changes.
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // manifest = tools/tracer/tests
-    manifest
-        .parent() // tools/tracer
-        .and_then(|p| p.parent()) // tools
-        .and_then(|p| p.parent()) // dotfiles
-        .expect("dotfiles root reachable from CARGO_MANIFEST_DIR")
-        .to_path_buf()
-}
-
-fn archive_hook() -> PathBuf {
-    dotfiles_root().join("packages/agents/hooks/archive_subagent_log.py")
-}
-
-/// Spawn the archive hook with cwd = the test's repo root, which is how
-/// the harness invokes it in production (the hook resolves the repo root
-/// via `git -C "$PWD" rev-parse --show-toplevel`).
-fn run_archive_hook(repo_root: &Path, session_id: &str, agent_id: &str) {
-    let status = Command::new("python3")
-        .arg(archive_hook())
-        .arg(session_id)
-        .arg(agent_id)
-        .current_dir(repo_root)
-        .status()
-        .expect("spawn archive_subagent_log.py");
-    assert!(
-        status.success(),
-        "archive hook exited non-zero for sid={session_id} aid={agent_id}"
-    );
+/// `trace docs archive` for one (session, agent) from the test's repo root,
+/// as the Claude Code mod runs it when that agent stops.
+fn run_archive(f: &Fixture, session_id: &str, agent_id: &str) {
+    f.trace_env(
+        &["docs", "archive"],
+        &[("CLAUDE_CODE_SESSION_ID", session_id), ("TRACER_AGENT_ID", agent_id)],
+    )
+    .ok();
 }
 
 #[test]
-fn archive_hook_moves_active_log_under_archived_subdir() {
+fn archive_moves_active_log_under_archived_subdir() {
     let f = docs_repo();
     let sid = fresh_session_id("archive-move");
     let aid = "subagent-alpha";
@@ -687,7 +662,7 @@ fn archive_hook_moves_active_log_under_archived_subdir() {
     );
 
     // Archive it.
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
 
     // Active dir gone, archived dir present, contents preserved.
     assert!(
@@ -739,7 +714,7 @@ fn read_path_follows_archived_log_when_active_is_absent() {
 
     // Populate then archive.
     f.trace_env(&["docs", "sub/util.py"], &env).ok();
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
     assert!(
         !log_dir(&f.root, &sid, aid).exists(),
         "sanity: active log gone post-archive"
@@ -792,7 +767,7 @@ fn a_resumed_subagent_sees_its_directory_listing_again_after_a_context_reset() {
     let first = f.trace_env(&["context", "sub/util.py"], &env);
     first.ok();
     assert!(first.stdout.contains("  entries: "), "{}", first.stdout);
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
 
     // Resumed, the Subagent's context still holds the listing.
     let resumed = f.trace_env(&["context", "sub/util.py"], &env);
@@ -821,7 +796,7 @@ fn a_resumed_subagents_first_read_keeps_the_docs_it_was_sent() {
     ];
 
     f.trace_env(&["docs", "sub/util.py"], &env).ok();
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
 
     // Resumed, its first read writes its record, and the docs stay loaded.
     f.trace_env(&["read", "sub/util.py"], &env).ok();
@@ -869,9 +844,9 @@ fn the_shown_record_holds_each_listing_until_a_context_reset() {
 }
 
 #[test]
-fn archive_hook_is_a_no_op_for_a_subagent_that_never_wrote_a_log() {
+fn archive_is_a_no_op_for_a_subagent_that_never_wrote_a_log() {
     // A subagent that returned without surfacing any docs or reads never
-    // creates `sessions/<sid>/<aid>/`. The hook must exit cleanly and not
+    // creates `sessions/<sid>/<aid>/`. The archive must exit cleanly and not
     // create an empty `archived/<aid>/` placeholder.
     let f = docs_repo();
     let sid = fresh_session_id("archive-noop");
@@ -884,7 +859,7 @@ fn archive_hook_is_a_no_op_for_a_subagent_that_never_wrote_a_log() {
         .join("archived")
         .join(aid);
 
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
 
     assert!(
         !log_dir(&f.root, &sid, aid).exists(),
@@ -892,12 +867,12 @@ fn archive_hook_is_a_no_op_for_a_subagent_that_never_wrote_a_log() {
     );
     assert!(
         !archived_dir.exists(),
-        "hook must not create an empty archived dir for a subagent with no log"
+        "archive must not create an empty archived dir for a subagent with no log"
     );
 }
 
 #[test]
-fn archive_hook_replaces_existing_archived_copy_on_double_stop() {
+fn archive_replaces_existing_archived_copy_on_double_stop() {
     // If a subagent re-stops (e.g. retry / re-dispatch with the same id),
     // a stale archived copy from the prior stop must be removed before the
     // current active log is moved into place. The contract: second-stop
@@ -912,7 +887,7 @@ fn archive_hook_replaces_existing_archived_copy_on_double_stop() {
 
     // First run + archive.
     f.trace_env(&["docs", "sub/util.py"], &env).ok();
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
     let archived_dir = f
         .root
         .join(".tracer-cache")
@@ -941,7 +916,7 @@ fn archive_hook_replaces_existing_archived_copy_on_double_stop() {
     );
 
     // Second archive must replace the first.
-    run_archive_hook(&f.root, &sid, aid);
+    run_archive(&f, &sid, aid);
     let second_view = std::fs::read_to_string(archived_dir.join("view.json"))
         .expect("second archived view readable");
     assert_ne!(

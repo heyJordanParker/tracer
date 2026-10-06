@@ -441,8 +441,7 @@ fn user_global_agents_md_is_mirrored_when_claude_md_absent() {
 
 #[test]
 fn lowercase_agents_md_casing_is_also_recognized() {
-    // `Agents.md` (mixed casing) is the other casing in the wild — the
-    // dotfiles repo's `packages/codex/Agents.md` symlink uses it. Both
+    // `Agents.md` (mixed casing) is the other casing in the wild. Both
     // casings must be probed; this case exists to fail loudly if the
     // mixed casing is dropped from the candidate set.
     let (f, home, sid) = isolated("agents-mixed-casing");

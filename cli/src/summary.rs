@@ -249,7 +249,7 @@ pub(crate) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 
 const CALL_BODY_LINES: i64 = 12;
 
-// A next.js mentioning file costs 0.9 to 3.7 ms to resolve alone, so 300 keep `calls:` near a second there; dotfiles windows read at most 241.
+// A next.js mentioning file costs 0.9 to 3.7 ms to resolve alone, so 300 keep `calls:` near a second there; a 700-file repository's windows read at most 241.
 const CALLS_FILE_BUDGET: usize = 300;
 
 #[derive(Serialize)]

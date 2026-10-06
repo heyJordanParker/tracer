@@ -1,5 +1,5 @@
 //! `trace docs` — project-docs surface: a `--graph` flag off the noun plus
-//! the `status`, `reset` and `prime` sub-verbs.
+//! the `status`, `reset`, `archive` and `prime` sub-verbs.
 //!
 //! - default (no flag, no sub-verb): the project docs for the paths that the
 //!   agent does not hold whole yet. Walks each path's ancestor chain, nearest
@@ -29,6 +29,8 @@
 //!   Codex compaction/clear hook: a context reset drops injected rule text
 //!   from the model, so the surfaced-docs state must reset to re-inject it.
 //!   Append-only history is preserved — only the view is cleared.
+//! - `archive`: moves the current agent's session log under `archived/` when
+//!   the agent stops; the agent's first write after a resume takes it back.
 
 use super::{nested_memory, session_log};
 use crate::{cache, docs_graph};
@@ -599,6 +601,27 @@ pub fn run_reset(source: &str, as_json: bool) -> Result<Value> {
         println!("# docs reset · no active session (nothing to clear)");
     } else {
         println!("# docs reset · cleared {cleared} surfaced doc(s) from session log");
+    }
+    Ok(out)
+}
+
+/// Archive-mode: move the current agent's session log under `archived/`, run
+/// when that agent stops. A resumed agent's first write takes it back.
+pub fn run_archive(as_json: bool) -> Result<Value> {
+    let archived = session_log::archive();
+    let out = crate::output::document(
+        json!({"scope": "archive"}),
+        json!({"session_active": session_log::session_active()}),
+        Value::Array(vec![]),
+        json!({"archived": archived}),
+    );
+    if as_json {
+        return Ok(out);
+    }
+    if archived {
+        println!("# docs archive · moved the agent's session log under archived/");
+    } else {
+        println!("# docs archive · no session log to archive");
     }
     Ok(out)
 }
