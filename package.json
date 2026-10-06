@@ -1,0 +1,19 @@
+{
+  "name": "tracer",
+  "private": true,
+  "type": "module",
+  "cmod": {
+    "program": "trace"
+  },
+  "files": [
+    "hooks",
+    "src",
+    "skills"
+  ],
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@cmodjs/core": "^0.1.8"
+  }
+}
