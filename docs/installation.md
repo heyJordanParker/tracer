@@ -37,17 +37,12 @@ The formula lives in this repository, so the repository is its own tap:
 
 ```bash
 brew tap heyJordanParker/tracer https://github.com/heyJordanParker/tracer
-brew install tracer
+brew install heyJordanParker/tracer/tracer
 ```
 
 Homebrew installs the `trace` release for your machine, macOS or Linux, arm64 or x86-64, with `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` beside it. `brew upgrade tracer` moves to the latest release.
 
-Homebrew loads formulae from a tap outside its own only once you trust them. If `brew install` asks for it, trust the tap and run it again:
-
-```bash
-brew trust --tap heyJordanParker/tracer
-brew install tracer
-```
+Homebrew loads a formula from a tap outside its own only once you trust it. Installing by the full name, `heyJordanParker/tracer/tracer`, trusts that one formula. The tap needs its URL because the repository is named `tracer`, not `homebrew-tracer`.
 
 ## Build from source
 

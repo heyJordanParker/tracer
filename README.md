@@ -43,10 +43,10 @@ For the `trace` command on its own:
 
 ```bash
 brew tap heyJordanParker/tracer https://github.com/heyJordanParker/tracer
-brew install tracer
+brew install heyJordanParker/tracer/tracer
 ```
 
-Homebrew installs `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` beside it. See [Installation](docs/installation.md) for tap trust, Linux, and building from source.
+Homebrew installs `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` beside it. See [Installation](docs/installation.md) for Linux and building from source.
 
 ### Requirements
 
