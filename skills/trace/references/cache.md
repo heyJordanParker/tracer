@@ -39,4 +39,4 @@ IF a trace command errors with missing dependencies:
 `trace doctor` verifies ast-grep, scc, universal-ctags, ripgrep, and git, then prints per-platform install instructions.
 
 ### The mod installs `trace` on PATH
-Installing the tracer mod puts the `trace` release for the machine at `~/.local/bin/trace`. Homebrew installs it with `brew install heyJordanParker/tracer/tracer` after tapping `https://github.com/heyJordanParker/tracer`, and a source build is `cargo build --release` in `cli/`, which writes `cli/.target/release/trace`.
+Installing the tracer mod puts the `trace` release for the machine in cmod's programs folder, `~/.local/share/cmod/programs/`, which Claude Code's Bash finds first. Homebrew installs it with `brew install heyJordanParker/tracer/tracer` after tapping `https://github.com/heyJordanParker/tracer`, and a source build is `cargo build --release` in `cli/`, which writes `cli/.target/release/trace`.

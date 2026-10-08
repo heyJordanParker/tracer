@@ -35,7 +35,7 @@ npm install -g @cmodjs/cli
 cmod install heyJordanParker/tracer
 ```
 
-The mod downloads the `trace` release for your machine, checks it against the release's `SHA256SUMS`, and links it at `~/.local/bin/trace`. Start a new Claude Code session and tracer is on.
+The mod downloads the `trace` release for your machine and checks it against the release's `SHA256SUMS`. Start a new Claude Code session and tracer is on. Claude Code runs the mod's `trace` even on macOS, where `/usr/bin/trace` is Apple's own tool.
 
 ### Homebrew
 

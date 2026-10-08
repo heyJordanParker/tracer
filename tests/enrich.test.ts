@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
 import { tracer } from '../src/mod.js'
-import { fakeTrace, fireInSubagent, testTracer, traced } from './fake-trace.js'
+import { fakeTrace, traced } from './fake-trace.js'
 
 const ROOT = '/work/app'
 
@@ -80,18 +80,18 @@ test('a failed trace on a file being written adds nothing', async () => {
 })
 
 test('a subagent call records into the subagent’s own log', async () => {
-  const tested = testTracer({ projectRoot: ROOT })
+  const tested = testMod(tracer, { projectRoot: ROOT })
   const ran = fakeTrace(tested)
 
-  await fireInSubagent(tested, 'agent-3', 'Glob', { pattern: '*.md' })
+  await tested.fire('PreToolUse', { tool_name: 'Glob', tool_input: { pattern: '*.md' }, agent_id: 'agent-3', agent_type: 'explorer' })
 
   expect(ran[0]?.env).toEqual({ AGENT_SESSION_ID: 'test-session', TRACER_AGENT_ID: 'agent-3' })
 })
 
 test('enrichment can be turned off, and a budget set', async () => {
-  const off = testMod(tracer, { projectRoot: ROOT, state: { project: { enrich: false } } })
+  const off = testMod(tracer, { projectRoot: ROOT, options: { enrich: false } })
   const offRan = fakeTrace(off)
-  const small = testMod(tracer, { projectRoot: ROOT, state: { project: { budget: 2000 } } })
+  const small = testMod(tracer, { projectRoot: ROOT, options: { budget: 2000 } })
   const smallRan = fakeTrace(small)
 
   await off.fire('PreToolUse', { tool_name: 'Glob', tool_input: { pattern: '*.md' } })

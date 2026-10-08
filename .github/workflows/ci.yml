@@ -37,11 +37,14 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install the mod's packages
-        run: bun install --frozen-lockfile
+      - name: Install Claude Code and cmod, which check the mod
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          npm install -g @cmodjs/cli
 
-      - name: Run the mod's tests
-        run: bun test
+      - name: Check the mod's layout, permissions, types, lint, and tests
+        run: cmod check .
 
   formula:
     runs-on: macos-latest

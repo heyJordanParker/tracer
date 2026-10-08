@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- The mod installs on macOS, where `/usr/bin/trace` is Apple's own tool. Claude Code runs the mod's `trace` from cmod's programs folder, and the install no longer stops.
+- tracer's settings live in Claude Code's `/config`, and a repository sets them in `.claude/cmods/tracer/options.json`. The `state.json` settings are gone.
+- The mod asks for the permissions it uses, and `/mods` turns each one off.
+- A `trace` command after a `cd`, such as `cd src && trace read cart.ts`, gets the project docs of the folder it runs in.
+- The mod needs cmod 0.2.2 or later.
+
 ## 0.1.0
 
 The first release of tracer as its own project.

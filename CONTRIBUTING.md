@@ -38,7 +38,7 @@ bun test
 cmod check .
 ```
 
-`cmod check` runs the layout, import, type, lint, and plugin checks, then the tests. Its type check needs `.claude-plugin/types/`, which Claude Code writes the first time it loads the mod, so run `cmod link .` and start Claude Code once first.
+`cmod check` runs the layout, import, type, lint, and plugin checks, then the tests. It has Claude Code write the types in `.claude-plugin/types/` when they are missing, so it needs Claude Code installed.
 
 ## Change the output
 

@@ -32,30 +32,53 @@ fn main() -> ExitCode {
 }
 
 fn dist() -> Result<(), String> {
-    if std::env::consts::OS != "macos" {
+    let platforms = requested_platforms()?;
+    if platforms.iter().any(|(platform, _)| platform.starts_with("darwin")) && std::env::consts::OS != "macos" {
         return Err(format!(
             "the macOS files build only on a Mac, and this is {}. Run cargo xtask dist on a Mac.",
             std::env::consts::OS
         ));
     }
-    require_cross_toolchain()?;
+    if platforms.iter().any(|(platform, _)| platform.starts_with("linux")) {
+        require_cross_toolchain()?;
+    }
     let root = crate_root();
     let target_dir = root.join(".target");
     let output = root.join("dist");
     let _ = fs::remove_dir_all(&output);
     fs::create_dir_all(&output).map_err(|error| format!("create {}: {error}", output.display()))?;
 
-    let total = PLATFORMS.len();
-    for (done, (platform, target)) in PLATFORMS.iter().enumerate() {
+    let total = platforms.len();
+    for (done, (platform, target)) in platforms.iter().enumerate() {
         println!("progress {done} {total} Building trace for {platform}");
         build(&root, &target_dir, target)?;
         let built = target_dir.join(target).join("release/trace");
         let file = output.join(format!("trace-{platform}"));
         fs::copy(&built, &file)
             .map_err(|error| format!("copy {} to {}: {error}", built.display(), file.display()))?;
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .and_then(|copy| copy.set_modified(std::time::SystemTime::now()))
+            .map_err(|error| format!("date {} to this build: {error}", file.display()))?;
     }
-    println!("progress {total} {total} Built trace for every platform");
+    println!("progress {total} {total} Built trace for {}", platforms.iter().map(|(platform, _)| *platform).collect::<Vec<_>>().join(", "));
     Ok(())
+}
+
+fn requested_platforms() -> Result<Vec<(&'static str, &'static str)>, String> {
+    let Ok(machines) = std::env::var("CMOD_MACHINES") else {
+        return Ok(PLATFORMS.to_vec());
+    };
+    machines
+        .split_whitespace()
+        .map(|machine| {
+            PLATFORMS.iter().find(|(platform, _)| *platform == machine).copied().ok_or_else(|| {
+                let known = PLATFORMS.iter().map(|(platform, _)| *platform).collect::<Vec<_>>().join(", ");
+                format!("CMOD_MACHINES names {machine}, which trace does not build. It builds {known}.")
+            })
+        })
+        .collect()
 }
 
 fn build(root: &Path, target_dir: &Path, target: &str) -> Result<(), String> {
@@ -113,6 +136,6 @@ fn rustup_cargo() -> Command {
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("the xtask package sits inside the trace crate")
+        .expect("the xtask package sits inside the tracer crate")
         .to_path_buf()
 }

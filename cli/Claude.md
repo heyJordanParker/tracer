@@ -4,7 +4,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 
 # Facts
 
-- The Rust package and its binary are both named `trace`, because cmod names a Rust program by its package.
+- The Rust package is named `tracer`, and its one `[[bin]]`, `trace`, names the program cmod ships.
 - `cli/` is a Cargo workspace with an `xtask` member, and builds into `cli/.target/`.
 - `trace` works without Claude Code.
 - `doctor` verifies required external binaries.
@@ -263,7 +263,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `list --recent` orders directories and files newest first, and `--limit N` keeps the first N of both, the way `ls -t | head` does.
 - `tree` prints each directory on its own line above its files.
 - `jsonfmt` owns the stable JavaScript Object Notation byte format for command output and cache entries.
-- `cargo xtask dist` builds the release files `dist/trace-darwin-arm64`, `dist/trace-darwin-x64`, `dist/trace-linux-arm64`, and `dist/trace-linux-x64`; `[package.metadata.cmod]` names it as the build `cmod publish` runs.
+- `cargo xtask dist` builds the release files `dist/trace-darwin-arm64`, `dist/trace-darwin-x64`, `dist/trace-linux-arm64`, and `dist/trace-linux-x64`, or only the machines `CMOD_MACHINES` names; `[package.metadata.cmod]` names it as the build `cmod publish` and `cmod link` run, and `cmod link` names this machine alone.
 - The Linux files cross-compile on a Mac through `cargo-zigbuild`, with their glibc floor pinned at 2.17 through the target triple.
 - `dist` runs every compile through `rustup run stable cargo`, because Homebrew's `rust` holds only the host target.
 - `cli/tests` contains the black-box command-line test suite.

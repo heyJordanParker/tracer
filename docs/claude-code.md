@@ -34,18 +34,29 @@ Every Subagent keeps its own record, so a Subagent gets the facts and docs its o
 
 ## Settings
 
-Change a setting in a `state.json` under `project`. `~/.claude/cmods/tracer/state.json` sets it for you in every project, and `<project>/.claude/cmods/tracer/state.json`, committed with a repository, sets it for everyone working in that repository and wins over yours.
+Change a setting in Claude Code's `/config`, under tracer. A repository sets them for everyone working in it with `.claude/cmods/tracer/options.json`, committed with the repository, and that file wins over `/config`:
 
 ```json
-{ "project": { "budget": 6000, "primer": false } }
+{ "budget": 6000, "primer": false }
 ```
 
-| Setting | Default | What it does |
-|---|---|---|
-| `budget` | `10000` | The characters each Hook's context fits in. Claude Code moves a longer hook message to a file and shows a 2,000-character preview. |
-| `primer` | `true` | Sends the repository primer at session start. |
-| `enrich` | `true` | Adds facts to Read, Edit, Write, Grep, and Glob. |
-| `projectDocs` | `true` | Sends the project docs a `trace` command reaches. |
+| Setting | `/config` shows | Default | What it does |
+|---|---|---|---|
+| `budget` | Context budget | `10000` | The characters each Hook's context fits in, at least 1000. Claude Code moves a longer hook message to a file and shows a 2,000-character preview. |
+| `primer` | Repository primer | `true` | Sends the repository primer at session start. |
+| `enrich` | File facts | `true` | Adds facts to Read, Edit, Write, Grep, and Glob. |
+| `projectDocs` | Project docs | `true` | Sends the project docs a `trace` command reaches. |
+
+## Permissions
+
+cmod asks for these when it installs tracer, and `/mods` turns each one off:
+
+| Permission | What tracer does with it |
+|---|---|
+| Run `trace` | Every Hook runs `trace`. |
+| Run `git` | The session start checks it is in a git repository before it builds the primer. |
+| Add text Claude reads | Every fact, primer, and project doc tracer sends. |
+| Change Claude's tool calls | Writes `--agent <id>` into a Subagent's `trace` commands. |
 
 ## When `trace` cannot run
 
@@ -59,4 +70,4 @@ cmod check .       # layout, imports, types, lint, plugin validation, and tests
 cmod unlink .      # stop loading it
 ```
 
-`cmod link` builds `trace` for every platform, which takes a few minutes. The mod's code is in `src/`, its tests in `tests/`, and `hooks/register.ts` registers it with Claude Code.
+`cmod link` builds `trace` for this machine alone. The mod's code is in `src/`, its tests in `tests/`, and `hooks/register.ts` registers it with Claude Code.

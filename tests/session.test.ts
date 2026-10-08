@@ -52,7 +52,7 @@ test('a session outside a git repository gets no primer', async () => {
 })
 
 test('the primer can be turned off', async () => {
-  const tested = testMod(tracer, { projectRoot: ROOT, state: { project: { primer: false } } })
+  const tested = testMod(tracer, { projectRoot: ROOT, options: { primer: false } })
   const ran = fakeTrace(tested)
 
   const answer = await tested.fire('SessionStart', { source: 'startup' })

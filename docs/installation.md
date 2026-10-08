@@ -1,6 +1,6 @@
 # Installation
 
-tracer installs two ways. Pick one per machine: both put a `trace` command on your `PATH`, and the Claude Code mod refuses to install while another `trace` is already there.
+tracer installs two ways, and both can live on one machine: Claude Code runs the mod's `trace`, and a terminal runs the first `trace` its `PATH` finds.
 
 | You want | Install |
 |---|---|
@@ -20,16 +20,16 @@ cmod install heyJordanParker/tracer
 
 1. It downloads `trace-<os>-<arch>` from the GitHub release that matches the plugin's version.
 2. It checks the file's SHA-256 against the release's `SHA256SUMS`, and runs `trace --version`.
-3. It keeps the file under `~/.local/share/cmod/bin/trace/<version>/` and links `~/.local/bin/trace` to it.
+3. It keeps the file under `~/.local/share/cmod/bin/trace/<version>/`, and links it into cmod's programs folder, `~/.local/share/cmod/programs/`, and into `~/.local/bin/trace`.
 
-Put `~/.local/bin` on your `PATH` to run `trace` in a terminal too. Start a new Claude Code session to load the mod.
+Start a new Claude Code session to load the mod. The mod's Hooks and Claude's Bash commands run the `trace` in cmod's programs folder, so macOS's own `/usr/bin/trace`, or a Homebrew `trace`, never stands in for it.
+
+A terminal runs the first `trace` its `PATH` finds. On macOS that is `/usr/bin/trace`, Apple's system tracing tool, unless `~/.local/bin` comes before `/usr/bin`, or Homebrew installed tracer too. cmod logs which `trace` a terminal runs when it installs the mod.
 
 ```bash
 cmod update tracer   # move to the latest release
 cmod remove tracer   # uninstall the plugin and its trace
 ```
-
-`cmod install` stops when `~/.local/bin/trace` exists and cmod did not make it, or when `PATH` already finds a `trace` somewhere else, such as a Homebrew install, because the mod's `trace` would never run. Remove that `trace` first.
 
 ## Homebrew
 
