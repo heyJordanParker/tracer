@@ -51,16 +51,6 @@ test('a session outside a git repository gets no primer', async () => {
   expect(answer.additionalContext).toBeUndefined()
 })
 
-test('the primer can be turned off', async () => {
-  const tested = testMod(tracer, { projectRoot: ROOT, options: { primer: false } })
-  const ran = fakeTrace(tested)
-
-  const answer = await tested.fire('SessionStart', { source: 'startup' })
-
-  expect(ran.some(({ argv }) => argv[0] === 'git' || argv[1] === 'context')).toBe(false)
-  expect(answer.additionalContext).toBeUndefined()
-})
-
 test('a session goes on without context when trace is not installed', async () => {
   const tested = testMod(tracer, { projectRoot: ROOT })
   tested.fakes.process.run = async () => {

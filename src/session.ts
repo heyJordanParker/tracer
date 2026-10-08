@@ -7,7 +7,6 @@ export async function startSession(mod: TracerMod, input: HookInput<'SessionStar
   if (input.source === 'clear') await trace(mod, caller, ['docs', 'reset', '--source', 'tracer_clear'])
   await trace(mod, caller, ['docs', 'prime', '--reason', input.source === 'compact' ? 'post_compact' : 'session_start'])
   await trace(mod, caller, ['docs', input.cwd, '--json', '--source', 'tracer_session_start'])
-  if (!mod.options.primer) return undefined
   const repository = await mod.process.run(['git', 'rev-parse', '--is-inside-work-tree'], { cwd: input.cwd }).catch(() => undefined)
   if (repository?.exitCode !== 0) return undefined
   const primer = await trace(mod, caller, ['context'], 12_000)

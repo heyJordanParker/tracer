@@ -75,16 +75,6 @@ test('a command that runs no trace is left alone', async () => {
   expect(answer).toEqual({})
 })
 
-test('project docs can be turned off, while subagent ids still apply', async () => {
-  const tested = testMod(tracer, { projectRoot: ROOT, files: FILES, options: { projectDocs: false } })
-  const ran = fakeTrace(tested)
-
-  const answer = await tested.fire('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'trace grep Cart src' }, agent_id: 'agent-1', agent_type: 'explorer' })
-
-  expect(ran).toEqual([])
-  expect(answer.updatedInput).toEqual({ command: 'trace --agent agent-1 grep Cart src' })
-})
-
 test('the leading options before the subcommand are read, -C moving the base folder', () => {
   expect(tracedCall('/usr/local/bin/trace --budget 900 -C ../other structure lib', '/work/app')).toEqual({
     subcommand: 'structure',

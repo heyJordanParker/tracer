@@ -88,19 +88,6 @@ test('a subagent call records into the subagent’s own log', async () => {
   expect(ran[0]?.env).toEqual({ AGENT_SESSION_ID: 'test-session', TRACER_AGENT_ID: 'agent-3' })
 })
 
-test('enrichment can be turned off, and a budget set', async () => {
-  const off = testMod(tracer, { projectRoot: ROOT, options: { enrich: false } })
-  const offRan = fakeTrace(off)
-  const small = testMod(tracer, { projectRoot: ROOT, options: { budget: 2000 } })
-  const smallRan = fakeTrace(small)
-
-  await off.fire('PreToolUse', { tool_name: 'Glob', tool_input: { pattern: '*.md' } })
-  await small.fire('PreToolUse', { tool_name: 'Glob', tool_input: { pattern: '*.md' } })
-
-  expect(offRan).toEqual([])
-  expect(traced(smallRan)).toEqual([['find', '*.md', ROOT, '--budget', '2000']])
-})
-
 test('a tool tracer does not enrich runs nothing', async () => {
   const tested = testMod(tracer, { projectRoot: ROOT })
   const ran = fakeTrace(tested)

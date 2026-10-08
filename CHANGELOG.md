@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- One setting, "Claude reads code only through tracer", off by default. With it on, Claude's `grep`, `cat`, `find`, `ls`, and `git blame` reads of the project are refused, and Claude runs the `trace` command the refusal names. A repository turns it on with `{ "tracerOnly": true }` in `.claude/cmods/tracer/options.json`.
+- The `budget`, `primer`, `enrich`, and `projectDocs` settings are gone. tracer always sends its context, fitted to the 10,000 characters Claude Code shows of a hook message.
+
 ## 0.2.0
 
 - The mod installs on macOS, where `/usr/bin/trace` is Apple's own tool. Claude Code runs the mod's `trace` from cmod's programs folder, and the install no longer stops.

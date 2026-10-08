@@ -34,18 +34,38 @@ Every Subagent keeps its own record, so a Subagent gets the facts and docs its o
 
 ## Settings
 
-Change a setting in Claude Code's `/config`, under tracer. A repository sets them for everyone working in it with `.claude/cmods/tracer/options.json`, committed with the repository, and that file wins over `/config`:
+tracer has one setting, in Claude Code's `/config` under tracer:
 
-```json
-{ "budget": 6000, "primer": false }
+```text
+Claude reads code only through tracer                    [ off ]
+Claude can't read or search this project with grep, cat, find,
+or git blame. It uses tracer instead, so every read comes with
+the file's callers, history, and docs.
 ```
 
-| Setting | `/config` shows | Default | What it does |
-|---|---|---|---|
-| `budget` | Context budget | `10000` | The characters each Hook's context fits in, at least 1000. Claude Code moves a longer hook message to a file and shows a 2,000-character preview. |
-| `primer` | Repository primer | `true` | Sends the repository primer at session start. |
-| `enrich` | File facts | `true` | Adds facts to Read, Edit, Write, Grep, and Glob. |
-| `projectDocs` | Project docs | `true` | Sends the project docs a `trace` command reaches. |
+With it on, a Bash command that reads the project's code without `trace` is refused, and Claude runs the `trace` command the refusal names:
+
+```text
+● Bash(grep -rn "Cart" src)
+  ⎿ tracer: Claude reads this project's code only through tracer.
+    Run this instead: trace grep Cart src
+```
+
+| Claude runs, on a file in the project | The refusal names |
+|---|---|
+| `grep -r`, `rg` | `trace grep` |
+| `cat`, `head`, `tail`, `sed`, `awk` | `trace read` |
+| `find` | `trace find` |
+| `ls`, `tree` | `trace list`, `trace tree` |
+| `git blame`, `git grep`, `git show <ref>:<path>`, `git log <file>`, `git log -S` | `trace blame`, `trace grep`, `trace read --at`, `trace history` |
+
+Read, Grep, and Glob stay allowed, because tracer adds its facts to each of them. A command that changes files, such as `sed -i` or `find -delete`, runs, and so does every read outside the project and every git command `trace` has no answer for, such as `git status` or `git log -p`.
+
+A repository turns it on for everyone working in it with `.claude/cmods/tracer/options.json`, committed with the repository:
+
+```json
+{ "tracerOnly": true }
+```
 
 ## Permissions
 
