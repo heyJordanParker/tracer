@@ -1,7 +1,7 @@
 import type { HookAnswer, HookInput } from '../node_modules/@cmodjs/core/mod.js'
 import { relative, resolve } from '../node_modules/@cmodjs/core/path.js'
 import type { TracerMod } from './mod.js'
-import { context, trace } from './trace.js'
+import { BUDGET, context, trace } from './trace.js'
 
 const NO_MATCHES = '(no matches)'
 
@@ -24,14 +24,13 @@ export async function toolContext(mod: TracerMod, input: HookInput<'PreToolUse'>
 
 async function requestOf(mod: TracerMod, input: HookInput<'PreToolUse'>): Promise<Request | undefined> {
   const tool = input.tool_input
-  const budget = String(mod.options.budget)
   switch (input.tool_name) {
     case 'Read':
     case 'Edit':
     case 'Write': {
       const target = textOf(tool['file_path'])
       if (target === '') return undefined
-      const args = ['context', target, '--budget', budget]
+      const args = ['context', target, '--budget', BUDGET]
       if (input.tool_name === 'Read') {
         args.push(...option('--offset', tool['offset']), ...option('--limit', tool['limit']))
       } else {
@@ -44,13 +43,13 @@ async function requestOf(mod: TracerMod, input: HookInput<'PreToolUse'>): Promis
       const pattern = textOf(tool['pattern'])
       if (pattern === '') return undefined
       const path = textOf(tool['path']) || input.cwd
-      return { args: ['find', pattern, path, '--budget', budget], target: path, isExisting: false }
+      return { args: ['find', pattern, path, '--budget', BUDGET], target: path, isExisting: false }
     }
     case 'Grep': {
       const pattern = textOf(tool['pattern'])
       if (pattern === '') return undefined
       const path = textOf(tool['path']) || input.cwd
-      const args = ['grep', '--budget', budget]
+      const args = ['grep', '--budget', BUDGET]
       if (tool['-i'] === true) args.push('-i')
       if (textOf(tool['glob']) !== '') args.push('-g', textOf(tool['glob']))
       if (textOf(tool['type']) !== '') args.push('-t', textOf(tool['type']))

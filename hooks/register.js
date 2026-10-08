@@ -2497,6 +2497,7 @@ function normalizeWindowsPath(input = "") {
   return input.replace(/\\/g, "/").replace(_DRIVE_LETTER_START_RE, (r) => r.toUpperCase());
 }
 var _IS_ABSOLUTE_RE = /^[/\\](?![/\\])|^[/\\]{2}(?!\.)|^[A-Za-z]:[/\\]/;
+var _DRIVE_LETTER_RE = /^[A-Za-z]:$/;
 var _ROOT_FOLDER_RE = /^\/([A-Za-z]:)?$/;
 function cwd() {
   if (false) {}
@@ -2599,6 +2600,13 @@ var relative = function(from, to) {
     _to.shift();
   }
   return [..._from.map(() => ".."), ..._to].join("/");
+};
+var dirname = function(p) {
+  const segments = normalizeWindowsPath(p).replace(/\/$/, "").split("/").slice(0, -1);
+  if (segments.length === 1 && _DRIVE_LETTER_RE.test(segments[0])) {
+    segments[0] += "/";
+  }
+  return segments.join("/") || (isAbsolute(p) ? "/" : ".");
 };
 var basename = function(p, extension) {
   const segments = normalizeWindowsPath(p).split("/");
@@ -6407,7 +6415,8 @@ function defineMod(definition) {
     checkOptions(definition.name, definition.options);
   return definition;
 }
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-jSwFtP/release/src/trace.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/trace.ts
+var BUDGET = "10000";
 async function trace(mod, caller, args, timeoutMs = 1e4) {
   const env = { AGENT_SESSION_ID: caller.sessionId };
   if (caller.agentId !== undefined)
@@ -6419,11 +6428,14 @@ async function trace(mod, caller, args, timeoutMs = 1e4) {
     return { exitCode: 1, stdout: "", stderr: messageOf(error) };
   }
 }
+function quote(word) {
+  return /^[\w@%+=:,./-][\w@%+=:,./~^-]*$/.test(word) ? word : `'${word.replaceAll("'", `'"'"'`)}'`;
+}
 function context(event, text, updatedInput) {
   return { hookSpecificOutput: { hookEventName: event, additionalContext: text, ...updatedInput === undefined ? {} : { updatedInput } } };
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-jSwFtP/release/src/enrich.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/enrich.ts
 var NO_MATCHES = "(no matches)";
 async function toolContext(mod, input) {
   const request = await requestOf(mod, input);
@@ -6442,7 +6454,6 @@ async function toolContext(mod, input) {
 }
 async function requestOf(mod, input) {
   const tool = input.tool_input;
-  const budget = String(mod.options.budget);
   switch (input.tool_name) {
     case "Read":
     case "Edit":
@@ -6450,7 +6461,7 @@ async function requestOf(mod, input) {
       const target = textOf(tool["file_path"]);
       if (target === "")
         return;
-      const args = ["context", target, "--budget", budget];
+      const args = ["context", target, "--budget", BUDGET];
       if (input.tool_name === "Read") {
         args.push(...option2("--offset", tool["offset"]), ...option2("--limit", tool["limit"]));
       } else {
@@ -6465,14 +6476,14 @@ async function requestOf(mod, input) {
       if (pattern === "")
         return;
       const path = textOf(tool["path"]) || input.cwd;
-      return { args: ["find", pattern, path, "--budget", budget], target: path, isExisting: false };
+      return { args: ["find", pattern, path, "--budget", BUDGET], target: path, isExisting: false };
     }
     case "Grep": {
       const pattern = textOf(tool["pattern"]);
       if (pattern === "")
         return;
       const path = textOf(tool["path"]) || input.cwd;
-      const args = ["grep", "--budget", budget];
+      const args = ["grep", "--budget", BUDGET];
       if (tool["-i"] === true)
         args.push("-i");
       if (textOf(tool["glob"]) !== "")
@@ -6510,7 +6521,7 @@ function option2(flag, value) {
 function textOf(value) {
   return typeof value === "string" ? value : "";
 }
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-jSwFtP/release/src/project-docs.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/project-docs.ts
 var PATH_TAKING = new Set(["read", "info", "list", "tree", "structure", "grep", "pattern", "find", "blame", "history", "diff"]);
 var VALUED_LEADING = new Set(["-C", "--budget", "--agent", "--filter"]);
 var TRACE_CALL = /(?<=^|[;&|(\n])(\s*(?:\S*\/)?trace)(?=\s|$)(?!\s+--agent\b)/g;
@@ -6521,11 +6532,11 @@ async function commandDocs(mod, input) {
   const rewrite = withAgent(input, line);
   const call = tracedCall(line, input.cwd);
   let text = "";
-  if (call !== undefined && mod.options.projectDocs) {
+  if (call !== undefined) {
     const existing = await Promise.all(call.candidates.map(async (path) => await mod.fs.exists(path) ? [path] : []));
     const targets = existing.flat().length > 0 ? [...new Set(existing.flat())] : [call.base];
     const skips = call.subcommand === "read" ? targets.flatMap((path) => ["--skip", path]) : [];
-    const args = ["docs", ...targets, "--budget", String(mod.options.budget), "--source", "tracer_project_docs", "--triggering-tool", "Bash", "--triggering-command", line, ...skips];
+    const args = ["docs", ...targets, "--budget", BUDGET, "--source", "tracer_project_docs", "--triggering-tool", "Bash", "--triggering-command", line, ...skips];
     const traced = await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, args);
     if (traced.exitCode === 0)
       text = traced.stdout.trim();
@@ -6561,20 +6572,17 @@ function withAgent(input, line) {
   const agent = input.agent_id;
   if (agent === undefined || agent === "")
     return;
-  const quoted = /^[\w@%+=:,./-]+$/.test(agent) ? agent : `'${agent.replaceAll("'", `'"'"'`)}'`;
-  const replaced = line.replace(TRACE_CALL, (call) => `${call} --agent ${quoted}`);
+  const replaced = line.replace(TRACE_CALL, (call) => `${call} --agent ${quote(agent)}`);
   return replaced === line ? undefined : { ...input.tool_input, command: replaced };
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-jSwFtP/release/src/session.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/session.ts
 async function startSession(mod, input) {
   const caller = { cwd: input.cwd, sessionId: input.session_id };
   if (input.source === "clear")
     await trace(mod, caller, ["docs", "reset", "--source", "tracer_clear"]);
   await trace(mod, caller, ["docs", "prime", "--reason", input.source === "compact" ? "post_compact" : "session_start"]);
   await trace(mod, caller, ["docs", input.cwd, "--json", "--source", "tracer_session_start"]);
-  if (!mod.options.primer)
-    return;
   const repository = await mod.process.run(["git", "rev-parse", "--is-inside-work-tree"], { cwd: input.cwd }).catch(() => {
     return;
   });
@@ -6594,13 +6602,172 @@ async function archiveAgentLog(mod, input) {
   await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, ["docs", "archive"]);
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-jSwFtP/release/src/mod.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/tracer-only.ts
+var READERS = new Set(["cat", "head", "tail", "sed", "awk"]);
+var SEARCHERS = new Set(["grep", "egrep", "fgrep", "rg"]);
+var LISTERS = new Set(["ls", "tree"]);
+var SEARCH_VALUED = new Set(["-e", "-f", "-g", "--glob", "-t", "--type", "-T", "--type-not", "-m", "--max-count", "-A", "-B", "-C", "-M"]);
+var FIND_ACTIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir"]);
+var GLOB = /[*?[]/;
+async function refuseRawRead(mod, input) {
+  const line = typeof input.tool_input["command"] === "string" ? input.tool_input["command"] : "";
+  for (const { argv: [program, ...args], folder } of parseShell(line).commands) {
+    const replacement = await replacementOf(mod, { program: basename(program), args, base: resolve(input.cwd, folder) });
+    if (replacement !== undefined) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: `tracer: Claude reads this project's code only through tracer.
+Run this instead: ${replacement}`
+        }
+      };
+    }
+  }
+  return;
+}
+async function replacementOf(mod, command) {
+  if (command.program === "git")
+    return gitReplacement(mod, command);
+  if (SEARCHERS.has(command.program))
+    return searchReplacement(mod, command);
+  if (READERS.has(command.program))
+    return readReplacement(mod, command);
+  if (LISTERS.has(command.program))
+    return listReplacement(mod, command);
+  if (command.program === "find")
+    return findReplacement(mod, command);
+  return;
+}
+async function searchReplacement(mod, { program, args, base }) {
+  const positional = [];
+  const flags2 = [];
+  let pattern;
+  for (let at = 0;at < args.length; at += 1) {
+    const arg = args[at];
+    if (SEARCH_VALUED.has(arg)) {
+      const value = args[at + 1];
+      if (arg === "-e" && value !== undefined)
+        pattern = value;
+      if ((arg === "-g" || arg === "--glob" || arg === "-t" || arg === "--type") && value !== undefined)
+        flags2.push(arg.length === 2 ? arg : `-${arg[2]}`, value);
+      at += 1;
+    } else if (arg === "-i" || arg === "--ignore-case") {
+      flags2.push("-i");
+    } else if (!arg.startsWith("-")) {
+      positional.push(arg);
+    }
+  }
+  if (pattern === undefined)
+    pattern = positional.shift();
+  if (pattern === undefined)
+    return;
+  const paths = await projectPaths(mod, base, positional);
+  const recursive = program === "rg" || args.some((arg) => arg === "-r" || arg === "-R" || arg === "--recursive");
+  if (paths.length === 0 && !(recursive && positional.length === 0 && await inProject(mod, base, ".")))
+    return;
+  return shell(["trace", "grep", pattern, ...paths, ...flags2]);
+}
+async function readReplacement(mod, { program, args, base }) {
+  if (program === "sed" && args.some((arg) => arg.startsWith("-i") || arg === "--in-place"))
+    return;
+  const paths = await projectPaths(mod, base, args);
+  return paths.length === 0 ? undefined : shell(["trace", "read", ...paths]);
+}
+async function listReplacement(mod, { program, args, base }) {
+  const named = args.filter((arg) => !arg.startsWith("-"));
+  const paths = named.length === 0 ? await inProject(mod, base, ".") ? ["."] : [] : await projectPaths(mod, base, named);
+  if (paths.length === 0)
+    return;
+  return program === "tree" ? shell(["trace", "tree", paths[0]]) : shell(["trace", "list", ...paths]);
+}
+async function findReplacement(mod, { args, base }) {
+  if (args.some((arg) => FIND_ACTIONS.has(arg)))
+    return;
+  const end = args.findIndex((arg) => arg.startsWith("-") || arg === "(" || arg === "!");
+  const named = end < 0 ? args : args.slice(0, end);
+  const bases = named.length === 0 ? await inProject(mod, base, ".") ? ["."] : [] : await projectPaths(mod, base, named);
+  if (bases.length === 0)
+    return;
+  const name = args.findIndex((arg) => arg === "-name" || arg === "-iname");
+  return shell(["trace", "find", name < 0 ? "*" : args[name + 1] ?? "*", ...bases]);
+}
+async function gitReplacement(mod, { args, base }) {
+  const at = args.findIndex((arg) => !arg.startsWith("-"));
+  const subcommand = args[at];
+  if (subcommand === undefined)
+    return;
+  const rest = args.slice(at + 1);
+  const separator = rest.includes("--") ? rest.indexOf("--") : rest.length;
+  const flags2 = rest.slice(0, separator).filter((arg) => arg.startsWith("-"));
+  const positional = [...rest.slice(0, separator).filter((arg) => !arg.startsWith("-")), ...rest.slice(separator + 1)];
+  switch (subcommand) {
+    case "blame":
+    case "annotate": {
+      const [file] = await projectPaths(mod, base, positional);
+      if (file === undefined)
+        return;
+      const range = rest[rest.indexOf("-L") + 1];
+      const lines = rest.includes("-L") && range !== undefined && /^\d+,\d+$/.test(range) ? ["--lines", range.replace(",", ":")] : [];
+      return shell(["trace", "blame", file, ...lines]);
+    }
+    case "grep": {
+      const [pattern, ...paths] = positional;
+      return pattern === undefined ? undefined : shell(["trace", "grep", pattern, ...await projectPaths(mod, base, paths)]);
+    }
+    case "show":
+    case "cat-file": {
+      if (subcommand === "cat-file" && !flags2.includes("-p"))
+        return;
+      const shown = positional.find((arg) => arg.includes(":"));
+      if (shown === undefined)
+        return;
+      const split = shown.indexOf(":");
+      return shell(["trace", "read", shown.slice(split + 1), "--at", shown.slice(0, split) || "HEAD"]);
+    }
+    case "log": {
+      if (flags2.some((flag) => flag.startsWith("-G") || flag === "-p" || flag === "--patch"))
+        return;
+      const search = rest.indexOf("-S");
+      if (search >= 0) {
+        const text = rest[search + 1];
+        return text === undefined || text.startsWith("-") ? "trace history --contains <pattern>" : shell(["trace", "history", "--contains", text]);
+      }
+      if (flags2.includes("-L"))
+        return "trace history <file> <symbol>";
+      const paths = await projectPaths(mod, base, positional);
+      return paths.length === 0 || paths.length !== positional.length ? undefined : shell(["trace", "history", paths[0]]);
+    }
+    case "diff":
+      return flags2.includes("--name-status") ? "trace diff" : undefined;
+    default:
+      return;
+  }
+}
+async function projectPaths(mod, base, args) {
+  const found = await Promise.all(args.map(async (arg) => await inProject(mod, base, arg) ? [arg] : []));
+  return found.flat();
+}
+async function inProject(mod, base, arg) {
+  if (arg === "" || arg.startsWith("-"))
+    return false;
+  const glob = arg.search(GLOB);
+  const path = glob < 0 ? resolve(base, arg) : resolve(base, dirname(`${arg.slice(0, glob)}x`));
+  const root = mod.projectRoot;
+  return (path === root || path.startsWith(`${root}/`)) && await mod.fs.exists(path);
+}
+function shell(words) {
+  return words.map(quote).join(" ");
+}
+
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/mod.ts
 var ENRICHED_TOOLS = new Set(["Read", "Edit", "Write", "Grep", "Glob"]);
 var options = {
-  budget: option.number({ title: "Context budget", description: "Characters each tracer hook adds to Claude’s context. Claude Code moves a longer hook message to a file.", default: 1e4, min: 1000 }),
-  primer: option.toggle({ title: "Repository primer", description: "Send the repository primer when a session starts", default: true }),
-  enrich: option.toggle({ title: "File facts", description: "Add each file’s facts to Read, Edit, Write, Grep, and Glob", default: true }),
-  projectDocs: option.toggle({ title: "Project docs", description: "Send the project docs a trace command reaches", default: true })
+  tracerOnly: option.toggle({
+    title: "Claude reads code only through tracer",
+    description: "Claude can't read or search this project with grep, cat, find, or git blame. It uses tracer instead, so every read comes with the file's callers, history, and docs.",
+    default: false
+  })
 };
 var tracer = defineMod({
   name: "tracer",
@@ -6610,17 +6777,17 @@ var tracer = defineMod({
     mod.on("InstructionsLoaded", (input) => recordLoadedDoc(mod, input));
     mod.on("PreCompact", (input) => forgetLoadedDocs(mod, input));
     mod.on("SubagentStop", (input) => archiveAgentLog(mod, input));
-    mod.on("PreToolUse", (input) => {
+    mod.on("PreToolUse", async (input) => {
       if (input.tool_name === "Bash")
-        return commandDocs(mod, input);
-      if (ENRICHED_TOOLS.has(input.tool_name) && mod.options.enrich)
+        return (mod.options.tracerOnly ? await refuseRawRead(mod, input) : undefined) ?? commandDocs(mod, input);
+      if (ENRICHED_TOOLS.has(input.tool_name))
         return toolContext(mod, input);
       return;
     });
   }
 });
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-jSwFtP/release/hooks/register.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/hooks/register.ts
 function register(addHook, options2) {
   registerMod(addHook, tracer, options2);
 }

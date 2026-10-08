@@ -7,14 +7,13 @@ Use this Reference when diagnosing the tracer mod's Hooks, docs injection, ident
 ### The Hooks are the tracer mod
 The tracer mod registers its Hooks through cmod in `hooks/register.ts`, and `src/mod.ts` wires each event to its handler. Every handler runs `trace` and adds its output to the Agent's context.
 
-- Each handler passes `--budget`, the mod's `budget` setting, 10,000 characters by default, because Claude Code saves a longer hook message to a file and shows the Agent its path and a 2,000-character preview.
+- Each handler passes `--budget 10000`, because Claude Code saves a longer hook message to a file and shows the Agent its path and a 2,000-character preview.
 - A handler that cannot run `trace` adds nothing, so the session goes on without tracer's context.
 
 ## 2. Match the Hook to the event
 
 ### SessionStart loads the repository primer
-- Inside a git work tree it runs `trace context` and adds the primer. The `primer` setting turns it off.
-- `clear` resets the record first with `trace docs reset`.
+- Inside a git work tree it runs `trace context` and adds the primer.- `clear` resets the record first with `trace docs reset`.
 - Every SessionStart records the docs Claude Code loads at session start, which it puts back after a compaction without reporting them: `trace docs prime` for the `Claude.md` chain, and `trace docs <cwd> --json` for the working directory's docs.
 
 ### InstructionsLoaded and PreCompact mirror Claude Code's own doc loads
@@ -22,7 +21,7 @@ The tracer mod registers its Hooks through cmod in `hooks/register.ts`, and `src
 - `PreCompact` resets the record with `trace docs reset`, because a compaction drops the docs from context.
 
 ### PreToolUse on Read, Edit, Write, Grep, and Glob attaches facts
-One `trace` call per tool call. The `enrich` setting turns it off.
+One `trace` call per tool call.
 
 - Read runs `trace context <file>` with the Read's offset and limit.
 - Edit and Write add `--no-record`, and Edit reads only the lines its `old_string` replaces.
@@ -31,10 +30,13 @@ One `trace` call per tool call. The `enrich` setting turns it off.
 - A failed call on an existing file adds `[trace context unavailable: <reason>]` under its path.
 
 ### PreToolUse on Bash sends the docs a trace command reaches
-- Before a `trace` subcommand that takes paths, it runs `trace docs <paths> --source tracer_project_docs --triggering-tool Bash --triggering-command <cmd>`. The `projectDocs` setting turns it off.
+- Before a `trace` subcommand that takes paths, it runs `trace docs <paths> --source tracer_project_docs --triggering-tool Bash --triggering-command <cmd>`.
 - The paths are every argument of the command that exists as a path, else the working directory; a `trace read` passes its files as `--skip`, because the read prints them. A `trace -C <dir>` call resolves its paths from `<dir>`.
 - It adds the docs not yet loaded as Markdown, a doc too long for the message cut at a whole line and continued on the next trace command.
 - Inside a Subagent it writes `--agent <agent_id>` into each `trace` call through `updatedInput`, because the Subagent's shell carries no agent id.
+
+### PreToolUse on Bash refuses raw reads when the person turned tracerOnly on
+With the `tracerOnly` setting on, a Bash command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
 
 ### SubagentStop archives the stopped Subagent's log
 It runs `trace docs archive`, which moves `<repo>/.tracer-cache/sessions/<sid>/<aid>/` into `<repo>/.tracer-cache/sessions/<sid>/archived/<aid>/`. Trace reads fall back to the archived directory, and a resumed Subagent's first write takes it back.

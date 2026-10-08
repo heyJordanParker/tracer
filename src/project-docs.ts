@@ -2,7 +2,7 @@ import type { HookAnswer, HookInput } from '../node_modules/@cmodjs/core/mod.js'
 import { basename, resolve } from '../node_modules/@cmodjs/core/path.js'
 import { parseShell } from '../node_modules/@cmodjs/core/shell.js'
 import type { TracerMod } from './mod.js'
-import { context, trace } from './trace.js'
+import { BUDGET, context, quote, trace } from './trace.js'
 
 const PATH_TAKING = new Set(['read', 'info', 'list', 'tree', 'structure', 'grep', 'pattern', 'find', 'blame', 'history', 'diff'])
 
@@ -22,11 +22,11 @@ export async function commandDocs(mod: TracerMod, input: HookInput<'PreToolUse'>
   const rewrite = withAgent(input, line)
   const call = tracedCall(line, input.cwd)
   let text = ''
-  if (call !== undefined && mod.options.projectDocs) {
+  if (call !== undefined) {
     const existing = await Promise.all(call.candidates.map(async (path) => ((await mod.fs.exists(path)) ? [path] : [])))
     const targets = existing.flat().length > 0 ? [...new Set(existing.flat())] : [call.base]
     const skips = call.subcommand === 'read' ? targets.flatMap((path) => ['--skip', path]) : []
-    const args = ['docs', ...targets, '--budget', String(mod.options.budget), '--source', 'tracer_project_docs', '--triggering-tool', 'Bash', '--triggering-command', line, ...skips]
+    const args = ['docs', ...targets, '--budget', BUDGET, '--source', 'tracer_project_docs', '--triggering-tool', 'Bash', '--triggering-command', line, ...skips]
     const traced = await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, args)
     if (traced.exitCode === 0) text = traced.stdout.trim()
   }
@@ -57,7 +57,6 @@ export function tracedCall(line: string, cwd: string): Traced | undefined {
 export function withAgent(input: HookInput<'PreToolUse'>, line: string): Record<string, unknown> | undefined {
   const agent = input.agent_id
   if (agent === undefined || agent === '') return undefined
-  const quoted = /^[\w@%+=:,./-]+$/.test(agent) ? agent : `'${agent.replaceAll("'", `'"'"'`)}'`
-  const replaced = line.replace(TRACE_CALL, (call) => `${call} --agent ${quoted}`)
+  const replaced = line.replace(TRACE_CALL, (call) => `${call} --agent ${quote(agent)}`)
   return replaced === line ? undefined : { ...input.tool_input, command: replaced }
 }
