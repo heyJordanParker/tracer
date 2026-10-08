@@ -1,8 +1,7 @@
-import type { On } from 'claude-code'
-import { registerMod, registerPermissionCheck } from '../node_modules/@cmodjs/core/register.js'
+import type { On, PluginOptions } from 'claude-code'
+import { registerMod } from '../node_modules/@cmodjs/core/register.js'
 import { tracer } from '../src/mod.js'
 
-export function register(addHook: On): void {
-  registerMod(addHook, tracer)
-  registerPermissionCheck(addHook)
+export function register(addHook: On, options: PluginOptions): void {
+  registerMod(addHook, tracer, options)
 }

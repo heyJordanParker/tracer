@@ -1,0 +1,27 @@
+{
+  "name": "tracer",
+  "owner": {
+    "name": "heyJordanParker"
+  },
+  "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
+  "plugins": [
+    {
+      "name": "tracer",
+      "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/heyJordanParker/tracer/releases/download/v0.1.0/tracer-0.1.0.zip",
+        "sha256": "d8464d4018da7b1458f4bada0284d89530b9dfd93ee12d381642c9b8e9aa968d"
+      }
+    },
+    {
+      "name": "cmod",
+      "description": "Claude Mod Manager: runs the uninstall step of each mod Claude Code removes",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/heyJordanParker/cmod/releases/download/v0.1.8/cmod-0.1.8.zip",
+        "sha256": "80b0404f9b52c616f76c922591caace1088c90e787734cc7faa8b9f7404d2da0"
+      }
+    }
+  ]
+}

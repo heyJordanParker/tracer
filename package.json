@@ -3,7 +3,12 @@
   "private": true,
   "type": "module",
   "cmod": {
-    "program": "trace"
+    "program": "trace",
+    "permissions": {
+      "run": ["trace", "git"],
+      "prompt": true,
+      "tools": true
+    }
   },
   "files": [
     "hooks",
@@ -14,6 +19,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@cmodjs/core": "^0.1.8"
+    "@cmodjs/core": "^0.2.2"
   }
 }

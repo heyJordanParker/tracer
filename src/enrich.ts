@@ -1,5 +1,7 @@
-import type { HookAnswer } from '../node_modules/@cmodjs/core/mod.js'
-import { context, resolvePath, trace, type Input, type TracerMod } from './trace.js'
+import type { HookAnswer, HookInput } from '../node_modules/@cmodjs/core/mod.js'
+import { relative, resolve } from '../node_modules/@cmodjs/core/path.js'
+import type { TracerMod } from './mod.js'
+import { context, trace } from './trace.js'
 
 const NO_MATCHES = '(no matches)'
 
@@ -9,7 +11,7 @@ type Request = {
   readonly isExisting: boolean
 }
 
-export async function toolContext(mod: TracerMod, input: Input<'PreToolUse'>): Promise<HookAnswer | undefined> {
+export async function toolContext(mod: TracerMod, input: HookInput<'PreToolUse'>): Promise<HookAnswer | undefined> {
   const request = await requestOf(mod, input)
   if (request === undefined) return undefined
   const traced = await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, request.args)
@@ -20,9 +22,9 @@ export async function toolContext(mod: TracerMod, input: Input<'PreToolUse'>): P
   return context('PreToolUse', `${request.target}\n[trace context unavailable: ${reason}]`)
 }
 
-async function requestOf(mod: TracerMod, input: Input<'PreToolUse'>): Promise<Request | undefined> {
+async function requestOf(mod: TracerMod, input: HookInput<'PreToolUse'>): Promise<Request | undefined> {
   const tool = input.tool_input
-  const budget = String(mod.state.project.budget)
+  const budget = String(mod.options.budget)
   switch (input.tool_name) {
     case 'Read':
     case 'Edit':
@@ -35,7 +37,7 @@ async function requestOf(mod: TracerMod, input: Input<'PreToolUse'>): Promise<Re
       } else {
         args.push('--no-record')
       }
-      if (input.tool_name === 'Edit') args.push(...(await editedLines(mod, resolvePath(target, input.cwd), textOf(tool['old_string']))))
+      if (input.tool_name === 'Edit') args.push(...(await editedLines(mod, resolve(input.cwd, target), textOf(tool['old_string']))))
       return { args, target, isExisting: input.tool_name !== 'Write' }
     }
     case 'Glob': {
@@ -61,10 +63,9 @@ async function requestOf(mod: TracerMod, input: Input<'PreToolUse'>): Promise<Re
 }
 
 function shownPath(path: string, cwd: string): string {
-  const root = resolvePath(cwd, '/')
-  const searched = resolvePath(path, root)
-  if (searched === root) return '.'
-  return searched.startsWith(`${root}/`) ? searched.slice(root.length + 1) : searched
+  const searched = resolve(cwd, path)
+  const inside = relative(cwd, searched)
+  return inside === '..' || inside.startsWith('../') ? searched : inside || '.'
 }
 
 async function editedLines(mod: TracerMod, path: string, replaced: string): Promise<string[]> {

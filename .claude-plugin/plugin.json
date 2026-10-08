@@ -1,6 +1,6 @@
 {
   "name": "tracer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
   "author": {
     "name": "Jordan Parker",
@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/heyJordanParker/tracer",
   "repository": "https://github.com/heyJordanParker/tracer",
-  "documentationUrl": "https://github.com/heyJordanParker/tracer/tree/main/docs",
+  "documentationUrl": "https://github.com/heyJordanParker/tracer/tree/master/docs",
   "supportUrl": "https://github.com/heyJordanParker/tracer/issues",
   "license": "MIT",
   "keywords": [
@@ -20,5 +20,32 @@
   ],
   "dependencies": [
     "cmod"
-  ]
+  ],
+  "userConfig": {
+    "budget": {
+      "type": "number",
+      "title": "Context budget",
+      "description": "Characters each tracer hook adds to Claude’s context. Claude Code moves a longer hook message to a file.",
+      "default": 10000,
+      "min": 1000
+    },
+    "primer": {
+      "type": "boolean",
+      "title": "Repository primer",
+      "description": "Send the repository primer when a session starts",
+      "default": true
+    },
+    "enrich": {
+      "type": "boolean",
+      "title": "File facts",
+      "description": "Add each file’s facts to Read, Edit, Write, Grep, and Glob",
+      "default": true
+    },
+    "projectDocs": {
+      "type": "boolean",
+      "title": "Project docs",
+      "description": "Send the project docs a trace command reaches",
+      "default": true
+    }
+  }
 }
