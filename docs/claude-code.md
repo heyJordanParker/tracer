@@ -58,6 +58,7 @@ With it on, a Bash command that reads the project's code without `trace` is refu
 | `find` | `trace find` |
 | `ls`, `tree` | `trace list`, `trace tree` |
 | `git blame`, `git grep`, `git show <ref>:<path>`, `git log <file>`, `git log -S` | `trace blame`, `trace grep`, `trace read --at`, `trace history` |
+| A `trace` command piped into `head`, `grep`, `sed`, `wc`, `jq`, or another filter | The `trace` command alone, or with `--json --filter <expression>` in place of `jq` |
 
 Read, Grep, and Glob stay allowed, because tracer adds its facts to each of them. A command that changes files, such as `sed -i` or `find -delete`, runs, and so does every read outside the project and every git command `trace` has no answer for, such as `git status` or `git log -p`.
 

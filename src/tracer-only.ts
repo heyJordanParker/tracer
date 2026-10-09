@@ -7,6 +7,7 @@ import { quote } from './trace.js'
 const READERS = new Set(['cat', 'head', 'tail', 'sed', 'awk'])
 const SEARCHERS = new Set(['grep', 'egrep', 'fgrep', 'rg'])
 const LISTERS = new Set(['ls', 'tree'])
+const FILTERS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'sed', 'awk', 'head', 'tail', 'cut', 'sort', 'uniq', 'wc', 'column', 'fold', 'tr', 'jq'])
 const SEARCH_VALUED = new Set(['-e', '-f', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-m', '--max-count', '-A', '-B', '-C', '-M'])
 const FIND_ACTIONS = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir'])
 const GLOB = /[*?[]/
@@ -19,8 +20,13 @@ type Command = {
 
 export async function refuseRawRead(mod: TracerMod, input: HookInput<'PreToolUse'>): Promise<HookAnswer | undefined> {
   const line = typeof input.tool_input['command'] === 'string' ? input.tool_input['command'] : ''
-  for (const { argv: [program, ...args], folder } of parseShell(line).commands) {
-    const replacement = await replacementOf(mod, { program: basename(program), args, base: resolve(input.cwd, folder) })
+  const { commands } = parseShell(line)
+  for (const { argv: [program, ...args], folder, input: piped } of commands) {
+    const source = piped === undefined ? undefined : commands[piped]?.argv
+    const replacement =
+      source !== undefined && basename(source[0]) === 'trace' && FILTERS.has(basename(program))
+        ? filteredReplacement(source, basename(program), args)
+        : await replacementOf(mod, { program: basename(program), args, base: resolve(input.cwd, folder) })
     if (replacement !== undefined) {
       return {
         hookSpecificOutput: {
@@ -32,6 +38,12 @@ export async function refuseRawRead(mod: TracerMod, input: HookInput<'PreToolUse
     }
   }
   return undefined
+}
+
+function filteredReplacement(trace: readonly string[], filter: string, args: readonly string[]): string {
+  const expression = filter === 'jq' ? args.find((arg) => !arg.startsWith('-')) : undefined
+  if (expression === undefined) return shell(trace)
+  return shell([...trace, ...(trace.includes('--json') ? [] : ['--json']), '--filter', expression])
 }
 
 async function replacementOf(mod: TracerMod, command: Command): Promise<string | undefined> {

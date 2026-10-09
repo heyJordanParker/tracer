@@ -40,6 +40,14 @@ test('a git read of the project is refused with its tracer command', async () =>
   expect((await run('git log --oneline src/cart.ts')).deny).toBe(refusal('trace history src/cart.ts'))
 })
 
+test('trace output piped into a filter is refused with the trace command alone', async () => {
+  expect((await run('trace read src/cart.ts | head -20')).deny).toBe(refusal('trace read src/cart.ts'))
+  expect((await run('trace grep Cart src | grep -v test | wc -l')).deny).toBe(refusal('trace grep Cart src'))
+  expect((await run("trace grep Cart --json | jq '.counts'")).deny).toBe(refusal('trace grep Cart --json --filter .counts'))
+  expect((await run('trace grep Cart | jq -r .results')).deny).toBe(refusal('trace grep Cart --json --filter .results'))
+  expect((await run('timeout 5 trace status | tail -3')).deny).toBe(refusal('trace status'))
+})
+
 test('a read after cd is checked in the folder it runs in', async () => {
   expect((await run('cd src && cat cart.ts')).deny).toBe(refusal('trace read cart.ts'))
 })

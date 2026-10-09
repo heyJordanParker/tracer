@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- With "Claude reads code only through tracer" on, a `trace` command piped into `head`, `grep`, `sed`, `wc`, `jq`, or another filter is refused, because the filter cuts the context tracer fitted. The refusal names the `trace` command alone, or with `--json --filter <expression>` in place of `jq`.
+- The mod needs cmod 0.3.0 or later.
+
 ## 0.3.0
 
 - One setting, "Claude reads code only through tracer", off by default. With it on, Claude's `grep`, `cat`, `find`, `ls`, and `git blame` reads of the project are refused, and Claude runs the `trace` command the refusal names. A repository turns it on with `{ "tracerOnly": true }` in `.claude/cmods/tracer/options.json`.
