@@ -3352,7 +3352,7 @@ function readHeredocBodies(source, from, heredocs) {
 function walk(tokens, markers, start, result) {
   let folder = start;
   const subshells = [];
-  let command = newCommand(false);
+  let command = newCommand(undefined);
   let caseState;
   for (let index = 0;index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -3388,12 +3388,14 @@ function walk(tokens, markers, start, result) {
     }
     const following = tokens[index + 1];
     if (operator === "(" && command.words.length === 1 && following !== undefined && !isWordToken(following) && "op" in following && following.op === ")") {
-      command = newCommand(false);
+      command = newCommand(undefined);
       index += 1;
       continue;
     }
+    const before = result.commands.length;
     folder = finish(command, operator, folder, result);
-    command = newCommand(operator === "|" || operator === "|&");
+    const writer = result.commands.length > before ? result.commands.length - 1 : undefined;
+    command = newCommand(operator === "|" || operator === "|&" ? { writer } : undefined);
     if (operator === "(")
       subshells.push(folder);
     else if (operator === ")") {
@@ -3408,8 +3410,8 @@ function walk(tokens, markers, start, result) {
   }
   finish(command, ";", folder, result);
 }
-function newCommand(isPipedIn) {
-  return { words: [], redirects: [], isPipedIn };
+function newCommand(pipe) {
+  return { words: [], redirects: [], pipe };
 }
 function isWordToken(token) {
   return typeof token === "string" || "op" in token && token.op === "glob";
@@ -3434,9 +3436,14 @@ function finish(command, operator, folder, result) {
   if (first === undefined || first.text === "for" || first.text === "select")
     return folder;
   const here = command.redirects.findLast((redirect) => redirect.operator === "<<<");
-  const stdin = here !== undefined ? { kind: "text", text: here.target.text } : command.isPipedIn ? { kind: "pipe" } : undefined;
+  const stdin = here !== undefined ? { kind: "text", text: here.target.text } : command.pipe !== undefined ? { kind: "pipe" } : undefined;
+  const reader = result.commands.length;
   const changed = addCommand(first, args, folder, stdin, result);
-  const isPiped = command.isPipedIn || operator === "|" || operator === "|&" || operator === "&";
+  const read = result.commands[reader];
+  const writer = command.pipe?.writer;
+  if (read !== undefined && writer !== undefined && here === undefined)
+    result.commands[reader] = { ...read, input: writer };
+  const isPiped = command.pipe !== undefined || operator === "|" || operator === "|&" || operator === "&";
   return changed === undefined || isPiped ? folder : changed;
 }
 function withoutPrefixes(words) {
@@ -4076,13 +4083,6 @@ function checkingGrants(claude, grants) {
       async fetch(url, init) {
         await gate(`http.fetch(${url})`, `network:${init?.socketPath ?? hostOf(url)}`);
         return claude.http.fetch(url, init);
-      }
-    },
-    config: {
-      ...claude.config,
-      set: async (args) => {
-        await gate("config.set", "config");
-        return claude.config.set(args);
       }
     },
     session: {
@@ -5704,8 +5704,8 @@ function createLifecycle(definition, checksPermissions = () => true, options = {
     const misfit = option2.kind === "toggle" && !["true", "false"].includes(text.trim()) ? "takes true or false" : fitsOption(option2, value);
     if (misfit !== undefined)
       return `${option2.title} ${misfit}.`;
-    const saved = await claude().config.set({ key: `${plugin.name}.${key}`, value });
-    return saved.deny;
+    const saved = await claude().process.run(["cmod", "option", plugin.name, key, Array.isArray(value) ? value.join(",") : String(value)]);
+    return saved.exitCode === 0 ? undefined : lastLineOf(saved.stderr) ?? `cmod option exited ${saved.exitCode}.`;
   };
   const askOptions = async (missing) => {
     if (!asksPerson || plugin === undefined || (await claude().session.surfaces()).length === 0)
@@ -6331,7 +6331,7 @@ async function startMod($, eventInput, passOn) {
     },
     http: { fetch: (url, init) => $.http.fetch(url, init) },
     settings: { read: (args) => $.settings.read(args) },
-    config: { list: () => $.config.list(), set: (args) => $.config.set(args) },
+    config: { list: () => $.config.list() },
     store: {
       get: (key) => $.store.get(key),
       set: (key, value) => $.store.set(key, value),
@@ -6415,7 +6415,7 @@ function defineMod(definition) {
     checkOptions(definition.name, definition.options);
   return definition;
 }
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/trace.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/trace.ts
 var BUDGET = "10000";
 async function trace(mod, caller, args, timeoutMs = 1e4) {
   const env = { AGENT_SESSION_ID: caller.sessionId };
@@ -6435,7 +6435,7 @@ function context(event, text, updatedInput) {
   return { hookSpecificOutput: { hookEventName: event, additionalContext: text, ...updatedInput === undefined ? {} : { updatedInput } } };
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/enrich.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/enrich.ts
 var NO_MATCHES = "(no matches)";
 async function toolContext(mod, input) {
   const request = await requestOf(mod, input);
@@ -6521,7 +6521,7 @@ function option2(flag, value) {
 function textOf(value) {
   return typeof value === "string" ? value : "";
 }
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/project-docs.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/project-docs.ts
 var PATH_TAKING = new Set(["read", "info", "list", "tree", "structure", "grep", "pattern", "find", "blame", "history", "diff"]);
 var VALUED_LEADING = new Set(["-C", "--budget", "--agent", "--filter"]);
 var TRACE_CALL = /(?<=^|[;&|(\n])(\s*(?:\S*\/)?trace)(?=\s|$)(?!\s+--agent\b)/g;
@@ -6576,7 +6576,7 @@ function withAgent(input, line) {
   return replaced === line ? undefined : { ...input.tool_input, command: replaced };
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/session.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/session.ts
 async function startSession(mod, input) {
   const caller = { cwd: input.cwd, sessionId: input.session_id };
   if (input.source === "clear")
@@ -6602,17 +6602,20 @@ async function archiveAgentLog(mod, input) {
   await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, ["docs", "archive"]);
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/tracer-only.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/tracer-only.ts
 var READERS = new Set(["cat", "head", "tail", "sed", "awk"]);
 var SEARCHERS = new Set(["grep", "egrep", "fgrep", "rg"]);
 var LISTERS = new Set(["ls", "tree"]);
+var FILTERS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "awk", "head", "tail", "cut", "sort", "uniq", "wc", "column", "fold", "tr", "jq"]);
 var SEARCH_VALUED = new Set(["-e", "-f", "-g", "--glob", "-t", "--type", "-T", "--type-not", "-m", "--max-count", "-A", "-B", "-C", "-M"]);
 var FIND_ACTIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir"]);
 var GLOB = /[*?[]/;
 async function refuseRawRead(mod, input) {
   const line = typeof input.tool_input["command"] === "string" ? input.tool_input["command"] : "";
-  for (const { argv: [program, ...args], folder } of parseShell(line).commands) {
-    const replacement = await replacementOf(mod, { program: basename(program), args, base: resolve(input.cwd, folder) });
+  const { commands } = parseShell(line);
+  for (const { argv: [program, ...args], folder, input: piped } of commands) {
+    const source = piped === undefined ? undefined : commands[piped]?.argv;
+    const replacement = source !== undefined && basename(source[0]) === "trace" && FILTERS.has(basename(program)) ? filteredReplacement(source, basename(program), args) : await replacementOf(mod, { program: basename(program), args, base: resolve(input.cwd, folder) });
     if (replacement !== undefined) {
       return {
         hookSpecificOutput: {
@@ -6625,6 +6628,12 @@ Run this instead: ${replacement}`
     }
   }
   return;
+}
+function filteredReplacement(trace2, filter, args) {
+  const expression = filter === "jq" ? args.find((arg) => !arg.startsWith("-")) : undefined;
+  if (expression === undefined)
+    return shell(trace2);
+  return shell([...trace2, ...trace2.includes("--json") ? [] : ["--json"], "--filter", expression]);
 }
 async function replacementOf(mod, command) {
   if (command.program === "git")
@@ -6760,7 +6769,7 @@ function shell(words) {
   return words.map(quote).join(" ");
 }
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/src/mod.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/mod.ts
 var ENRICHED_TOOLS = new Set(["Read", "Edit", "Write", "Grep", "Glob"]);
 var options = {
   tracerOnly: option.toggle({
@@ -6787,7 +6796,7 @@ var tracer = defineMod({
   }
 });
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-OL5dTQ/release/hooks/register.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/hooks/register.ts
 function register(addHook, options2) {
   registerMod(addHook, tracer, options2);
 }

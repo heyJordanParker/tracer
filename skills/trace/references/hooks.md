@@ -36,7 +36,7 @@ One `trace` call per tool call.
 - Inside a Subagent it writes `--agent <agent_id>` into each `trace` call through `updatedInput`, because the Subagent's shell carries no agent id.
 
 ### PreToolUse on Bash refuses raw reads when the person turned tracerOnly on
-With the `tracerOnly` setting on, a Bash command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
+With the `tracerOnly` setting on, a Bash command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused, and so is a `trace` command piped into a filter such as `head`, `grep`, `wc`, or `jq`. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
 
 ### SubagentStop archives the stopped Subagent's log
 It runs `trace docs archive`, which moves `<repo>/.tracer-cache/sessions/<sid>/<aid>/` into `<repo>/.tracer-cache/sessions/<sid>/archived/<aid>/`. Trace reads fall back to the archived directory, and a resumed Subagent's first write takes it back.
