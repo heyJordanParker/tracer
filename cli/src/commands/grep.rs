@@ -567,7 +567,7 @@ pub fn run(
         }
         // Docs belong to the worktree, so a search at a revision sends none.
         let reached: Vec<PathBuf> = if at.is_none() { paths.iter().map(PathBuf::from).collect() } else { Vec::new() };
-        super::docs::print_with_docs(&answer, &reached, "trace_grep", delivery)?;
+        crate::docs::print_with_docs(&answer, &reached, "trace_grep", delivery)?;
     }
     drop(surfaces);
 

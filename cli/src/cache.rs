@@ -195,7 +195,19 @@ pub fn absolutize(path: &Path) -> PathBuf {
     }
 }
 
+/// `cache_dir`, created with its `.gitignore`.
 fn cache_root(repo_root: &Path) -> Result<PathBuf> {
+    let dir = cache_dir(repo_root)?;
+    fs::create_dir_all(&dir)?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        fs::write(ignore, "*\n")?;
+    }
+    Ok(dir)
+}
+
+/// Where `repo_root`'s `.tracer-cache/` lives, whether or not it exists yet.
+fn cache_dir(repo_root: &Path) -> Result<PathBuf> {
     // Worktree gate: a `.tracer-cache/` directory exists only at a worktree
     // root. The cheap-and-correct check is `<repo_root>/.git` — every
     // worktree (main or linked) has a `.git` entry at its own root (a
@@ -209,13 +221,19 @@ fn cache_root(repo_root: &Path) -> Result<PathBuf> {
     if git_dir(repo_root).is_none() {
         anyhow::bail!("cache_root: not a worktree root: {}", repo_root.display());
     }
-    let dir = repo_root.join(CACHE_DIR_NAME);
-    fs::create_dir_all(&dir)?;
-    let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        fs::write(ignore, "*\n")?;
-    }
-    Ok(dir)
+    Ok(repo_root.join(CACHE_DIR_NAME))
+}
+
+/// Whether this user can save cache entries under `repo_root`, so a build
+/// there keeps what it extracts. A cache another user owns, or one left by
+/// `sudo trace`, keeps nothing, and a build there would run again on every
+/// call that finds the index missing.
+pub fn can_persist(repo_root: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    schema_directory(NAMESPACE_FILE, repo_root)
+        .ok()
+        .and_then(|dir| std::ffi::CString::new(dir.as_os_str().as_bytes()).ok())
+        .is_some_and(|dir| unsafe { libc::access(dir.as_ptr(), libc::W_OK) } == 0)
 }
 
 fn schema_directory(namespace: &str, repo_root: &Path) -> Result<PathBuf> {
@@ -525,9 +543,9 @@ pub struct CacheStats {
 
 /// Entry count and total size of the `file/` namespace, every schema's
 /// directory included. Absent means zero, not an error: a repo that has never
-/// been read has no namespace directory.
+/// been read has no namespace directory, and reading creates none.
 pub fn stats(repo_root: &Path) -> Result<CacheStats> {
-    let dir = cache_root(repo_root)?.join(NAMESPACE_FILE);
+    let dir = cache_dir(repo_root)?.join(NAMESPACE_FILE);
     let mut out = CacheStats {
         entry_count: 0,
         total_bytes: 0,

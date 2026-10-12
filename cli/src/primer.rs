@@ -3,12 +3,14 @@
 //! git, rules, spine) plus the `repo_context` footer. Its first run warms the
 //! file cache and the relations index.
 //!
-//! CCN is AST-derived; the Layout per-path aggregation uses the real
-//! `file_facts::get` (no lite-facts shortcut).
+//! The parts that read the relations index are the Spine, the dirty files'
+//! `imported_by` and complexity, and Layout's complexity, which reads the
+//! extraction the index build stores. Every other part runs beside the build.
 
-use crate::commands::paths_match;
+use crate::paths_match;
 use crate::session;
 use crate::git_activity::git_str;
+use crate::repo_files::TrackedFiles;
 use crate::{cache, docs_graph, file_facts, git_activity, relations, repo_context, repo_files, summary};
 use anyhow::Result;
 use serde_json::{Map, Value};
@@ -16,8 +18,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const PRIMER_LANGUAGE_LIMIT: usize = 10;
 const PRIMER_DIRTY_LIMIT: usize = 10;
@@ -151,8 +154,8 @@ const DIRTY_STATES: &[&str] = &["untracked", "added", "modified", "renamed"];
 pub fn run() -> Result<()> {
     let here = Path::new(".");
     let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
-    let index = relations::get(&repo_root);
-    print!("{}", sections(&repo_root, Some(&index)).into_iter().map(|section| format!("{section}\n")).collect::<String>());
+    let (sections, _) = sections(&repo_root, || Some(relations::get(&repo_root)), None);
+    print!("{}", sections.into_iter().map(|section| format!("{section}\n")).collect::<String>());
     if let Some(footer) = repo_context::footer(&repo_root, None) {
         println!("{footer}");
     }
@@ -163,14 +166,15 @@ pub fn run() -> Result<()> {
 /// the repository's `Primer`, one line per section keyed by its heading, so
 /// a resumed session that holds it gets nothing and a repository that
 /// changed since gets only the sections that changed. Sections that don't
-/// fit are left out from the last, and stay unshown. The index builds until
-/// the hook's deadline leaves only room to print, and the parts that need it
-/// are left out when it isn't ready.
+/// fit are left out from the last, and stay unshown. Every part builds until
+/// the hook's deadline leaves only room to print, and a part not ready by
+/// then is left out, the footer when its scc count is not.
 pub fn delivered(repo_root: &Path, room: usize, delivery: &mut crate::session::Delivery) -> String {
     use crate::session::{Kind, Offer};
     let key = repo_root.to_string_lossy();
-    let index = relations::within(repo_root, crate::process::warm_limit());
-    let sections: Vec<(String, String)> = sections(repo_root, index.as_deref())
+    let limit = crate::process::warm_limit();
+    let (sections, counted) = sections(repo_root, || relations::within(repo_root, limit), Some(limit));
+    let sections: Vec<(String, String)> = sections
         .into_iter()
         .filter(|section| !section.trim().is_empty())
         .map(|section| (section.lines().next().unwrap_or_default().to_string(), format!("{section}\n")))
@@ -183,7 +187,11 @@ pub fn delivered(repo_root: &Path, room: usize, delivery: &mut crate::session::D
         Offer::New => sections.iter().collect(),
         Offer::Changed(lines) => sections.iter().filter(|(heading, _)| lines.contains_key(heading)).collect(),
     };
-    let footer = repo_context::footer(repo_root, Some(delivery)).map(|line| format!("{line}\n")).unwrap_or_default();
+    let footer = counted
+        .then(|| repo_context::footer(repo_root, Some(delivery)))
+        .flatten()
+        .map(|line| format!("{line}\n"))
+        .unwrap_or_default();
     let mut used = crate::output::width(&footer);
     let fits: Vec<&(String, String)> = unshown
         .iter()
@@ -204,37 +212,62 @@ pub fn delivered(repo_root: &Path, room: usize, delivery: &mut crate::session::D
     out
 }
 
-/// Every section, with the ones that need `index` left out without it.
-fn sections(repo_root: &Path, index: Option<&relations::Relations>) -> Vec<String> {
-    let repo_root = repo_root.to_path_buf();
-    let tracked = repo_files::tracked_files(&repo_root, None).unwrap_or_default();
+/// The sections in order, and whether the scc count the footer reads
+/// arrived. The reads that need no relations index run on threads of their
+/// own while this thread gets the index from `index`, so a cold index holds
+/// up only the parts that read it. A part not ready by `limit` is left out
+/// and its thread ends with the process; the parts that read the index are
+/// left out without it.
+fn sections(
+    repo_root: &Path,
+    index: impl FnOnce() -> Option<Arc<relations::Relations>>,
+    limit: Option<Instant>,
+) -> (Vec<String>, bool) {
+    let tracked = repo_files::tracked_files(repo_root, None).unwrap_or_default();
+    let environment = background(repo_root, &tracked, |root, _| environment_section(root));
+    let identity = background(repo_root, &tracked, |root, _| identity_section(root));
+    let tech_stack = background(repo_root, &tracked, |root, _| tech_stack_section(root));
+    let layout = background(repo_root, &tracked, top_directories);
+    let common_directories = background(repo_root, &tracked, common_directories_section);
+    let git = background(repo_root, &tracked, |root, _| git_state(root));
+    let rules = background(repo_root, &tracked, rules_section);
+    let index = index();
+    let identity = arrived(identity, limit);
+    let counted = identity.is_some();
+    let sections = [
+        arrived(environment, limit),
+        identity,
+        arrived(tech_stack, limit),
+        arrived(layout, limit).map(|directories| layout_section(repo_root, &tracked, &directories, index.is_some(), limit)),
+        arrived(common_directories, limit),
+        arrived(git, limit).map(|git| git_section(repo_root, git, index.as_deref(), limit)),
+        arrived(rules, limit),
+        index.as_deref().map(spine_section),
+    ];
+    (sections.into_iter().flatten().collect(), counted)
+}
 
-    // Each section is an independent, self-contained read of repo state —
-    // git subprocesses, the relations index, scc facts. They share no mutable
-    // state, so they run concurrently; the per-section git-spawn cost is the
-    // primer's whole budget, and running the sections in parallel collapses
-    // the serial sum to the slowest single section. Output is assembled in
-    // fixed order below, so the bytes are identical to serial emission.
-    thread::scope(|scope| {
-        let environment = scope.spawn(|| environment_section(&repo_root));
-        let identity = scope.spawn(|| identity_section(&repo_root));
-        let tech_stack = scope.spawn(|| tech_stack_section(&repo_root));
-        let layout = scope.spawn(|| layout_section(&repo_root, &tracked));
-        let common_directories = scope.spawn(|| common_directories_section(&repo_root, &tracked));
-        let git = scope.spawn(|| git_section(&repo_root, index));
-        let rules = scope.spawn(|| rules_section(&repo_root, &tracked));
-        let spine = scope.spawn(|| index.map(spine_section).unwrap_or_default());
-        vec![
-            environment.join().unwrap(),
-            identity.join().unwrap(),
-            tech_stack.join().unwrap(),
-            layout.join().unwrap(),
-            common_directories.join().unwrap(),
-            git.join().unwrap(),
-            rules.join().unwrap(),
-            spine.join().unwrap(),
-        ]
-    })
+/// `work` on a thread of its own, its result sent once it finishes. A result
+/// nobody waits for is dropped.
+fn background<T: Send + 'static>(
+    repo_root: &Path,
+    tracked: &Arc<TrackedFiles>,
+    work: impl FnOnce(&Path, &[String]) -> T + Send + 'static,
+) -> mpsc::Receiver<T> {
+    let (root, tracked) = (repo_root.to_path_buf(), Arc::clone(tracked));
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = send.send(work(&root, &tracked));
+    });
+    receive
+}
+
+/// What `receiver` got by `limit`, or once it arrives without one.
+fn arrived<T>(receiver: mpsc::Receiver<T>, limit: Option<Instant>) -> Option<T> {
+    match limit {
+        Some(limit) => receiver.recv_timeout(limit.saturating_duration_since(Instant::now())).ok(),
+        None => receiver.recv().ok(),
+    }
 }
 
 // --- Section: Environment ----------------------------------------------
@@ -400,9 +433,19 @@ fn tech_stack_section(repo_root: &Path) -> String {
 
 // --- Section: Layout ----------------------------------------------------
 
-fn layout_section(repo_root: &Path, tracked: &[String]) -> String {
+/// What Layout shows of one top-level directory apart from its complexity.
+#[derive(Default)]
+struct TopDirectory {
+    files: usize,
+    last_commit: Option<String>,
+    uncommitted: bool,
+}
+
+/// Each top-level source directory's file count, newest commit, and whether
+/// it holds uncommitted work, read from the listing and git alone.
+fn top_directories(repo_root: &Path, tracked: &[String]) -> BTreeMap<String, TopDirectory> {
     let skip = repo_files::skip_dirs();
-    let mut by_top: BTreeMap<String, (usize, i64, Option<String>, bool)> = BTreeMap::new();
+    let mut by_top: BTreeMap<String, TopDirectory> = BTreeMap::new();
     let git_map = git_activity::bulk_cached(repo_root);
     for rel in tracked {
         let head = match rel.split_once('/') {
@@ -413,29 +456,32 @@ fn layout_section(repo_root: &Path, tracked: &[String]) -> String {
             continue;
         }
         let summary = by_top.entry(head.to_string()).or_default();
-        summary.0 += 1;
+        summary.files += 1;
         if let Some(activity) = git_map.get(rel) {
             if let Some(modified) = &activity.last_modified {
-                if summary
-                    .2
-                    .as_ref()
-                    .map(|latest| modified > latest)
-                    .unwrap_or(true)
-                {
-                    summary.2 = Some(modified.clone());
+                if summary.last_commit.as_ref().is_none_or(|latest| modified > latest) {
+                    summary.last_commit = Some(modified.clone());
                 }
             }
-            if activity
-                .working_state
-                .as_deref()
-                .map(|state| DIRTY_STATES.contains(&state))
-                .unwrap_or(false)
-            {
-                summary.3 = true;
+            if activity.working_state.as_deref().is_some_and(|state| DIRTY_STATES.contains(&state)) {
+                summary.uncommitted = true;
             }
         }
     }
+    by_top
+}
 
+/// Layout, with each directory's complexity summed from the extraction the
+/// relations index stored when `indexed`. The column is left out without the
+/// index, and when a file the index has not extracted yet would need
+/// extracting after `limit`.
+fn layout_section(
+    repo_root: &Path,
+    tracked: &[String],
+    by_top: &BTreeMap<String, TopDirectory>,
+    indexed: bool,
+    limit: Option<Instant>,
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "## Layout");
     if by_top.is_empty() {
@@ -443,41 +489,19 @@ fn layout_section(repo_root: &Path, tracked: &[String]) -> String {
         return out;
     }
 
-    let source_exts: std::collections::HashSet<&str> = crate::extraction::supported_extensions()
-        .iter()
-        .copied()
-        .collect();
-    for chunk in tracked.chunks(file_facts::RESOLVE_CHUNK) {
-        let source: Vec<PathBuf> = chunk
-            .iter()
-            .filter(|rel| {
-                Path::new(rel)
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .map(|extension| source_exts.contains(extension.to_lowercase().as_str()))
-                    .unwrap_or(false)
-            })
-            .map(|rel| repo_root.join(rel))
-            .collect();
-        let facts = file_facts::get_batch(&source, repo_root);
-        for (rel, fact) in facts {
-            if let Some((head, _)) = rel.split_once('/') {
-                if let Some(summary) = by_top.get_mut(head) {
-                    summary.1 += fact.cyclomatic_complexity_total;
-                }
-            }
-        }
-    }
+    let complexity = indexed.then(|| directory_complexity(repo_root, tracked, by_top, limit)).flatten();
 
     // Case-insensitive sort by lowercased key.
     let mut names: Vec<&String> = by_top.keys().collect();
     names.sort_by_key(|n| n.to_lowercase());
 
     for name in names {
-        let (files, complexity, last_commit, uncommitted) = &by_top[name];
+        let TopDirectory { files, last_commit, uncommitted } = &by_top[name];
         let mut facts = Map::new();
         facts.insert("files".into(), (*files).into());
-        facts.insert("cyclomatic_complexity".into(), (*complexity).into());
+        if let Some(complexity) = &complexity {
+            facts.insert("cyclomatic_complexity".into(), complexity.get(name.as_str()).copied().unwrap_or(0).into());
+        }
         if let Some(last_commit) = last_commit {
             facts.insert("last_commit".into(), last_commit.clone().into());
         }
@@ -487,6 +511,36 @@ fn layout_section(repo_root: &Path, tracked: &[String]) -> String {
         let _ = writeln!(out, "  📁 {name}/  {}", crate::yamlfmt::flow(&Value::Object(facts), false));
     }
     out
+}
+
+/// Each top-level directory's summed complexity, `None` when a source file
+/// would need extracting after `limit`.
+fn directory_complexity<'a>(
+    repo_root: &Path,
+    tracked: &[String],
+    by_top: &'a BTreeMap<String, TopDirectory>,
+    limit: Option<Instant>,
+) -> Option<HashMap<&'a str, i64>> {
+    let source_exts: std::collections::HashSet<&str> = crate::extraction::supported_extensions().iter().copied().collect();
+    let mut complexity: HashMap<&str, i64> = HashMap::new();
+    for chunk in tracked.chunks(file_facts::RESOLVE_CHUNK) {
+        let source: Vec<PathBuf> = chunk
+            .iter()
+            .filter(|rel| {
+                Path::new(rel)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| source_exts.contains(extension.to_lowercase().as_str()))
+            })
+            .map(|rel| repo_root.join(rel))
+            .collect();
+        for (rel, fact) in file_facts::extracted_within(&source, repo_root, limit)? {
+            if let Some((name, _)) = rel.split_once('/').and_then(|(head, _)| by_top.get_key_value(head)) {
+                *complexity.entry(name.as_str()).or_default() += fact.cyclomatic_complexity_total;
+            }
+        }
+    }
+    Some(complexity)
 }
 
 // --- Section: Common Directories ---------------------------------------
@@ -677,14 +731,21 @@ fn count_shebangs(directory: &Path, file_names: &[&str]) -> usize {
 
 // --- Section: Git -------------------------------------------------------
 
-fn git_section(repo_root: &Path, index: Option<&relations::Relations>) -> String {
-    let mut out = String::new();
-    let _ = writeln!(out, "## Git");
-    if !repo_root.join(".git").exists() {
-        let _ = writeln!(out, "  (not a git repository)");
-        return out;
-    }
+/// What the Git section shows, read from git alone.
+struct GitState {
+    candidates: Vec<(String, String)>,
+    current: String,
+    ahead_behind: String,
+    dirty: HashMap<String, String>,
+    commits: Vec<String>,
+}
 
+/// The repository's branches, working tree, and recent commits; `None`
+/// outside a git repository.
+fn git_state(repo_root: &Path) -> Option<GitState> {
+    if !repo_root.join(".git").exists() {
+        return None;
+    }
     // Wave 1: four independent git reads run concurrently. Wave 2:
     // candidates needs origin_head, ahead_behind needs origin_head + current,
     // so they resolve once wave 1 lands.
@@ -707,6 +768,18 @@ fn git_section(repo_root: &Path, index: Option<&relations::Relations>) -> String
             scope.spawn(|| ahead_behind(repo_root, &current, origin_head.as_deref()));
         (candidates.join().unwrap(), ahead_behind.join().unwrap())
     });
+    Some(GitState { candidates, current, ahead_behind, dirty, commits })
+}
+
+/// The Git section, the dirty files' `imported_by` and complexity read
+/// through `index` and left out without it, and complexity also past `limit`.
+fn git_section(repo_root: &Path, state: Option<GitState>, index: Option<&relations::Relations>, limit: Option<Instant>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "## Git");
+    let Some(GitState { candidates, current, ahead_behind, dirty, commits }) = state else {
+        let _ = writeln!(out, "  (not a git repository)");
+        return out;
+    };
 
     if !candidates.is_empty() {
         let _ = writeln!(out, "  Primary branch candidates:");
@@ -724,7 +797,7 @@ fn git_section(repo_root: &Path, index: Option<&relations::Relations>) -> String
 
     if !dirty.is_empty() {
         let _ = writeln!(out, "  Dirty files ({}):", dirty.len());
-        for line in render_dirty(repo_root, &dirty, index) {
+        for line in render_dirty(repo_root, &dirty, index, limit) {
             let _ = writeln!(out, "    {line}");
         }
     } else {
@@ -845,24 +918,29 @@ fn ahead_behind(repo_root: &Path, current: &str, base: Option<&str>) -> String {
 }
 
 /// The dirty files, most imported first, then most complex. Without `index`
-/// the import counts are left out and complexity alone ranks them.
-fn render_dirty(repo_root: &Path, dirty: &HashMap<String, String>, index: Option<&relations::Relations>) -> Vec<String> {
-    let mut scored: Vec<(Option<i64>, i64, String, String)> = Vec::new();
+/// both facts are left out, because their extraction is the index build's,
+/// and the files go by path. Complexity is also left out of a chunk with a
+/// file that would need extracting after `limit`.
+fn render_dirty(
+    repo_root: &Path,
+    dirty: &HashMap<String, String>,
+    index: Option<&relations::Relations>,
+    limit: Option<Instant>,
+) -> Vec<String> {
+    let mut scored: Vec<(Option<i64>, Option<i64>, String, String)> = Vec::new();
     let dirty_files: Vec<(&String, &String)> = dirty.iter().collect();
     for chunk in dirty_files.chunks(file_facts::RESOLVE_CHUNK) {
-        let existing: Vec<PathBuf> = chunk
-            .iter()
-            .map(|(path, _)| repo_root.join(path))
-            .filter(|absolute| absolute.exists())
-            .collect();
-        let facts = file_facts::extracted(&existing, repo_root);
+        let facts = index.and_then(|_| {
+            let existing: Vec<PathBuf> =
+                chunk.iter().map(|(path, _)| repo_root.join(path)).filter(|absolute| absolute.exists()).collect();
+            file_facts::extracted_within(&existing, repo_root, limit)
+        });
         for (path, state) in chunk {
             let callers = index.map(|index| index.resolved_importers_of(path).count() as i64);
-            let rel = cache::relative_to_root(&repo_root.join(path), repo_root);
-            let ccn = facts
-                .get(&rel)
-                .map(|fact| fact.cyclomatic_complexity_total)
-                .unwrap_or(0);
+            let ccn = facts.as_ref().map(|facts| {
+                let rel = cache::relative_to_root(&repo_root.join(path), repo_root);
+                facts.get(&rel).map_or(0, |fact| fact.cyclomatic_complexity_total)
+            });
             scored.push((callers, ccn, (*state).clone(), (*path).clone()));
         }
     }
@@ -879,8 +957,13 @@ fn render_dirty(repo_root: &Path, dirty: &HashMap<String, String>, index: Option
             if let Some(imported_by) = imported_by {
                 facts.insert("imported_by".into(), (*imported_by).into());
             }
-            facts.insert("cyclomatic_complexity".into(), (*complexity).into());
-            format!("{state:<10} {path}  {}", crate::yamlfmt::flow(&Value::Object(facts), false))
+            if let Some(complexity) = complexity {
+                facts.insert("cyclomatic_complexity".into(), (*complexity).into());
+            }
+            match facts.is_empty() {
+                true => format!("{state:<10} {path}"),
+                false => format!("{state:<10} {path}  {}", crate::yamlfmt::flow(&Value::Object(facts), false)),
+            }
         })
         .collect();
     if scored.len() > PRIMER_DIRTY_LIMIT {

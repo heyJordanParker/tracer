@@ -3,7 +3,7 @@
 //! for the same index update: one process updates, the rest read its result.
 
 use std::fs;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracer_cli_tests::{
@@ -171,11 +171,8 @@ fn an_index_update_never_waits_on_another_schemas_lock() {
     .collect();
     f.write("src/added.py", "def added():\n    return 1\n");
 
-    let mut child = Command::new(tracer_cli_tests::trace_bin())
-        .args(["grep", "added", "src"])
-        .current_dir(&f.root)
-        .env("HOME", &f.root)
-        .env("TRACE_TIMING", "1")
+    let mut child = f
+        .command(&f.root, ["grep", "added", "src"], &[("TRACE_TIMING", "1")])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -423,11 +420,8 @@ fn warm_context_avoids_deadlock() {
         f.write(&path, "def source():\n    return 1\n");
         f.git(&["add", &path]);
 
-        let mut child = Command::new(tracer_cli_tests::trace_bin())
-            .arg("context")
-            .current_dir(&f.root)
-            .env("HOME", &f.root)
-            .env("RAYON_NUM_THREADS", "2")
+        let mut child = f
+            .command(&f.root, ["context"], &[("RAYON_NUM_THREADS", "2")])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

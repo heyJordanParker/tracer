@@ -84,7 +84,6 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 | `trace docs status [<path>]` | What this context has loaded, and from where. |
 | `trace docs prime [<files>]` | Records docs the harness loaded itself, so tracer never sends them. |
 | `trace docs reset` | Forgets what this context loaded, after a compaction or `/clear`. |
-| `trace docs archive` | Does nothing: each subagent's record stays under its own id, where a resume finds it. |
 
 ## Hooks
 

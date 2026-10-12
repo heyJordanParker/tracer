@@ -1,10 +1,10 @@
-//! The agent's session record: `$TMPDIR/tracer-<uid>/sessions/<session>/`,
-//! with one `<agent>/record.json` per agent and the session-wide
-//! `directories.json`.
+//! The agent's session record: `tracer-<uid>/sessions/<session>/` in the
+//! user's own temporary folder, with one `<agent>/record.json` per agent and
+//! the session-wide `directories.json`.
 //!
 //! Black-box: assertions go through the CLI surface (`trace docs`,
 //! `trace context`, `trace read`) and the documented on-disk shape of
-//! `record.json`. Each fixture runs `trace` with its own `TMPDIR`, so every
+//! `record.json`. Each fixture suffixes the session ids it passes, so every
 //! test starts with no records.
 
 use std::collections::BTreeSet;
@@ -342,38 +342,17 @@ fn missing_no_record_target_records_its_parent_directory_baseline() {
 fn no_session_id_means_no_record_is_written() {
     let f = docs_repo();
 
-    let r = f.trace(&["docs", "sub/util.py"]);
+    let r = f.trace_env(&["docs", "sub/util.py"], &[("TRACE_TIMING", "1")]);
     r.ok();
     assert!(r.stdout.contains("Root rules"), "{}", r.stdout);
-    assert_eq!(
-        std::fs::read_dir(&f.tmp).unwrap().count(),
-        0,
-        "a run with no session id writes nothing under TMPDIR"
+    assert!(
+        !r.stderr.contains("timing lock session") && !r.stderr.contains("timing session record"),
+        "a run with no session id takes no session lock and writes no record:\n{}",
+        r.stderr
     );
-    assert!(!f.root.join(".tracer-cache/sessions").exists());
 }
 
 // --- resumed Subagents and context resets ----------------------------------------
-
-#[test]
-fn docs_archive_leaves_a_subagents_record_where_its_resume_finds_it() {
-    let f = docs_repo();
-    let env = [("CLAUDE_CODE_SESSION_ID", SESSION), ("TRACER_AGENT_ID", "subagent")];
-
-    f.trace_env(&["docs", "sub/util.py"], &env).ok();
-    let before = record(&f, "subagent");
-    let archive = f.trace_env(&["docs", "archive", "--json"], &env);
-    archive.ok();
-    assert_eq!(archive.view()["archived"], false, "{}", archive.stdout);
-    assert_eq!(record(&f, "subagent"), before);
-
-    // Resumed, the Subagent still holds its docs.
-    let docs = f.trace_env(&["docs", "sub/util.py", "--json"], &env);
-    docs.ok();
-    let view = docs.view();
-    assert_eq!(view["docs"], 0, "{view}");
-    assert_eq!(view["already_loaded"].as_array().map(Vec::len), Some(2), "{view}");
-}
 
 #[test]
 fn a_listing_shows_each_files_facts_once_and_a_read_after_it_the_rest() {
@@ -576,16 +555,4 @@ fn a_record_from_another_version_reads_as_empty() {
     again.ok();
     assert!(again.stdout.contains("Root rules"), "{}", again.stdout);
     assert_eq!(record(&f, "root")["version"], 1);
-}
-
-#[test]
-fn a_session_removes_the_records_an_older_tracer_kept_in_the_repository() {
-    let f = docs_repo();
-    let old = f.root.join(".tracer-cache/sessions/old-session/root");
-    std::fs::create_dir_all(&old).unwrap();
-    std::fs::write(old.join("events.jsonl"), "{}\n").unwrap();
-
-    f.trace_env(&["docs", "sub/util.py"], &[("CLAUDE_CODE_SESSION_ID", SESSION)]).ok();
-
-    assert!(!f.root.join(".tracer-cache/sessions").exists());
 }

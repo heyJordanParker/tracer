@@ -133,7 +133,7 @@ pub fn run(paths: &[PathBuf], scope: &Scope, as_json: bool) -> Result<Value> {
     let mut delivery = crate::session::Delivery::default();
     let answer = render(&groups, scope.visibility, &mut delivery);
     let bases: Vec<PathBuf> = groups.iter().map(|group| PathBuf::from(group.root.trim_end_matches('/'))).collect();
-    super::docs::print_with_docs(&answer, &bases, "trace_api", delivery)?;
+    crate::docs::print_with_docs(&answer, &bases, "trace_api", delivery)?;
     Ok(value)
 }
 

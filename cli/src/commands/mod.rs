@@ -15,8 +15,6 @@ pub mod history;
 pub mod info;
 pub mod list_;
 pub mod logs;
-pub mod nested_memory;
-pub mod paths_match;
 pub mod pattern;
 pub mod reach;
 pub mod read;

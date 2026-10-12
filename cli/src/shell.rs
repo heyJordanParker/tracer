@@ -5,6 +5,10 @@
 //!
 //! A regex over the text matches `trace` inside a quoted argument, as a grep
 //! pattern holding `|trace` does. The grammar sees only command position.
+//!
+//! A command another command runs counts too: the script of a shell's `-c`,
+//! read as a line of its own, and the program `xargs`, `find -exec`, `env`,
+//! `timeout`, `nice`, `nohup`, `command`, or `exec` starts.
 
 use tree_sitter::{Node, Parser};
 
@@ -21,6 +25,12 @@ pub struct Command {
     pub folder: String,
     /// The command whose output this one reads, through a pipe.
     pub input: Option<usize>,
+    /// Whether it sits inside a shell's `-c` script, where a word written at
+    /// `name_end` lands inside that script's quotes.
+    pub scripted: bool,
+    /// Whether `xargs` runs it, adding arguments it reads from its input, so
+    /// `argv` is not every argument the command gets.
+    pub fed: bool,
 }
 
 impl Command {
@@ -50,12 +60,17 @@ pub fn commands(line: &str) -> Vec<Command> {
 
 /// `line` with `--agent <agent>` written after every `trace` program word
 /// that does not already carry it. `None` when the line runs no such `trace`.
+/// Inside a `-c` script the word is written only when `agent` needs no
+/// quotes, as every harness's agent id does, so the script's own quoting
+/// stays whole.
 pub fn with_agent(line: &str, agent: &str) -> Option<String> {
+    let word = quote(agent);
     let mut at: Vec<usize> = commands(line)
         .into_iter()
         .filter(|command| {
             command.program() == "trace"
                 && !command.args().iter().any(|arg| arg == "--agent" || arg.starts_with("--agent="))
+                && (!command.scripted || word == agent)
         })
         .map(|command| command.name_end)
         .collect();
@@ -65,7 +80,7 @@ pub fn with_agent(line: &str, agent: &str) -> Option<String> {
     at.sort_unstable();
     let mut out = line.to_string();
     for offset in at.into_iter().rev() {
-        out.insert_str(offset, &format!(" --agent {}", quote(agent)));
+        out.insert_str(offset, &format!(" --agent {word}"));
     }
     Some(out)
 }
@@ -127,12 +142,11 @@ impl Reader<'_> {
         let Some(name) = node.child_by_field_name("name") else {
             return;
         };
-        let mut argv = vec![self.word(name)];
         let mut cursor = node.walk();
-        for argument in node.children_by_field_name("argument", &mut cursor) {
-            argv.push(self.word(argument));
-        }
-        let command = Command { argv, name_end: name.end_byte(), folder: self.folder.clone(), input };
+        let words: Vec<Node> = std::iter::once(name).chain(node.children_by_field_name("argument", &mut cursor)).collect();
+        let argv: Vec<String> = words.iter().map(|word| self.word(*word)).collect();
+        let ends: Vec<usize> = words.iter().map(Node::end_byte).collect();
+        let command = Command { argv, name_end: name.end_byte(), folder: self.folder.clone(), input, scripted: false, fed: false };
         if command.program() == "cd" {
             if let Some(target) = command.args().iter().find(|arg| !arg.starts_with('-')) {
                 self.folder = match (self.folder.is_empty(), target.starts_with('/')) {
@@ -141,12 +155,72 @@ impl Reader<'_> {
                 };
             }
         }
+        let argv = command.argv.clone();
         self.commands.push(command);
-        // A command substitution in an argument runs commands of its own.
-        let mut cursor = node.walk();
-        for argument in node.children_by_field_name("argument", &mut cursor) {
-            self.substitutions(argument);
+        let script = self.nested(&argv, &ends, &words, false);
+        // A command substitution in an argument runs commands of its own. A
+        // `-c` script was read whole, its substitutions with it.
+        for argument in &words[1..] {
+            if script.is_none_or(|script| script.id() != argument.id()) {
+                self.substitutions(*argument);
+            }
         }
+    }
+
+    /// Reads the command `argv` runs in its own arguments, and returns the
+    /// `-c` script word it read, if any. `ends` and `words` are each word's
+    /// end offset and node, the program's first. `fed` is whether `xargs`
+    /// adds arguments to `argv`.
+    fn nested<'t>(&mut self, argv: &[String], ends: &[usize], words: &[Node<'t>], fed: bool) -> Option<Node<'t>> {
+        let program = argv.first()?.rsplit('/').next().unwrap_or_default();
+        if SHELLS.contains(&program) {
+            let script = *words.get(script_flag(argv)? + 1)?;
+            return self.script(script, fed).then_some(script);
+        }
+        let (start, end) = runs(argv)?;
+        let fed = fed || program == "xargs";
+        self.commands.push(Command {
+            argv: argv[start..end].to_vec(),
+            name_end: ends[start],
+            folder: self.folder.clone(),
+            input: None,
+            scripted: false,
+            fed,
+        });
+        self.nested(&argv[start..end], &ends[start..end], &words[start..end], fed)
+    }
+
+    /// A shell's `-c` script, read as a line of its own at its place in this
+    /// line, and whether it was read. A script holding a backslash is left
+    /// unread, because its escapes shift the offsets a word written into it
+    /// needs, and the caller reads its substitutions as the outer line's.
+    /// `fed` is whether `xargs` runs the shell, so the script's commands may
+    /// get its arguments through `"$@"`.
+    fn script(&mut self, node: Node, fed: bool) -> bool {
+        let range = match node.kind() {
+            "raw_string" | "string" => node.start_byte() + 1..node.end_byte().saturating_sub(1),
+            _ => return false,
+        };
+        let Some(text) = self.line.get(range.clone()) else {
+            return false;
+        };
+        if text.contains('\\') {
+            return false;
+        }
+        let base = self.commands.len();
+        for mut inner in commands(text) {
+            inner.name_end += range.start;
+            inner.input = inner.input.map(|at| base + at);
+            inner.scripted = true;
+            inner.fed |= fed;
+            inner.folder = match (self.folder.is_empty(), inner.folder.is_empty(), inner.folder.starts_with('/')) {
+                (_, true, _) => self.folder.clone(),
+                (true, _, _) | (_, _, true) => inner.folder,
+                (false, false, false) => format!("{}/{}", self.folder, inner.folder),
+            };
+            self.commands.push(inner);
+        }
+        true
     }
 
     fn substitutions(&mut self, node: Node) {
@@ -178,6 +252,81 @@ impl Reader<'_> {
             _ => text.to_string(),
         }
     }
+}
+
+/// The shells whose `-c` script runs as a line of its own.
+const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash"];
+
+/// Where a shell's `-c` flag sits in its `argv`, among the options before
+/// its first other word: a `-c` after a script file is that script's own.
+fn script_flag(argv: &[String]) -> Option<usize> {
+    let mut at = 1;
+    while let Some(arg) = argv.get(at) {
+        match arg.as_str() {
+            "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => at += 2,
+            long if long.starts_with("--") => at += 1,
+            short if short.starts_with('-') && short.contains('c') => return Some(at),
+            short if short.starts_with(['-', '+']) && short.len() > 1 => at += 1,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Where the command a runner starts sits in its `argv`: the first word past
+/// the runner's options, the values those options take, and the words that
+/// aren't the command, as `env`'s `NAME=value` and `timeout`'s duration; for
+/// `find`, the words from `-exec` to its `;` or `+`. `None` for any other
+/// program, and for `command -v`, which names a program without running it.
+fn runs(argv: &[String]) -> Option<(usize, usize)> {
+    let past_options = |valued: &[&str]| {
+        let mut at = 1;
+        while let Some(arg) = argv.get(at) {
+            if arg == "--" {
+                return at + 1;
+            }
+            if !arg.starts_with('-') || arg == "-" {
+                return at;
+            }
+            at += if valued.contains(&arg.as_str()) { 2 } else { 1 };
+        }
+        at
+    };
+    let program = argv.first()?.rsplit('/').next().unwrap_or_default();
+    let start = match program {
+        "xargs" => past_options(&["-n", "-I", "-L", "-P", "-s", "-d", "-E", "-a"]),
+        "env" => {
+            let mut at = past_options(&["-u", "-C", "-S"]);
+            while argv.get(at).is_some_and(|word| assignment(word)) {
+                at += 1;
+            }
+            at
+        }
+        "timeout" => past_options(&["-s", "-k"]) + 1,
+        "nice" => past_options(&["-n"]),
+        "nohup" => past_options(&[]),
+        "exec" => past_options(&["-a"]),
+        "command" if argv[1..].iter().take_while(|arg| arg.starts_with('-')).any(|arg| arg.contains(['v', 'V'])) => return None,
+        "command" => past_options(&[]),
+        "find" => argv.iter().position(|arg| matches!(arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))? + 1,
+        _ => return None,
+    };
+    if start >= argv.len() {
+        return None;
+    }
+    let end = match program {
+        "find" => argv[start..].iter().position(|arg| arg == ";" || arg == "+").map_or(argv.len(), |at| start + at),
+        _ => argv.len(),
+    };
+    (start < end).then_some((start, end))
+}
+
+/// Whether `word` is a `NAME=value` assignment, as `env` takes before the
+/// command it runs.
+fn assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit())
+    })
 }
 
 fn has_expansion(node: Node) -> bool {
@@ -252,5 +401,99 @@ mod tests {
     #[test]
     fn a_call_naming_its_agent_anywhere_is_left_alone() {
         assert_eq!(with_agent("trace -C cli read a.rs --agent a1 && trace --agent=a1 tree .", "sub 1"), None);
+    }
+
+    #[test]
+    fn a_shell_script_gets_the_agent_inside_its_quotes() {
+        assert_eq!(with_agent("bash -c 'trace read a.rs'", "a1").unwrap(), "bash -c 'trace --agent a1 read a.rs'");
+        assert_eq!(
+            with_agent(r#"sh -c "trace grep x | head""#, "a1").unwrap(),
+            r#"sh -c "trace --agent a1 grep x | head""#
+        );
+    }
+
+    #[test]
+    fn a_double_quoted_script_keeps_what_the_outer_shell_expands() {
+        assert_eq!(
+            with_agent(r#"f=a.rs; bash -c "trace read $f""#, "a1").unwrap(),
+            r#"f=a.rs; bash -c "trace --agent a1 read $f""#
+        );
+    }
+
+    #[test]
+    fn a_substitution_inside_a_script_gets_the_agent_once() {
+        assert_eq!(
+            with_agent(r#"bash -c "echo $(trace read a.rs)""#, "a1").unwrap(),
+            r#"bash -c "echo $(trace --agent a1 read a.rs)""#
+        );
+    }
+
+    #[test]
+    fn a_substitution_inside_a_script_left_unread_is_still_read() {
+        assert_eq!(
+            with_agent(r#"bash -c "echo $(trace read a.rs) \"done\"""#, "a1").unwrap(),
+            r#"bash -c "echo $(trace --agent a1 read a.rs) \"done\"""#
+        );
+        assert!(argvs(r#"bash -c "wc $(cat lib.rs) \"x\"""#).contains(&vec!["cat".to_string(), "lib.rs".to_string()]));
+    }
+
+    #[test]
+    fn a_command_xargs_runs_is_fed_its_arguments() {
+        let found = commands("git diff --name-only | xargs ls -la");
+        let ls = found.iter().find(|command| command.program() == "ls").unwrap();
+        assert!(ls.fed);
+        assert!(!found[0].fed);
+    }
+
+    #[test]
+    fn a_script_xargs_runs_is_fed_its_arguments() {
+        let found = commands("git ls-files | xargs sh -c 'cat \"$@\"' _");
+        assert!(found.iter().find(|command| command.program() == "cat").unwrap().fed);
+    }
+
+    #[test]
+    fn a_bare_word_script_is_left_unread() {
+        assert_eq!(with_agent("bash -c trace", "a1"), None);
+    }
+
+    #[test]
+    fn a_c_flag_after_a_script_file_is_the_scripts_own() {
+        assert_eq!(with_agent("bash notify.sh -c 'trace read a.rs'", "a1"), None);
+        assert_eq!(with_agent("bash -o pipefail -c 'trace read a.rs'", "a1").unwrap(), "bash -o pipefail -c 'trace --agent a1 read a.rs'");
+    }
+
+    #[test]
+    fn a_script_already_naming_its_agent_is_left_alone() {
+        assert_eq!(with_agent("bash -c 'trace --agent a1 read a.rs'", "a1"), None);
+    }
+
+    #[test]
+    fn a_script_needing_a_quoted_agent_is_left_alone() {
+        assert_eq!(with_agent("bash -c 'trace read a.rs'", "sub 1"), None);
+    }
+
+    #[test]
+    fn the_program_a_runner_starts_gets_the_agent() {
+        assert_eq!(with_agent("ls *.rs | xargs -n 1 trace read", "a1").unwrap(), "ls *.rs | xargs -n 1 trace --agent a1 read");
+        assert_eq!(
+            with_agent(r"find . -name '*.rs' -exec trace read {} \;", "a1").unwrap(),
+            r"find . -name '*.rs' -exec trace --agent a1 read {} \;"
+        );
+        assert_eq!(with_agent("env X=1 trace read a.rs", "a1").unwrap(), "env X=1 trace --agent a1 read a.rs");
+        assert_eq!(with_agent("timeout -k 5 60 trace read a.rs", "a1").unwrap(), "timeout -k 5 60 trace --agent a1 read a.rs");
+        assert_eq!(with_agent("nice -n 5 nohup trace read a.rs", "a1").unwrap(), "nice -n 5 nohup trace --agent a1 read a.rs");
+    }
+
+    #[test]
+    fn a_word_a_runner_only_passes_on_is_never_a_command() {
+        assert_eq!(with_agent("xargs grep trace", "a1"), None);
+        assert_eq!(with_agent("command -v trace", "a1"), None);
+    }
+
+    #[test]
+    fn a_read_inside_a_script_is_read() {
+        let found = commands("bash -lc 'cd src && cat lib.rs'");
+        let cat = found.iter().find(|command| command.program() == "cat").unwrap();
+        assert_eq!((cat.argv.clone(), cat.folder.as_str()), (vec!["cat".to_string(), "lib.rs".to_string()], "src"));
     }
 }

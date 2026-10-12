@@ -10,10 +10,13 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `TRACE_BIN` defaults to `trace` on `PATH`.
 - The suite asserts exit codes, stdout, stderr, JavaScript Object Notation shape, and wall-clock latency.
 - `src/lib.rs` is the shared test harness.
-- Each test fixture owns a hermetic on-disk git repository, and a `TMPDIR` beside it that every `trace` run from the fixture sees, so each fixture's session records start empty and stay out of the worktree.
-- A test that spawns `trace` itself instead of through the fixture passes `TMPDIR=<fixture>.tmp`, or its session writes land where the fixture never reads.
+- Each test fixture owns a hermetic on-disk git repository and a scratch folder beside it, and suffixes every session id its runs pass, in the environment and in a hook's `session_id`, so each fixture's session records start empty and are deleted with it.
+- A test that runs `trace` itself, to hold its stdin or stdout, starts it from `Fixture::command`, the one place the invoking agent's session identity is removed, the fixture's suffix is applied, and the test process becomes `CLAUDE_PID`, so a build a test's hook starts ends with the test run.
+- `tests/background_build.rs` runs alone in its own test binary, because `build.lock` is one per user.
 - `Fixture::record(session, agent)` reads an Agent's `record.json`.
-- `Fixture::hook(event, harness, input, flags, env)` runs `trace hook` with `input` on stdin, and `Run::context` reads its answer's extra context.
+- `Fixture::hook(event, harness, input, flags, env)` runs `trace hook` with `input` on stdin and a 20-second deadline unless `flags` name one, and `Run::context` reads its answer's extra context.
+- `tests/hook.rs` pins a SessionStart before the relations index is ready answering every section that needs none within its deadline, a hook and a shell call under different `TMPDIR`s sharing one record, and a Subagent's `trace` inside `bash -c` landing in its own record.
+- `tests/background_build.rs` pins that a hook leaving the relations out starts one build that finishes them, that a warm hook starts none, that a running build blocks another, and that a build ends within two seconds of its `CLAUDE_PID`.
 - `tests/worktree_anchoring.rs` pins the worktree-anchored `.tracer-cache/` contract, and `-C`: it answers for the repository it names, carries into every follow-up command, and exits 2 for a missing directory, and a session keeps one record across the repositories it reads.
 - `tests/cache_and_backend.rs` pins the cache lifecycle and the single AST complexity backend.
 - `tests/freshness.rs` pins that every call reflects the bytes on disk when it runs.
@@ -31,7 +34,7 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `tests/declarations_and_references.rs` and `tests/enrichment.rs` pin declaration classification and annotations.
 - `tests/architecture_commands.rs` and `tests/primer.rs` pin the `stats` directory table and the primer's sections.
 - `tests/enrichment.rs` pins the YAML front matter once per Agent context across `read`, `info`, and `structure`, with its headline and the command's own answer on a repeat, only the lines an edit or a commit changed with a removed fact as `null`, whole again after a reset or for another Agent, every time without a session, whole in `--json`, and whole again for a `structure` file the budget cut to its headline; its `directory` block once per Agent, with only the lines a new importer changed on a repeat, a moved `at_session_start` whole, and its entries without what git ignores; a several-file `read` printing every file but the one it cannot answer and recording none it did not print; a `context`, `read`, `info`, or `structure` whose stdout closes before it prints recording nothing as shown; and `--budget` fitting on `read`, `context`, and `docs`.
-- `tests/session.rs` pins `record.json`: one per Agent, with the `--agent` flag naming it; each listing kept as line hashes until a context reset; one write per `read`; a record of another version reading as empty; `docs archive` leaving a Subagent's record in place; a session outside any repository keeping a record; and a session's first write removing the old in-repository records.
+- `tests/session.rs` pins `record.json`: one per Agent, with the `--agent` flag naming it; each listing kept as line hashes until a context reset; one write per `read`; a record of another version reading as empty; a session outside any repository keeping a record; and no session lock or record without a session id.
 - `tests/docs_reset.rs` pins that a reset empties the whole record, shown facts and listings included.
 - `tests/declarations_and_references.rs` holds the per-language inventory fixture: one source per language whose declarations cover that language's row set, asserting `header`, `header_line`, `line`, `end_line`, `container`, and `parent` for each.
 - `tests/declarations_and_references.rs` pins the ctags fallback on a shell fixture, the data-format deny list, retained Markdown headings, and that a warm `context` or `read` spawns no ctags.

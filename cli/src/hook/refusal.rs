@@ -22,7 +22,9 @@ const FIND_ACTIONS: &[&str] = &["-delete", "-exec", "-execdir", "-ok", "-okdir"]
 pub fn refusal(line: &str, cwd: &Path) -> Option<String> {
     let project = crate::cache::worktree_root_for(cwd)?;
     let commands = shell::commands(line);
-    commands.iter().find_map(|command| {
+    // A command `xargs` runs gets its paths from its input, so no path given
+    // is not the working folder, and it is left alone.
+    commands.iter().filter(|command| !command.fed).find_map(|command| {
         let source = command.input.and_then(|at| commands.get(at));
         let replacement = match source {
             Some(trace) if trace.program() == "trace" && FILTERS.contains(&command.program()) => {

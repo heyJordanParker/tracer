@@ -34,7 +34,7 @@ Template:
   trace logs [<pattern>] [--path <p>] [--file <glob>] [--since <when>] [--until <when>] [--around N] [--limit N]
   trace find <pattern> [bases...] [--path <p>] [--exclude <p>]... [--type f|d] [--limit N] [--sort complexity|recent|path]
   trace read <paths...> [--method <name>] [--at <ref>] [--lines L1:L2] [--between START END] [--diff] [--raw] [--all] [--docs]
-  trace docs <paths...> [--directory] [--skip <path>]... [--source <s>] [--triggering-tool <t>] [--triggering-command <c>]
+  trace docs <paths...> [--directory] [--skip <path>]... [--source <s>]
   trace docs <path> --graph
   trace docs status [<path>]
   trace docs reset [--source <s>]
@@ -86,7 +86,7 @@ IF asking who calls a property:
 ## 3. Use `trace docs` correctly
 
 ### `trace docs <paths...>` sends the docs not yet loaded, nearest first
-Text is Markdown: `## <path>` and the document below its frontmatter, nearest directory first, each from the first line the agent has not seen. The first doc longer than the room left under `--budget` arrives as `## <path> (L<from>-L<to> of <total>)`, cut at a whole line and ending in `read`'s trim marker; the docs after it are named under the `trace docs` command that sends them. A doc is loaded once every line arrived, so the next call continues it. A doc that changed after it arrived whole comes back as `## <path> (changed since sent: <n> lines, <m> removed)` with only its added or changed lines, each as `L<n>: <text>`. `--skip <path>` leaves out a doc the calling command prints itself. Nothing prints when every doc is already loaded. `--json` returns every doc whole and records them all. `--triggering-tool` and `--triggering-command` are echoed in the query and recorded nowhere.
+Text is Markdown: `## <path>` and the document below its frontmatter, nearest directory first, each from the first line the agent has not seen. The first doc longer than the room left under `--budget` arrives as `## <path> (L<from>-L<to> of <total>)`, cut at a whole line and ending in `read`'s trim marker; the docs after it are named under the `trace docs` command that sends them. A doc is loaded once every line arrived, so the next call continues it. A doc that changed after it arrived whole comes back as `## <path> (changed since sent: <n> lines, <m> removed)` with only its added or changed lines, each as `L<n>: <text>`. `--skip <path>` leaves out a doc the calling command prints itself. Nothing prints when every doc is already loaded. `--json` returns every doc whole and records them all.
 
 Template:
   ```json
@@ -94,9 +94,7 @@ Template:
     "query": {
       "path": "relative/path",
       "directory_scoped": false,
-      "source": "trace_docs",
-      "triggering_tool": "Bash",
-      "triggering_command": "trace read relative/path"
+      "source": "trace_docs"
     },
     "context": {
       "already_loaded": [
@@ -112,9 +110,6 @@ Template:
 
 ### `trace docs prime` records what the harness loaded
 With files it records exactly those files as loaded, source `instructions_loaded`. With no file it records the root-to-cwd `Claude.md` chain.
-
-### `trace docs archive` does nothing
-Each Agent's record stays under its own agent id, so a resumed Subagent finds it where it left it, and records untouched for 7 days are removed.
 
 ### `trace docs <path> --graph` projects the docs graph
 The path is optional with `--graph`; it defaults to the repository root for the current working directory.

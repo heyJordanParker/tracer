@@ -23,13 +23,15 @@ A process holds an index's own lock while it updates that index, so concurrent c
 
 An answer, such as `trace callers` or `trace reach`, waits for every index it needs and is always complete.
 
-Context, such as the facts a read or a search hit carries, waits at most a second for an index that has more than 100 files left to read. A `--json` document waits for every index, as an answer does.
+Context, such as the facts a read or a search hit carries, waits about a second for an index that has more than 100 files left to read. A `--json` document waits for every index, as an answer does.
 
 - An index one update behind answers as it is.
 - An index nobody has built yet is left out, along with `imported_by`, `imports`, and calls. The call then ends with one line, once per context, naming `trace cache build` to finish it.
 - What the call extracted before the second ran out is kept, so the next calls finish the index.
 
-A session's first answer, the primer, builds the index until shortly before its hook deadline.
+A session's first answer, the primer, builds the index until shortly before its hook deadline, while every section that needs no index is read beside it. In a large repository whose index is not ready by then, the primer arrives without the parts that need it: the most-depended-on files, and the import counts and complexity of the dirty files and top-level folders.
+
+A hook that leaves the index out starts `trace cache build` in the background once it has answered, so a later event finds the index built. One build runs per user at a time, and it ends when it finishes or when its Claude Code session ends, whichever comes first.
 
 ## Resolving a symbol
 
@@ -43,13 +45,14 @@ A declaration only its own file can reach, such as a C `static` function, a Type
 
 ## The session record
 
-When a session id is set, `AGENT_SESSION_ID`, Codex's `CODEX_THREAD_ID`, or Claude Code's `CLAUDE_CODE_SESSION_ID`, `trace` keeps a record per agent at `$TMPDIR/tracer-<uid>/sessions/<session>/<agent>/record.json`: the docs it sent, the files it read and which lines, and a hash of each fact and directory listing line it showed. That record is why a file's facts print once per context and a doc arrives once.
+When a session id is set, `AGENT_SESSION_ID`, Codex's `CODEX_THREAD_ID`, or Claude Code's `CLAUDE_CODE_SESSION_ID`, `trace` keeps a record per agent at `tracer-<uid>/sessions/<session>/<agent>/record.json` in your user's own temporary folder, whatever `TMPDIR` says, so hooks and shell calls share it: the docs it sent, the files it read and which lines, and a hash of each fact and directory listing line it showed. That record is why a file's facts print once per context and a doc arrives once.
 
 - The record sits outside every repository, so a session that reads several repositories keeps one record.
 - A record is saved only after its output is flushed, so a call cut off before its output arrives records nothing as shown.
 - Session folders untouched for 7 days are removed.
 - `trace docs reset` clears what a context has seen, after a compaction or `/clear`.
 - Each subagent's record stays under its own id, so a resumed subagent finds it where it left it.
+- A subagent's `trace` call is credited to it wherever the command line runs it: directly, inside `bash -c`, or through `xargs`, `find -exec`, `env`, `timeout`, `nice`, `nohup`, `command`, or `exec`.
 
 ## The budget
 

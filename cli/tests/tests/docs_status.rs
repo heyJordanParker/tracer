@@ -14,10 +14,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{
-    io::Read,
-    process::{Command, Stdio},
-};
+use std::{io::Read, process::Stdio};
 
 use sha2::{Digest, Sha256};
 use tracer_cli_tests::Fixture;
@@ -117,14 +114,7 @@ fn session_status_reports_every_doc_loaded_so_far_with_source() {
 #[test]
 fn session_status_without_session_id_reports_inactive_session() {
     let f = docs_repo();
-    let r = std::process::Command::new(tracer_cli_tests::trace_bin())
-        .args(["docs", "status", "--json"])
-        .current_dir(&f.root)
-        .env_remove("AGENT_SESSION_ID")
-        .env_remove("CODEX_THREAD_ID")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .output()
-        .expect("spawn trace");
+    let r = f.command(&f.root, ["docs", "status", "--json"], &[]).output().expect("spawn trace");
     assert!(
         r.status.success(),
         "standalone status must succeed:\n{}",
@@ -855,15 +845,8 @@ fn closed_stdout_does_not_record_human_or_json_delivery() {
         vec!["read", "hundred.txt", "--docs"],
         vec!["read", "hundred.txt", "--docs", "--json"],
     ] {
-        let child = Command::new(tracer_cli_tests::trace_bin())
-            .args(args)
-            .current_dir(&f.root)
-            .env("HOME", &f.root)
-            .env("TMPDIR", &f.tmp)
-            .env("CLAUDE_CODE_SESSION_ID", sid.as_str())
-            .env_remove("AGENT_SESSION_ID")
-            .env_remove("CODEX_THREAD_ID")
-            .env_remove("TRACER_AGENT_ID")
+        let child = f
+            .command(&f.root, args, &env)
             .stdout(tracer_cli_tests::closed_stdout())
             .stderr(Stdio::piped())
             .spawn()
@@ -901,15 +884,8 @@ fn closed_stdout_does_not_record_docs_delivery() {
         vec!["docs", "sub/util.py"],
         vec!["docs", "sub/util.py", "--json"],
     ] {
-        let child = Command::new(tracer_cli_tests::trace_bin())
-            .args(&args)
-            .current_dir(&f.root)
-            .env("HOME", &f.root)
-            .env("TMPDIR", &f.tmp)
-            .env("CLAUDE_CODE_SESSION_ID", sid.as_str())
-            .env_remove("AGENT_SESSION_ID")
-            .env_remove("CODEX_THREAD_ID")
-            .env_remove("TRACER_AGENT_ID")
+        let child = f
+            .command(&f.root, &args, &env)
             .stdout(tracer_cli_tests::closed_stdout())
             .stderr(Stdio::piped())
             .spawn()
@@ -982,15 +958,8 @@ fn source_edit_after_output_starts_keeps_the_captured_hash() {
     let sid = fresh_session_id("native-read-source-edit");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
-    let mut child = Command::new(tracer_cli_tests::trace_bin())
-        .args(["read", "large.txt", "--all", "--json"])
-        .current_dir(&f.root)
-        .env("HOME", &f.root)
-        .env("TMPDIR", &f.tmp)
-        .env("CLAUDE_CODE_SESSION_ID", sid.as_str())
-        .env_remove("AGENT_SESSION_ID")
-        .env_remove("CODEX_THREAD_ID")
-        .env_remove("TRACER_AGENT_ID")
+    let mut child = f
+        .command(&f.root, ["read", "large.txt", "--all", "--json"], &env)
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn trace");

@@ -197,6 +197,6 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
     if shortened > 0 {
         answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
     }
-    super::docs::print_with_docs(&answer, paths, "trace_structure", delivery)?;
+    crate::docs::print_with_docs(&answer, paths, "trace_structure", delivery)?;
     Ok(document)
 }

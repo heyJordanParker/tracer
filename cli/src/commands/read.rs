@@ -3,8 +3,8 @@
 //! AST-derived via `crate::ccn` (name -> line span). Supports fluff
 //! stripping, ref loading, line/anchor scoping, and nested-memory loading.
 
-use super::{context, nested_memory};
-use crate::session;
+use super::context;
+use crate::{docs, nested_memory, session};
 use crate::summary::Facts;
 use crate::{cache, ccn, extraction, file_facts, relations, summary, surface};
 use anyhow::{bail, Context, Result};
@@ -52,7 +52,7 @@ type RenderedLine<'a> = (usize, Cow<'a, str>);
 struct RenderedRead {
     payload: Value,
     memories: Vec<nested_memory::LoadedMemory>,
-    docs: super::docs::Fitted,
+    docs: docs::Fitted,
     file_path: std::path::PathBuf,
     content_hash: String,
     content_size: usize,
@@ -350,36 +350,6 @@ fn trim_to_budget(lines: &mut Vec<RenderedLine<'_>>, budget: usize) -> bool {
         lines[0].1 = Cow::Owned(format!("{cut}\u{2026}\n"));
     }
     true
-}
-
-/// The inline trim marker. It sits in the content stream itself, at the
-/// end, so an agent reading top-to-bottom reaches it and no consumer can
-/// drop it.
-pub(crate) fn trim_marker(
-    file: &str,
-    flags: &str,
-    last_line: usize,
-    selection_end: usize,
-    total_lines: usize,
-) -> String {
-    // A path carrying whitespace has to survive being pasted into a shell.
-    let quoted = if file.contains(char::is_whitespace) {
-        format!("'{}'", file.replace('\'', r"'\''"))
-    } else {
-        file.to_string()
-    };
-    let trace = crate::output::trace_command();
-    // The selection's last line was reached, so the trim cut that line.
-    if last_line >= selection_end {
-        return format!(
-            "\n[trimmed at L{last_line} of {total_lines} — whole: {trace} read {quoted} --all{flags}]\n"
-        );
-    }
-    format!(
-        "\n[trimmed at L{last_line} of {total_lines} — continue: {trace} read {quoted} --lines {}:{}{flags}]\n",
-        last_line + 1,
-        selection_end
-    )
 }
 
 /// Find `method_name` in `source` via the AST CCN backend and return its
@@ -858,7 +828,7 @@ fn render_one(
     } else {
         Vec::new()
     };
-    let unread = super::docs::unread(memories.clone());
+    let unread = docs::unread(memories.clone());
 
     let mut shown = session::Delivery::default();
     let front_matter: Option<serde_json::Map<String, Value>> = if ref_.is_some() {
@@ -897,7 +867,7 @@ fn render_one(
     let budget = if all { None } else { budget };
     let front_matter_size = head.len().saturating_sub(header.len() + 1);
     let reserved = relative.len() + file_arg.len() + 100;
-    let docs_command = super::docs::shell_command(
+    let docs_command = docs::shell_command(
         &format!("{} docs", crate::output::trace_command()),
         std::slice::from_ref(&file_path),
     );
@@ -910,7 +880,7 @@ fn render_one(
     let calls_share = budget.map(|budget| {
         let left = budget.saturating_sub(front_matter_size);
         let content_size: usize = rendered.iter().map(|(_, line)| crate::output::width(line)).sum();
-        let docs_size = crate::output::width(&super::docs::fit(unread.clone(), None, &docs_command).text);
+        let docs_size = crate::output::width(&docs::fit(unread.clone(), None, &docs_command).text);
         (left / 4).max(left.saturating_sub(surface_text.len() + content_size + docs_size + reserved))
     });
     let delivery = (once && ref_.is_none()).then_some(&mut shown);
@@ -952,7 +922,7 @@ fn render_one(
             // The path the caller typed, never the repo-relative one: the
             // marker's command has to run from the caller's own directory,
             // and a file outside the repo root has no runnable relative form.
-            let marker = trim_marker(file_arg, &flags, last_line, selection_end, total_lines);
+            let marker = crate::output::trim_marker(file_arg, &flags, last_line, selection_end, total_lines);
             content.push_str(&marker);
         }
     }
@@ -967,8 +937,8 @@ fn render_one(
                 + reserved,
         )
     });
-    let docs_room = left.map_or(super::docs::REACHED_ROOM, |left| left.min(super::docs::REACHED_ROOM));
-    let docs = super::docs::fit(unread, Some(docs_room), &docs_command);
+    let docs_room = left.map_or(docs::REACHED_ROOM, |left| left.min(docs::REACHED_ROOM));
+    let docs = docs::fit(unread, Some(docs_room), &docs_command);
 
     let display_file = cache::relative_to_root(&file_path, &repo_root);
 

@@ -185,6 +185,17 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run(command(cwd, args, env), input)
+}
+
+/// The `trace` command for `args` from `cwd`: the invoking agent's session
+/// identity removed, the test process as its `CLAUDE_PID`, `env` applied,
+/// and `HOME` at `cwd` unless `env` names one.
+pub fn command<I, S>(cwd: &Path, args: I, env: &[(&str, &str)]) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut cmd = Command::new(trace_bin());
     cmd.current_dir(cwd);
     for a in args {
@@ -202,6 +213,9 @@ where
     ] {
         cmd.env_remove(key);
     }
+    // The test process stands in for the Claude Code session, so a build a
+    // test's hook starts ends with the test run.
+    cmd.env("CLAUDE_PID", std::process::id().to_string());
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -209,6 +223,11 @@ where
     if !env.iter().any(|(k, _)| *k == "HOME") {
         cmd.env("HOME", cwd);
     }
+    cmd
+}
+
+/// Runs `cmd` to its exit, `input` on its stdin, and captures the outcome.
+pub fn run(mut cmd: Command, input: Option<&str>) -> Run {
     let start = Instant::now();
     let out = match input {
         None => cmd.output(),
@@ -230,6 +249,27 @@ where
 #[allow(non_upper_case_globals)] // project naming rule bans ALL_CAPS for our own identifiers
 static fixture_seq: AtomicU64 = AtomicU64::new(0);
 
+/// The environment variables `trace` reads a session id from.
+const SESSION_VARIABLES: [&str; 3] = ["AGENT_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID"];
+
+/// The folder holding every session's records, where `trace` keeps them:
+/// `tracer-<uid>/sessions/` in the user's own temporary folder, which no
+/// `TMPDIR` moves.
+pub fn sessions_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let read = |program: &str, args: &[&str]| {
+            String::from_utf8(Command::new(program).args(args).output().unwrap().stdout).unwrap().trim().to_string()
+        };
+        let temp = match cfg!(target_os = "macos") {
+            true => read("getconf", &["DARWIN_USER_TEMP_DIR"]),
+            false => "/tmp".to_string(),
+        };
+        PathBuf::from(temp).join(format!("tracer-{}", read("id", &["-u"]))).join("sessions")
+    })
+    .clone()
+}
+
 /// A throwaway git repository on disk, deleted on drop.
 ///
 /// Commits are created with an explicit, hermetic environment (fixed
@@ -237,12 +277,15 @@ static fixture_seq: AtomicU64 = AtomicU64::new(0);
 /// developer's git config — the same pattern the prior pytest `test_glob.py`
 /// used. `git commit` is run via a direct subprocess (not a shell), which is
 /// also what keeps the suite independent of any commit-gating shell hooks.
+///
+/// Every session id a run from the fixture passes carries the fixture's own
+/// suffix, so fixtures running side by side never share a record, and the
+/// fixture's sessions are deleted with it.
 pub struct Fixture {
     pub root: PathBuf,
-    /// The `TMPDIR` every `trace` run from this fixture sees, beside the
-    /// repository rather than in it, so each fixture's session records start
-    /// empty and stay out of the worktree.
+    /// A scratch folder beside the repository, deleted with it.
     pub tmp: PathBuf,
+    suffix: String,
 }
 
 impl Fixture {
@@ -253,11 +296,12 @@ impl Fixture {
             .unwrap()
             .as_nanos();
         let seq = fixture_seq.fetch_add(1, Ordering::SeqCst);
-        let root = std::env::temp_dir().join(format!("trace-fixture-{}-{}", nanos, seq));
-        let tmp = std::env::temp_dir().join(format!("trace-fixture-{}-{}-tmp", nanos, seq));
+        let suffix = format!("fixture-{nanos}-{seq}");
+        let root = std::env::temp_dir().join(format!("trace-{suffix}"));
+        let tmp = std::env::temp_dir().join(format!("trace-{suffix}-tmp"));
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&tmp).unwrap();
-        let f = Fixture { root, tmp };
+        let f = Fixture { root, tmp, suffix };
         f.git(&["init", "--quiet"]);
         f.git(&["config", "user.email", "test@example.com"]);
         f.git(&["config", "user.name", "Tracer Test"]);
@@ -339,41 +383,63 @@ impl Fixture {
         self.trace_env(args, &[])
     }
 
-    /// Run `trace` with extra env, and the fixture's own `TMPDIR` unless the
-    /// env names one.
+    /// Run `trace` with extra env.
     pub fn trace_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
         self.trace_in(&self.root, args, env)
     }
 
-    /// Run `trace` from `cwd` with extra env and the fixture's `TMPDIR`.
+    /// Run `trace` from `cwd` with extra env.
     pub fn trace_in<I, S>(&self, cwd: &Path, args: I, env: &[(&str, &str)]) -> Run
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let tmp = self.tmp.to_string_lossy();
-        let mut env = env.to_vec();
-        if !env.iter().any(|(k, _)| *k == "TMPDIR") {
-            env.push(("TMPDIR", &tmp));
-        }
-        trace_env(cwd, args, &env)
+        run(self.command(cwd, args, env), None)
+    }
+
+    /// The `trace` command for `args` from `cwd` with `env`, every session
+    /// id in `env` this fixture's own. A test that runs `trace` itself, to
+    /// hold its stdin or stdout, starts it from here.
+    pub fn command<I, S>(&self, cwd: &Path, args: I, env: &[(&str, &str)]) -> Command
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let owned: Vec<(&str, String)> = env
+            .iter()
+            .map(|(key, value)| match SESSION_VARIABLES.contains(key) {
+                true => (*key, self.session(value)),
+                false => (*key, value.to_string()),
+            })
+            .collect();
+        let env: Vec<(&str, &str)> = owned.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        command(cwd, args, &env)
+    }
+
+    /// `session` as this fixture passes it to `trace`.
+    pub fn session(&self, session: &str) -> String {
+        format!("{session}-{}", self.suffix)
     }
 
     /// The folder holding `session`'s records.
     pub fn session_dir(&self, session: &str) -> PathBuf {
-        let uid = String::from_utf8(Command::new("id").arg("-u").output().unwrap().stdout).unwrap();
-        self.tmp.join(format!("tracer-{}", uid.trim())).join("sessions").join(session)
+        sessions_root().join(self.session(session))
     }
 
     /// `trace hook <event> --harness <harness> <flags>` from the fixture
-    /// root, `input` on stdin, with the fixture's `TMPDIR`.
+    /// root, `input` on stdin, its `session_id` this fixture's own, and a
+    /// 20-second deadline unless `flags` name one.
     pub fn hook(&self, event: &str, harness: &str, input: &serde_json::Value, flags: &[&str], env: &[(&str, &str)]) -> Run {
-        let tmp = self.tmp.to_string_lossy();
-        let mut env = env.to_vec();
-        env.push(("TMPDIR", &tmp));
-        let mut args = vec!["hook", event, "--harness", harness, "--deadline-ms", "20000"];
+        let mut input = input.clone();
+        if let Some(session) = input["session_id"].as_str() {
+            input["session_id"] = self.session(session).into();
+        }
+        let mut args = vec!["hook", event, "--harness", harness];
+        if !flags.contains(&"--deadline-ms") {
+            args.extend(["--deadline-ms", "20000"]);
+        }
         args.extend(flags);
-        trace_with_input(&self.root, args, &env, Some(&input.to_string()))
+        run(self.command(&self.root, args, env), Some(&input.to_string()))
     }
 
     /// `agent`'s record in `session`, `None` while nothing was recorded.
@@ -381,12 +447,34 @@ impl Fixture {
         let bytes = fs::read(self.session_dir(session).join(agent).join("record.json")).ok()?;
         Some(serde_json::from_slice(&bytes).expect("record.json is JSON"))
     }
+
+    /// Whether a `trace cache build` of this repository runs.
+    pub fn building(&self) -> bool {
+        Command::new("pgrep").args(["-f", &self.build_pattern()]).output().unwrap().status.success()
+    }
+
+    fn build_pattern(&self) -> String {
+        format!("{} cache build", self.root.file_name().unwrap().to_string_lossy())
+    }
 }
 
 impl Drop for Fixture {
+    /// Ends a build a hook started here before the repository goes, because
+    /// a build still writing would leave its `.tracer-cache/` behind.
     fn drop(&mut self) {
+        let _ = Command::new("pkill").args(["-f", &self.build_pattern()]).status();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while self.building() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let _ = fs::remove_dir_all(&self.root);
         let _ = fs::remove_dir_all(&self.tmp);
+        let suffix = format!("-{}", self.suffix);
+        for session in fs::read_dir(sessions_root()).into_iter().flatten().flatten() {
+            if session.file_name().to_string_lossy().ends_with(&suffix) {
+                let _ = fs::remove_dir_all(session.path());
+            }
+        }
     }
 }
 

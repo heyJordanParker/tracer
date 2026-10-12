@@ -129,7 +129,7 @@ fn reset_is_a_clean_noop_when_no_session_is_active() {
     // structured "nothing cleared" answer rather than erroring or writing any
     // cache.
     let f = docs_repo();
-    let r = f.trace(&["docs", "reset", "--json"]);
+    let r = f.trace_env(&["docs", "reset", "--json"], &[("TRACE_TIMING", "1")]);
     r.ok();
     let v = r.json();
     assert_eq!(v["query"]["scope"].as_str().unwrap(), "reset", "{v}");
@@ -143,10 +143,10 @@ fn reset_is_a_clean_noop_when_no_session_is_active() {
         0,
         "no session id ⇒ nothing cleared: {v}"
     );
-    assert_eq!(
-        std::fs::read_dir(&f.tmp).unwrap().count(),
-        0,
-        "standalone reset must write no session record"
+    assert!(
+        !r.stderr.contains("timing lock session") && !r.stderr.contains("timing session record"),
+        "standalone reset must write no session record:\n{}",
+        r.stderr
     );
 }
 

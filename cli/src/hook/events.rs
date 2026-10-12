@@ -13,7 +13,8 @@
 use super::harness::{resolved, Tool};
 use super::{Answer, Harness, Input, BUDGET};
 use crate::commands::docs_prime::{self, Reason};
-use crate::commands::{context, docs, find, grep, nested_memory};
+use crate::commands::{context, find, grep};
+use crate::{docs, nested_memory};
 use crate::session::{self, Delivery};
 use anyhow::Result;
 use std::collections::BTreeSet;

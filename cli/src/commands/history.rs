@@ -1047,5 +1047,5 @@ pub fn run(
 
 /// Prints a file's history, then the docs the file reaches.
 fn print_with_docs(answer: String, file: &Path) -> Result<()> {
-    super::docs::print_with_docs(&answer, &[file.to_path_buf()], "trace_history", crate::session::Delivery::default())
+    crate::docs::print_with_docs(&answer, &[file.to_path_buf()], "trace_history", crate::session::Delivery::default())
 }

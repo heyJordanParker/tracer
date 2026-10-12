@@ -338,7 +338,7 @@ pub fn run(pattern: &str, language: &str, paths: &[String], as_json: bool, sink:
         let shown = matches::offer_signpost(signpost.as_deref(), anchor.as_deref(), &search_root, &mut delivery);
         let answer = matches::render_human(&enriched, &files, &surfaces, shown, false, &mut delivery);
         let reached: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
-        super::docs::print_with_docs(&answer, &reached, "trace_pattern", delivery)?;
+        crate::docs::print_with_docs(&answer, &reached, "trace_pattern", delivery)?;
     }
     drop(surfaces);
 

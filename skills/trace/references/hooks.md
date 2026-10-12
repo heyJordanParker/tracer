@@ -19,6 +19,8 @@ Use this Reference when diagnosing tracer's Hooks, docs injection, identity prop
 - It records the docs the Harness loaded at start. Claude Code loads its user-global doc, the doc chain from the repository root to the working folder, and every rule file with no `paths:`. Codex loads its own discovery: `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`, then per folder the first of `AGENTS.override.md`, `AGENTS.md`, and the config's `project_doc_fallback_filenames`, within `project_doc_max_bytes`.
 - It offers the primer once per context: a resume that holds it gets nothing, and a repository that changed gets only the sections that changed.
 - `clear` forgets the record first. `compact` sends again the user rules the compaction dropped.
+- The primer answers before the deadline with every section ready by then. The sections that need no relations index are read beside its build. When the index is not ready, the Spine and the import counts and complexity it stores are left out.
+- Any Hook that leaves the relations index out starts `trace cache build` in the background after it answers. One build runs per user at a time, and it ends when it finishes or when the Claude Code session in `CLAUDE_PID` ends.
 - On Codex it also sends the working folder's docs and rules Codex never loads itself.
 
 ### PreCompact forgets the record
@@ -29,7 +31,7 @@ A compaction drops what the Agent held. The user-global rule files with `paths:`
 - `InstructionsLoaded` records each doc Claude Code loads, under the agent id in the input.
 
 ### PreToolUse on a shell command names the Subagent and refuses raw reads
-- Inside a Subagent it writes `--agent <agent_id>` after each `trace` program word through `updatedInput`, because the Subagent's shell carries no agent id. `cli/src/shell.rs` reads the command's structure, so a `trace` inside a quoted argument stays text.
+- Inside a Subagent it writes `--agent <agent_id>` after each `trace` program word through `updatedInput`, because the Subagent's shell carries no agent id. `cli/src/shell.rs` reads the command's structure, so a `trace` inside a quoted argument stays text, and a `trace` that `bash -c`, `xargs`, `find -exec`, `env`, `timeout`, `nice`, `nohup`, `command`, or `exec` runs gets the flag too.
 - With `--tracer-only`, a command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused, and so is a `trace` command piped into a filter such as `head`, `grep`, `wc`, or `jq`. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
 
 ### PostToolUse adds the context around what a tool returned or wrote
@@ -47,7 +49,7 @@ Each Agent's record is keyed by its own agent id, so a resumed Subagent finds it
 
 ### `trace hook` takes identity from the Hook input
 - The input's `session_id` names the session, and its `agent_id` names the Subagent.
-- A session's records live at `$TMPDIR/tracer-<uid>/sessions/<session>/`, outside every repository, so every call in the session writes the same record whatever its `cwd` or `-C`.
+- A session's records live at `tracer-<uid>/sessions/<session>/` in the user's own temporary folder, outside every repository and never under `TMPDIR`, so every call in the session writes the same record whatever its `cwd` or `-C`. A sandboxed shell that cannot write there reads the record and records nothing.
 
 ### `AGENT_SESSION_ID` is the Harness-neutral carrier
 Outside a Hook, `trace` resolves `AGENT_SESSION_ID` first for the session record, so the same binary serves Claude Code, Codex, and any other Harness that sets it.

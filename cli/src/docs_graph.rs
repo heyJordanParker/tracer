@@ -13,11 +13,11 @@
 //! repo — so there is nothing here worth persisting.
 //!
 //! The walker, include resolver, and frontmatter parsers belong to
-//! `commands::nested_memory`; this module only assembles the graph from
-//! their output. There is no second implementation of any of those.
+//! `nested_memory`; this module only assembles the graph from their output.
+//! There is no second implementation of any of those.
 
 use crate::cache;
-use crate::commands::nested_memory;
+use crate::nested_memory;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

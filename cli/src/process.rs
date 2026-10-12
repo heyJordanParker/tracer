@@ -13,7 +13,11 @@
 //!   Code process `CLAUDE_PID` names is gone. Claude Code runs each Bash call
 //!   in its own shell with its output in a file, so a session that ends
 //!   leaves that shell, trace's parent, alive and its stdout a file:
-//!   `CLAUDE_PID` is the one condition that sees it.
+//!   `CLAUDE_PID` is the one condition that sees it. A detached `trace cache
+//!   build` watches `CLAUDE_PID` alone.
+//!
+//! `detach` starts the one child that outlives its call: a hook's background
+//! index build, at most one per user at a time.
 //!
 //! The registry is a fixed array of atomic process ids, because a signal
 //! handler may only do async-signal-safe work: it reads the array and calls
@@ -117,6 +121,17 @@ fn unregister(pid: u32) {
     }
 }
 
+/// Set by `exit`, `abandon`, and a panic that aborts before they kill the
+/// children. A panic that unwinds, as in a test build, leaves it unset,
+/// because it ends only its own thread.
+static ENDING: AtomicBool = AtomicBool::new(false);
+
+/// Whether trace is ending, so a child that died now was killed with it and
+/// says nothing about its input.
+fn ending() -> bool {
+    ENDING.load(Ordering::Acquire)
+}
+
 /// Kills every registered child. Async-signal-safe: atomics and `kill` only.
 fn kill_children() {
     for slot in &CHILDREN {
@@ -176,6 +191,7 @@ pub fn take_reported() -> Vec<String> {
 /// The one way trace exits: every registered child is killed, stdout is
 /// flushed, and the process ends with `code`.
 pub fn exit(code: i32) -> ! {
+    ENDING.store(true, Ordering::Release);
     kill_children();
     std::process::exit(code)
 }
@@ -184,6 +200,7 @@ pub fn exit(code: i32) -> ! {
 /// nothing is flushed, because stdout may be a closed pipe or held by the
 /// thread doing the work.
 fn abandon(code: i32) -> ! {
+    ENDING.store(true, Ordering::Release);
     kill_children();
     unsafe { libc::_exit(code) }
 }
@@ -192,11 +209,13 @@ extern "C" fn on_signal(signal: libc::c_int) {
     abandon(128 + signal)
 }
 
-/// Installs the signal handlers and the panic hook. `watch_caller` also
-/// starts the watchdog; `trace cache build` passes false, because it is the
-/// one command a person may detach on purpose.
+/// Marks every descriptor inherited above stderr close-on-exec, installs the
+/// signal handlers and the panic hook, and starts the watchdog. `trace cache
+/// build` passes `watch_caller` false, because a person or a hook detaches it
+/// on purpose, so only the end of its Claude Code session ends it.
 pub fn guard(watch_caller: bool) {
     STARTED.get_or_init(Instant::now);
+    close_inherited_on_exec();
     for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
         unsafe {
             libc::signal(signal, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
@@ -204,27 +223,85 @@ pub fn guard(watch_caller: bool) {
     }
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if cfg!(panic = "abort") {
+            ENDING.store(true, Ordering::Release);
+        }
         kill_children();
         previous(info);
     }));
-    if watch_caller {
-        watch();
+    watch(watch_caller);
+}
+
+/// A descriptor trace inherited stays open in every child it starts, so a
+/// detached build would hold a pipe its caller's caller waits on. Every
+/// descriptor trace opens itself is already close-on-exec.
+fn close_inherited_on_exec() {
+    let Ok(entries) = std::fs::read_dir("/dev/fd") else {
+        return;
+    };
+    let inherited: Vec<libc::c_int> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .filter(|fd| *fd > libc::STDERR_FILENO)
+        .collect();
+    for fd in inherited {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
     }
 }
 
-fn watch() {
+/// Ends trace once the Claude Code process `CLAUDE_PID` names is gone and,
+/// with `watch_caller`, once its parent changes or a piped stdout's reader
+/// closes its end.
+fn watch(watch_caller: bool) {
     let parent = std::os::unix::process::parent_id();
     let claude = std::env::var("CLAUDE_PID").ok().and_then(|pid| pid.parse::<i32>().ok());
-    let piped = stdout_is_pipe();
+    if !watch_caller && claude.is_none() {
+        return;
+    }
+    let piped = watch_caller && stdout_is_pipe();
     let _ = std::thread::Builder::new().name("watchdog".into()).spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
-        if std::os::unix::process::parent_id() != parent
+        if (watch_caller && std::os::unix::process::parent_id() != parent)
             || claude.is_some_and(|pid| !alive(pid))
             || (piped && hung_up(libc::STDOUT_FILENO))
         {
             abandon(ABANDONED);
         }
     });
+}
+
+/// Starts `command` apart from this call: in its own process group, with no
+/// stdio and no registry slot, so it outlives this call and no signal sent to
+/// this call reaches it. The child takes `lock`'s exclusive `flock` before it
+/// runs and holds it to its end, so one lock file runs one such command at a
+/// time; a start that finds it held fails with `WouldBlock`.
+pub fn detach(command: &mut Command, lock: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::CommandExt;
+    let lock = std::ffi::CString::new(lock.as_os_str().as_bytes())?;
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    // Between fork and exec only async-signal-safe calls run: `open` and
+    // `flock` on a path prepared before the fork. The descriptor is not
+    // close-on-exec, so the command holds the lock.
+    unsafe {
+        command.pre_exec(move || {
+            let fd = libc::open(lock.as_ptr(), libc::O_RDWR | libc::O_CREAT, 0o600);
+            if fd < 0 || libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn().map(drop)
 }
 
 fn alive(pid: i32) -> bool {
@@ -286,6 +363,17 @@ pub fn output_within(command: &mut Command, limit: Duration) -> io::Result<Optio
         }
     };
     unregister(pid);
+    settled(result)
+}
+
+/// A waited child's result, handed back only while trace is not ending. A
+/// child killed because trace is ending failed on nothing it was given, so
+/// the waiting thread parks until the exit instead of letting its caller
+/// read, or store, that failure.
+fn settled<T>(result: T) -> T {
+    while ending() {
+        std::thread::park();
+    }
     result
 }
 
@@ -307,7 +395,7 @@ impl Running {
         let mut child = self.0.take().expect("child present until waited");
         let status = child.wait();
         unregister(child.id());
-        status
+        settled(status)
     }
 
     pub fn wait_with_output(mut self) -> io::Result<Output> {
@@ -315,7 +403,7 @@ impl Running {
         let pid = child.id();
         let output = child.wait_with_output();
         unregister(pid);
-        output
+        settled(output)
     }
 }
 

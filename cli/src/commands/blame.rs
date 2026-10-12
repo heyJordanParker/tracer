@@ -411,6 +411,6 @@ pub fn run(
     for region in &regions {
         answer.push_str(&format!("{}\n", format_region(region)));
     }
-    super::docs::print_with_docs(&answer, std::slice::from_ref(&path), "trace_blame", delivery)?;
+    crate::docs::print_with_docs(&answer, std::slice::from_ref(&path), "trace_blame", delivery)?;
     Ok(payload)
 }

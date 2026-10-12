@@ -322,7 +322,7 @@ pub fn run(
     if shortened > 0 {
         answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
     }
-    super::docs::print_with_docs(&answer, &searched, "trace_find", delivery)?;
+    crate::docs::print_with_docs(&answer, &searched, "trace_find", delivery)?;
     Ok(value)
 }
 

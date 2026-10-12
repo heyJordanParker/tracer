@@ -8,7 +8,8 @@
 //! - `refusal.rs` is `--tracer-only`'s refusal of raw code reads.
 //!
 //! The answer fits `BUDGET`, the size Claude Code shows whole, and is
-//! recorded as shown only once it is flushed before `--deadline-ms`.
+//! recorded as shown only once it is flushed before `--deadline-ms`. A
+//! repository whose relations the answer left out gets a background build.
 
 mod events;
 mod harness;
@@ -80,7 +81,7 @@ pub fn run(event: &str, harness: Harness, deadline_ms: u64, tracer_only: bool) -
     // is kept from the start.
     let notice = crate::cache::worktree_root_for(&input.cwd).map_or(0, |root| crate::relations::notice(&root).len());
     let mut answer = crate::output::within(Some(BUDGET - notice), || events::answer(&input, &mut delivery))?;
-    let notice = crate::relations::index_state(&mut delivery);
+    let notice = crate::output::index_state(&mut delivery);
     if !notice.is_empty() {
         answer.context = format!("{}\n{notice}", answer.context.trim_end_matches('\n'));
     }
@@ -96,7 +97,30 @@ pub fn run(event: &str, harness: Harness, deadline_ms: u64, tracer_only: bool) -
         stdout.flush()?;
     }
     delivery.commit();
+    build_left_out();
     Ok(())
+}
+
+/// Starts a `trace cache build` apart from this hook for each repository
+/// whose relations this answer left out, so a later event finds them built.
+/// One build runs per user at a time; a start that finds one running is
+/// dropped, and a later event that still leaves relations out starts it. A
+/// repository whose cache this user cannot save gets none, because its build
+/// would keep nothing and run again on every event.
+fn build_left_out() {
+    let roots = crate::relations::left_out_roots();
+    if roots.is_empty() {
+        return;
+    }
+    let (Ok(trace), Some(folder)) = (std::env::current_exe(), crate::session::user_folder()) else {
+        return;
+    };
+    let lock = folder.join("build.lock");
+    for root in roots.into_iter().filter(|root| crate::cache::can_persist(root)) {
+        let mut build = std::process::Command::new(&trace);
+        build.arg("-C").arg(&root).args(["cache", "build"]);
+        let _ = crate::timing::phase("detach cache build", || crate::process::detach(&mut build, &lock));
+    }
 }
 
 /// The JSON a harness reads for `answer`, `None` when there is nothing to say.

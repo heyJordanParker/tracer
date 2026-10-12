@@ -490,12 +490,30 @@ pub fn ready(repo_root: &Path) -> Option<Arc<Relations>> {
     }
 }
 
-/// The relations built until `limit`, as `ready` builds them.
+/// How long a build that stops at its limit takes to hand over what it
+/// holds, such as the stored index one update behind.
+const HANDOVER: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The relations built until `limit`, as `ready` builds them. The build runs
+/// on a thread of its own, because a file it is extracting at the limit
+/// finishes first, and this answers by the limit, or by now when the limit
+/// has passed, and its `HANDOVER`, whatever it holds. A memoized or stored
+/// index arrives within the `HANDOVER`. A build still running then is left to
+/// end with the process. An index this call already built answers at once.
 pub fn within(repo_root: &Path, limit: std::time::Instant) -> Option<Arc<Relations>> {
+    if let Some(memoized) = memo::cached(&MEMO, repo_root) {
+        return Some(memoized);
+    }
     if left_out().contains(repo_root) {
         return None;
     }
-    let ready = built(repo_root, Some(limit));
+    let (send, receive) = std::sync::mpsc::channel();
+    let root = repo_root.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = send.send(built(&root, Some(limit)));
+    });
+    let now = std::time::Instant::now();
+    let ready = receive.recv_timeout(limit.max(now) + HANDOVER - now).ok().flatten();
     if ready.is_none() {
         left_out().insert(repo_root.to_path_buf());
     }
@@ -509,18 +527,9 @@ fn left_out() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
     LEFT_OUT.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The `IndexState` notice, once per agent context, for each repository
-/// this call left relations out of. It names `trace cache build`, which
-/// finishes the index for an agent that only ever sees hooks.
-pub fn index_state(delivery: &mut crate::session::Delivery) -> String {
-    left_out()
-        .iter()
-        .filter_map(|root| {
-            let line = notice(root);
-            let offer = delivery.offer(crate::session::Kind::IndexState, &root.to_string_lossy(), &serde_json::json!(line));
-            (!matches!(offer, crate::session::Offer::Same)).then_some(line)
-        })
-        .collect()
+/// The repositories this call left relations out of, in path order.
+pub fn left_out_roots() -> Vec<PathBuf> {
+    left_out().iter().cloned().collect()
 }
 
 /// The `IndexState` line for `repo_root`.

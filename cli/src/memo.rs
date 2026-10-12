@@ -49,6 +49,12 @@ pub fn get_or_try_build<T>(memo: &Memo<T>, repo_root: &Path, build: impl FnOnce(
     Some(built)
 }
 
+/// The memoized value for `repo_root` without waiting: `None` when nothing is
+/// memoized yet or a build holds the lock.
+pub fn cached<T>(memo: &Memo<T>, repo_root: &Path) -> Option<Arc<T>> {
+    memo.get()?.try_lock().ok()?.get(repo_root).cloned()
+}
+
 /// Replace the memoized value for `repo_root`, under the same lock.
 ///
 /// The mtime index is the one map that is written during a run as well as

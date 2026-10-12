@@ -227,7 +227,7 @@ fn one(path: &Path, as_json: bool, brief: bool, budget: Option<usize>) -> Result
             answer.push_str(&format!("\n{footer}\n"));
         }
         let room = budget.map(|budget| budget.saturating_sub(crate::output::width(&answer)));
-        print!("{answer}{}", super::docs::reached(std::slice::from_ref(&p), room, "trace_info", &mut shown));
+        print!("{answer}{}", crate::docs::reached(std::slice::from_ref(&p), room, "trace_info", &mut shown));
         std::io::stdout().flush()?;
         shown.commit();
     }

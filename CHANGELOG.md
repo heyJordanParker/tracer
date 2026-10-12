@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- A hook and a shell `trace` call keep one session record whatever `TMPDIR` each sees, so a fact or a doc one of them showed Claude is not shown again by the other.
+- A session in a large repository starts with every primer section that needs no index, before the hook's deadline, instead of an empty primer. The index then builds in the background, one build per user at a time, and the build ends when it finishes or its Claude Code session ends.
+- Extra context waits about a second for the relations index and never longer, so one large file still being read no longer holds a hook past its deadline.
+- A subagent's `trace` call inside `bash -c`, `xargs`, `find -exec`, `env`, `timeout`, `nice`, `nohup`, `command`, or `exec` is credited to the subagent.
+- `trace docs archive`, `--triggering-tool`, and `--triggering-command` are gone. They did nothing.
+
 ## 0.4.0
 
 - With "Claude reads code only through tracer" on, a `trace` command piped into `head`, `grep`, `sed`, `wc`, `jq`, or another filter is refused, because the filter cuts the context tracer fitted. The refusal names the `trace` command alone, or with `--json --filter <expression>` in place of `jq`.

@@ -430,7 +430,7 @@ fn path_mode(
                 }
             }
         }
-        super::docs::print_with_docs(&answer, &[path.to_path_buf()], "trace_reach", delivery)?;
+        crate::docs::print_with_docs(&answer, &[path.to_path_buf()], "trace_reach", delivery)?;
     }
     Ok(out)
 }

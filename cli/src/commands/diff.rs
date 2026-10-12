@@ -538,7 +538,7 @@ fn emit_file_mode(
     };
     let mut delivery = crate::session::Delivery::default();
     if files.is_empty() {
-        super::docs::print_with_docs(&format!("{title}\n(nothing differs)\n"), anchors, "trace_diff", delivery)?;
+        crate::docs::print_with_docs(&format!("{title}\n(nothing differs)\n"), anchors, "trace_diff", delivery)?;
         return Ok(payload);
     }
     let head = format!("{title}\n\n{}", render_directory_context(&directories));
@@ -613,7 +613,7 @@ fn emit_file_mode(
     if shortened > 0 {
         answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
     }
-    super::docs::print_with_docs(&answer, anchors, "trace_diff", delivery)?;
+    crate::docs::print_with_docs(&answer, anchors, "trace_diff", delivery)?;
     Ok(payload)
 }
 
@@ -841,7 +841,7 @@ fn emit_symbol_mode(
             location,
         ));
     }
-    super::docs::print_with_docs(&answer, anchors, "trace_diff", crate::session::Delivery::default())?;
+    crate::docs::print_with_docs(&answer, anchors, "trace_diff", crate::session::Delivery::default())?;
     Ok(payload)
 }
 

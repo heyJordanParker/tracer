@@ -1,8 +1,8 @@
 //! `trace context prime --reason …` — the context-primer command.
 //!
 //! Black-box: spawn `trace` with an isolated `HOME` so the user-global
-//! CLAUDE.md lands inside the fixture, and the fixture's own `TMPDIR` so
-//! each test's session record starts empty. Assertions go through the
+//! CLAUDE.md lands inside the fixture, and the fixture's own session suffix
+//! so each test's session record starts empty. Assertions go through the
 //! documented on-disk shape of `record.json` and the command's `--json`
 //! output.
 //!
@@ -19,7 +19,7 @@
 //!   * memory file ignored      — a populated MEMORY.md never enters the primer
 //!
 //! All five run against the same hermetic fixture pattern, each with its
-//! own `HOME` and `TMPDIR`.
+//! own `HOME` and session.
 
 use std::collections::BTreeSet;
 use std::fs;

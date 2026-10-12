@@ -192,6 +192,6 @@ pub fn run(path: &Path, depth: usize, as_json: bool) -> Result<Value> {
     if shortened > 0 {
         answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
     }
-    super::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_tree", delivery)?;
+    crate::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_tree", delivery)?;
     Ok(value)
 }

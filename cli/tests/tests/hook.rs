@@ -222,6 +222,63 @@ fn a_read_while_the_index_builds_leaves_its_relations_out_and_says_so_once() {
     assert!(built.contains("imported_by: 1") && !built.contains("index: still building"), "{built}");
 }
 
+/// A session that starts while the relations index can't be built in time
+/// still gets every primer section that needs no index, before its deadline.
+#[test]
+fn a_session_start_before_the_index_is_ready_gets_every_section_that_needs_none() {
+    let f = shop();
+    let _building = tracer_cli_tests::hold_index_lock(&f.root, "relations_edges");
+    let started = std::time::Instant::now();
+    let start = f.hook("SessionStart", "claude", &input(&f, json!({"source": "startup"})), &["--deadline-ms", "3000"], &[]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
+    start.ok();
+    let context = start.context();
+    assert!(context.contains("## Environment") && context.contains("## Identity"), "{context}");
+    let layout = context.lines().find(|line| line.starts_with("  📁 src/")).unwrap_or_else(|| panic!("{context}"));
+    assert!(layout.contains("files: 2") && !layout.contains("cyclomatic_complexity"), "Layout leaves out the complexity the index stores: {layout}");
+    assert!(!context.contains("## Spine"), "the Spine reads the index: {context}");
+}
+
+/// A hook and a shell `trace` call see different `TMPDIR`s under Claude
+/// Code's sandbox, and still keep one record for the session.
+#[test]
+fn a_hook_and_a_trace_call_with_different_temp_folders_share_one_record() {
+    let f = shop();
+    let hook_temp = f.tmp.join("hook");
+    let shell_temp = f.tmp.join("shell");
+    f.hook("PostToolUse", "claude", &read(&f, "src/lib.rs"), &[], &[("TMPDIR", hook_temp.to_str().unwrap())]).ok();
+    f.trace_env(&["read", "src/shop.rs"], &[("AGENT_SESSION_ID", SESSION), ("TMPDIR", shell_temp.to_str().unwrap())]).ok();
+    let held = held(&f, "root");
+    assert!(held.iter().any(|path| path.ends_with("src/lib.rs")) && held.iter().any(|path| path.ends_with("src/shop.rs")), "{held:?}");
+}
+
+/// A Subagent's `trace` call inside `bash -c` is credited to the Subagent.
+#[test]
+fn a_subagents_trace_call_inside_a_shell_script_lands_in_its_own_record() {
+    let f = shop();
+    let extra = json!({"agent_id": "sub-4", "tool_name": "Bash", "tool_input": {"command": "bash -c \"trace read src/lib.rs\""}});
+    let rewritten = f.hook("PreToolUse", "claude", &input(&f, extra), &[], &[]).json();
+    let line = rewritten["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap().to_string();
+    assert_eq!(line, "bash -c \"trace --agent sub-4 read src/lib.rs\"");
+
+    let trace = f.command(&f.root, ["--version"], &[("AGENT_SESSION_ID", SESSION)]);
+    let mut shell = std::process::Command::new("bash");
+    shell.arg("-c").arg(&line).current_dir(&f.root);
+    for (key, value) in trace.get_envs() {
+        match value {
+            Some(value) => shell.env(key, value),
+            None => shell.env_remove(key),
+        };
+    }
+    let bin = std::path::Path::new(trace.get_program()).canonicalize().unwrap_or_else(|_| trace.get_program().into());
+    let path = std::env::var("PATH").unwrap_or_default();
+    shell.env("PATH", format!("{}:{path}", bin.parent().map(|parent| parent.to_string_lossy().into_owned()).unwrap_or_default()));
+    let ran = shell.output().unwrap();
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    assert!(held(&f, "sub-4").iter().any(|path| path.ends_with("src/lib.rs")), "{:?}", held(&f, "sub-4"));
+    assert!(!held(&f, "root").iter().any(|path| path.ends_with("src/lib.rs")), "{:?}", held(&f, "root"));
+}
+
 /// A read whose stored index is one update behind, while another call
 /// brings it up to date, answers from the stored index without waiting.
 #[test]
@@ -376,12 +433,7 @@ fn a_codex_shell_read_brings_the_docs_its_file_reaches() {
 #[test]
 fn a_hook_past_its_deadline_records_nothing() {
     let f = shop();
-    let late = tracer_cli_tests::trace_with_input(
-        &f.root,
-        ["hook", "SessionStart", "--harness", "claude", "--deadline-ms", "0"],
-        &[("TMPDIR", f.tmp.to_str().unwrap())],
-        Some(&input(&f, json!({"source": "startup"})).to_string()),
-    );
+    let late = f.hook("SessionStart", "claude", &input(&f, json!({"source": "startup"})), &["--deadline-ms", "0"], &[]);
     assert_ne!(late.code, 0, "the deadline ends the process: {}", late.stderr);
     // The docs the harness loads itself are recorded whatever the hook
     // prints; what the hook printed is not.

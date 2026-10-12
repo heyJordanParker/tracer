@@ -370,7 +370,7 @@ pub fn run(
                         }
                     }
                     let room = crate::output::budget().map(|budget| (budget / paths.len()).saturating_sub(content.len()));
-                    print!("{}", super::docs::reached(std::slice::from_ref(&p), room, "trace_context", &mut shown));
+                    print!("{}", crate::docs::reached(std::slice::from_ref(&p), room, "trace_context", &mut shown));
                     std::io::stdout().flush()?;
                 }
                 // JSON makes no offers, so its delivery holds only the read.

@@ -565,6 +565,6 @@ fn one(path: &Path, show_hidden: bool, recent: bool, limit: Option<usize>, as_js
     if shortened > 0 {
         answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "entries")));
     }
-    super::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_list", delivery)?;
+    crate::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_list", delivery)?;
     Ok(value)
 }

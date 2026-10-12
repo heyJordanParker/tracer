@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use super::delivery::Kind;
 use super::{agent_dir, hold, key_of, write_atomically};
-use crate::commands::nested_memory::LoadedMemory;
+use crate::nested_memory::LoadedMemory;
 
 const VERSION: u32 = 1;
 const FILE: &str = "record.json";

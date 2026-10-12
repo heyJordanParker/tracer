@@ -307,11 +307,47 @@ pub fn run_streamed(
     command(&Sink { as_json, filter })?;
     if !as_json {
         let mut delivery = crate::session::Delivery::default();
-        print!("{}", crate::relations::index_state(&mut delivery));
+        print!("{}", index_state(&mut delivery));
         std::io::stdout().flush()?;
         delivery.commit();
     }
     Ok(())
+}
+
+/// The inline trim marker of a cut file or doc. It sits in the content
+/// stream itself, at the end, so an agent reading top-to-bottom reaches it
+/// and no consumer can drop it.
+pub fn trim_marker(file: &str, flags: &str, last_line: usize, selection_end: usize, total_lines: usize) -> String {
+    // A path carrying whitespace has to survive being pasted into a shell.
+    let quoted = if file.contains(char::is_whitespace) {
+        format!("'{}'", file.replace('\'', r"'\''"))
+    } else {
+        file.to_string()
+    };
+    let trace = trace_command();
+    // The selection's last line was reached, so the trim cut that line.
+    if last_line >= selection_end {
+        return format!("\n[trimmed at L{last_line} of {total_lines} — whole: {trace} read {quoted} --all{flags}]\n");
+    }
+    format!(
+        "\n[trimmed at L{last_line} of {total_lines} — continue: {trace} read {quoted} --lines {}:{}{flags}]\n",
+        last_line + 1,
+        selection_end
+    )
+}
+
+/// The `IndexState` notice, once per agent context, for each repository
+/// this call left relations out of. It names `trace cache build`, which
+/// finishes the index for an agent that only ever sees hooks.
+pub fn index_state(delivery: &mut crate::session::Delivery) -> String {
+    crate::relations::left_out_roots()
+        .iter()
+        .filter_map(|root| {
+            let line = crate::relations::notice(root);
+            let offer = delivery.offer(crate::session::Kind::IndexState, &root.to_string_lossy(), &serde_json::json!(line));
+            (!matches!(offer, crate::session::Offer::Same)).then_some(line)
+        })
+        .collect()
 }
 
 /// The lifecycle for a command whose result is one `Value`. `Value` is

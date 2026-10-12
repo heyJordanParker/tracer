@@ -8,7 +8,7 @@ Use this Reference when a trace command is slow, stale, missing dependencies, or
 It stores complexity, lines of code, language, declarations with their visibility, imports and re-exports, and git activity. It invalidates per file when content changes.
 
 ### Session records live outside the cache
-Each Agent's record of what it was shown is `$TMPDIR/tracer-<uid>/sessions/<session_id>/<agent_id>/record.json`. Without a session id nothing is recorded. `trace docs reset` clears it, and no cache verb touches it.
+Each Agent's record of what it was shown is `tracer-<uid>/sessions/<session_id>/<agent_id>/record.json` in the user's own temporary folder, never under `TMPDIR`. Without a session id nothing is recorded. `trace docs reset` clears it, and no cache verb touches it.
 
 ## 2. Prebuild before heavy use
 

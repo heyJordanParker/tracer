@@ -1,6 +1,6 @@
 //! `trace docs load <path>` — the hook-facing alias forwarding to path-mode
 //! plus path-mode itself. Black-box assertions on the unified response shape,
-//! log emission, and source/triggering metadata round-trip.
+//! log emission, and source metadata round-trip.
 //!
 //! Pins the contract `inject-docs.sh` depends on:
 //!   - response includes `docs` (new) and may include `already_loaded`
@@ -8,8 +8,6 @@
 //!     to the agent
 //!   - the docs sent are recorded with the response, under the supplied
 //!     `--source` value
-//!   - `--triggering-tool` and `--triggering-command` are echoed in the
-//!     query and recorded nowhere
 //!   - second invocation surfaces nothing new (already_loaded carries the
 //!     full ancestor set; `docs` is empty; `doc_count` is 0)
 //!   - the `load` sub-verb and path-mode share one response shape
@@ -208,50 +206,6 @@ fn emissions_are_recorded_under_the_supplied_source() {
     }
 }
 
-#[test]
-fn triggering_flags_are_echoed_in_the_query_and_recorded_nowhere() {
-    let f = docs_repo();
-    let sid = fresh_session_id("trigger");
-    let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
-
-    let r = f.trace_env(
-        &[
-            "docs",
-            "sub/util.py",
-            "--triggering-tool",
-            "Bash",
-            "--triggering-command",
-            "trace info sub/util.py",
-            "--json",
-        ],
-        &env,
-    );
-    r.ok();
-    let v = r.view();
-    assert_eq!(v["triggering_tool"], "Bash", "{v}");
-    assert_eq!(v["triggering_command"], "trace info sub/util.py", "{v}");
-
-    let docs = recorded(&f, &sid, "root");
-    assert_eq!(docs.len(), 2, "{docs:?}");
-    for doc in &docs {
-        assert!(doc.get("triggering_tool").is_none(), "{doc}");
-        assert!(doc.get("triggering_command").is_none(), "{doc}");
-    }
-}
-
-#[test]
-fn omitted_triggering_flags_echo_as_null() {
-    let f = docs_repo();
-    let sid = fresh_session_id("no-trigger");
-    let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
-
-    let r = f.trace_env(&["docs", "sub/util.py", "--json"], &env);
-    r.ok();
-    let v = r.view();
-    assert!(v["triggering_tool"].is_null(), "{v}");
-    assert!(v["triggering_command"].is_null(), "{v}");
-}
-
 // --- cross-source dedupe --------------------------------------------------
 
 #[test]
@@ -378,19 +332,8 @@ fn no_session_id_means_load_still_returns_shape_and_writes_no_log() {
     // response shape so a calling hook gets a structured "nothing was new,
     // nothing was loaded" answer instead of an error.
     let f = docs_repo();
-    let r = std::process::Command::new(tracer_cli_tests::trace_bin())
-        .args([
-            "docs",
-            "sub/util.py",
-            "--source",
-            "trace_inject_hook",
-            "--json",
-        ])
-        .current_dir(&f.root)
-        .env("HOME", &f.root)
-        .env_remove("AGENT_SESSION_ID")
-        .env_remove("CODEX_THREAD_ID")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
+    let r = f
+        .command(&f.root, ["docs", "sub/util.py", "--source", "trace_inject_hook", "--json"], &[])
         .output()
         .expect("spawn trace");
     assert!(

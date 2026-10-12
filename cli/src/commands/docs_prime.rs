@@ -32,7 +32,7 @@
 //! `source = "context_prime_session_start" | "context_prime_post_compact"`.
 //! No-op when the session id is absent, so standalone tracer use stays valid.
 
-use super::nested_memory;
+use crate::nested_memory;
 use crate::session;
 use crate::cache;
 use anyhow::Result;

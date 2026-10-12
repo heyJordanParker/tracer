@@ -6,6 +6,7 @@ mod calls;
 mod ccn;
 mod commands;
 mod digest;
+mod docs;
 mod docs_graph;
 mod extraction;
 mod file_facts;
@@ -16,17 +17,19 @@ mod jsonfmt;
 mod lang;
 mod matches;
 mod memo;
+mod nested_memory;
 mod output;
-mod summary;
+mod paths_match;
 mod pathval;
 mod primer;
 mod process;
 mod relations;
-mod session;
 mod repo_context;
 mod repo_files;
 mod sections;
+mod session;
 mod shell;
+mod summary;
 mod surface;
 mod timing;
 mod yamlfmt;
@@ -330,13 +333,12 @@ enum Command {
     },
     /// Project-docs surface: path-scoped deduped set (default), `--graph` for
     /// the whole-repo docs graph, `status` for the session manifest, `reset`
-    /// to forget what was loaded, `prime` to record what the harness loaded,
-    /// or `archive`, which does nothing.
+    /// to forget what was loaded, or `prime` to record what the harness loaded.
     #[command(args_conflicts_with_subcommands = true)]
     Docs {
         /// Paths for the default path-mode (`trace docs <paths>`), or the one
         /// path for `--graph` (optional; defaults to the cwd's repo root).
-        /// Replaced by any present sub-verb (`status`, `reset`, `archive`, `prime`).
+        /// Replaced by any present sub-verb (`status`, `reset`, `prime`).
         paths: Vec<PathBuf>,
         /// A doc the triggering command delivers itself, never sent here.
         #[arg(long = "skip", value_name = "PATH")]
@@ -352,14 +354,6 @@ enum Command {
         /// Recorded verbatim as each sent doc's `source`.
         #[arg(long, default_value = "trace_docs")]
         source: String,
-        /// Tool that triggered this load (Bash, Read, Glob, …). Echoed in
-        /// the JSON query only.
-        #[arg(long = "triggering-tool")]
-        triggering_tool: Option<String>,
-        /// Command string that triggered this load. Echoed in the JSON query
-        /// only.
-        #[arg(long = "triggering-command")]
-        triggering_command: Option<String>,
         #[arg(long)]
         json: bool,
         #[command(subcommand)]
@@ -462,12 +456,6 @@ enum DocsCommand {
         /// the JSON query.
         #[arg(long, default_value = "trace_docs_reset")]
         source: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Does nothing: each agent's record stays under its own agent id, so a
-    /// resumed Subagent finds it, and records untouched for 7 days are swept.
-    Archive {
         #[arg(long)]
         json: bool,
     },
@@ -742,8 +730,6 @@ fn run() -> Result<()> {
             directory,
             graph,
             source,
-            triggering_tool,
-            triggering_command,
             json,
             command,
         } => match command {
@@ -752,9 +738,6 @@ fn run() -> Result<()> {
             }),
             Some(DocsCommand::Reset { source, json }) => {
                 output::run_value(json, filter, || commands::docs::run_reset(&source, json))
-            }
-            Some(DocsCommand::Archive { json }) => {
-                output::run_value(json, filter, || commands::docs::run_archive(json))
             }
             Some(DocsCommand::Prime { files, reason, json }) => output::run_value(json, filter, || {
                 let parsed = commands::docs_prime::parse_reason(&reason)?;
@@ -775,8 +758,6 @@ fn run() -> Result<()> {
                     &skip,
                     directory,
                     &source,
-                    triggering_tool.as_deref(),
-                    triggering_command.as_deref(),
                     json,
                     filter.is_none(),
                     sink,

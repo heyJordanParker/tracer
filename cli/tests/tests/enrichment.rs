@@ -2612,8 +2612,8 @@ fn docs_repo() -> Fixture {
     f
 }
 
-/// Unique per-test session id. Each fixture's `TMPDIR` already keeps its
-/// records apart; the id keeps two sessions in one test apart.
+/// Unique per-test session id. Each fixture's session suffix already keeps
+/// its records apart; the id keeps two sessions in one test apart.
 fn fresh_session_id(tag: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3382,15 +3382,8 @@ fn a_call_whose_output_never_arrives_records_nothing_as_shown() {
         ["structure", "ledger.py"].as_slice(),
     ] {
         let sid = fresh_session_id("closed-stdout");
-        let child = std::process::Command::new(tracer_cli_tests::trace_bin())
-            .args(args)
-            .current_dir(&f.root)
-            .env("HOME", &f.root)
-            .env("TMPDIR", &f.tmp)
-            .env("AGENT_SESSION_ID", &sid)
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .env_remove("CODEX_THREAD_ID")
-            .env_remove("TRACER_AGENT_ID")
+        let child = f
+            .command(&f.root, args, &[("AGENT_SESSION_ID", sid.as_str())])
             .stdout(tracer_cli_tests::closed_stdout())
             .stderr(std::process::Stdio::piped())
             .spawn()

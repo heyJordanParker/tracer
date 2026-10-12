@@ -1,10 +1,13 @@
 //! The agent's session: who the agent is, and what its context holds.
 //!
-//! An agent's record lives at `$TMPDIR/tracer-<uid>/sessions/<session>/`,
+//! An agent's record lives at `<user temp>/tracer-<uid>/sessions/<session>/`,
 //! keyed by absolute path, so a session that works across several
-//! repositories keeps one record and one reset clears it. Every writer an
-//! agent has, its hooks, its sandboxed shell, and a Codex agent under
-//! `workspace-write`, can write to that per-user folder.
+//! repositories keeps one record and one reset clears it. The user temp
+//! folder is the operating system's, never `TMPDIR`: a harness that gives
+//! its shell another `TMPDIR` than its hooks, as Claude Code's sandbox does,
+//! would otherwise split one agent's record in two. A writer that can't
+//! write there, such as that sandboxed shell, reads the record and records
+//! nothing.
 //!
 //! - `<agent>/record.json` is the agent's record (`record.rs`).
 //! - `<agent>.lock` beside it serializes every change to that record.
@@ -82,14 +85,55 @@ fn agent_id() -> String {
         .unwrap_or_else(|| AGENT_ID_DEFAULT.to_string())
 }
 
-/// `$TMPDIR/tracer-<uid>/sessions/`, the folder every session's record sits in.
-fn sessions_root() -> PathBuf {
-    std::env::temp_dir().join(format!("tracer-{}", unsafe { libc::getuid() })).join("sessions")
+/// `<user temp>/tracer-<uid>/`, the folder that holds this user's tracer
+/// state: every session's record and the background build's lock. `None`
+/// when it can't be made, or when it isn't a folder this user owns: in a
+/// temp folder every user shares, another user could make it first.
+pub(crate) fn user_folder() -> Option<PathBuf> {
+    static FOLDER: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FOLDER
+        .get_or_init(|| {
+            use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+            let uid = unsafe { libc::getuid() };
+            let folder = user_temp_dir().join(format!("tracer-{uid}"));
+            let _ = fs::DirBuilder::new().mode(0o700).create(&folder);
+            let metadata = fs::symlink_metadata(&folder).ok()?;
+            if !metadata.is_dir() || metadata.uid() != uid {
+                return None;
+            }
+            // A folder an earlier tracer made with the default mode is this
+            // user's own, so it is made private rather than refused.
+            if metadata.mode() & 0o077 != 0 {
+                fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).ok()?;
+            }
+            Some(folder)
+        })
+        .clone()
+}
+
+/// The operating system's temporary folder for this user, whatever `TMPDIR`
+/// says: macOS's `DARWIN_USER_TEMP_DIR`, else `/tmp`.
+fn user_temp_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut buffer = [0u8; libc::PATH_MAX as usize];
+        let written = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if written > 0 && written <= buffer.len() {
+            return PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..written - 1]));
+        }
+    }
+    PathBuf::from("/tmp")
+}
+
+/// The folder every session's record sits in.
+fn sessions_root() -> Option<PathBuf> {
+    Some(user_folder()?.join("sessions"))
 }
 
 /// This session's folder, `None` without a session id.
 fn session_dir() -> Option<PathBuf> {
-    Some(sessions_root().join(session_id()?))
+    Some(sessions_root()?.join(session_id()?))
 }
 
 /// This agent's folder in the session, `None` without a session id.
@@ -99,8 +143,7 @@ fn agent_dir() -> Option<PathBuf> {
 
 /// This session's folder, created for a write. Creating it is a session's
 /// first write, which removes the folders of sessions untouched for
-/// `stale_session_age`, and the records an older tracer kept inside the
-/// repository.
+/// `stale_session_age`.
 fn writable_session_dir() -> Option<PathBuf> {
     let dir = session_dir()?;
     if !dir.is_dir() {
@@ -111,7 +154,10 @@ fn writable_session_dir() -> Option<PathBuf> {
 }
 
 fn sweep(current: &Path) {
-    for entry in fs::read_dir(sessions_root()).into_iter().flatten().flatten() {
+    let Some(root) = sessions_root() else {
+        return;
+    };
+    for entry in fs::read_dir(root).into_iter().flatten().flatten() {
         let stale = entry
             .metadata()
             .and_then(|metadata| metadata.modified())
@@ -119,10 +165,6 @@ fn sweep(current: &Path) {
         if stale && entry.path() != current {
             let _ = fs::remove_dir_all(entry.path());
         }
-    }
-    let here = std::env::current_dir().ok().and_then(|cwd| crate::cache::worktree_root_for(&cwd));
-    if let Some(root) = here {
-        let _ = fs::remove_dir_all(root.join(crate::cache::CACHE_DIR_NAME).join("sessions"));
     }
 }
 

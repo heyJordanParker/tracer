@@ -13,7 +13,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracer_cli_tests::{
-    schema_directory, standard_repo, trace, trace_bin, Fixture, PUBLISHED_SCHEMA_VERSION,
+    schema_directory, standard_repo, trace, Fixture, PUBLISHED_SCHEMA_VERSION,
 };
 
 fn counting_git(f: &Fixture) -> (String, PathBuf) {
@@ -348,32 +348,15 @@ fn no_repo_root_means_reads_work_but_no_cache_is_written() {
 
     // Read paths still work: `trace read` returns the file contents,
     // `trace info` returns a JSON shape with no panic.
-    let r = Command::new(trace_bin())
-        .args(["read", "standalone.py"])
-        .current_dir(&scratch)
-        .output()
-        .expect("spawn trace read");
+    let r = trace(&scratch, ["read", "standalone.py"]);
+    r.ok();
     assert!(
-        r.status.success(),
-        "trace read outside any worktree must succeed:\n{}",
-        String::from_utf8_lossy(&r.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&r.stdout);
-    assert!(
-        stdout.contains("def f"),
-        "trace read must return live file contents outside any worktree:\n{stdout}"
+        r.stdout.contains("def f"),
+        "trace read must return live file contents outside any worktree:\n{}",
+        r.stdout
     );
 
-    let info = Command::new(trace_bin())
-        .args(["info", "standalone.py", "--json"])
-        .current_dir(&scratch)
-        .output()
-        .expect("spawn trace info");
-    assert!(
-        info.status.success(),
-        "trace info outside any worktree must succeed:\n{}",
-        String::from_utf8_lossy(&info.stderr)
-    );
+    trace(&scratch, ["info", "standalone.py", "--json"]).ok();
 
     // Nothing was persisted. No `.tracer-cache/` anywhere in or under
     // the scratch dir.

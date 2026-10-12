@@ -14,7 +14,7 @@ use std::path::Path;
 
 use super::record::{Edited, Hunk, Record, Seen};
 use super::{active, hold, key_of, Held};
-use crate::commands::nested_memory::LoadedMemory;
+use crate::nested_memory::LoadedMemory;
 
 /// What a call shows an agent once per context, until it changes: a
 /// directory's entries, keyed by the directory; a file's facts and its
