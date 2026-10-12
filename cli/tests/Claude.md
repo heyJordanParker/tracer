@@ -10,15 +10,18 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `TRACE_BIN` defaults to `trace` on `PATH`.
 - The suite asserts exit codes, stdout, stderr, JavaScript Object Notation shape, and wall-clock latency.
 - `src/lib.rs` is the shared test harness.
-- Each test fixture owns a hermetic on-disk git repository.
-- `tests/worktree_anchoring.rs` pins the worktree-anchored `.tracer-cache/` contract, and `-C`: it answers for the repository it names, keeps the session record home, carries into every follow-up command, and exits 2 for a missing directory.
+- Each test fixture owns a hermetic on-disk git repository, and a `TMPDIR` beside it that every `trace` run from the fixture sees, so each fixture's session records start empty and stay out of the worktree.
+- A test that spawns `trace` itself instead of through the fixture passes `TMPDIR=<fixture>.tmp`, or its session writes land where the fixture never reads.
+- `Fixture::record(session, agent)` reads an Agent's `record.json`.
+- `Fixture::hook(event, harness, input, flags, env)` runs `trace hook` with `input` on stdin, and `Run::context` reads its answer's extra context.
+- `tests/worktree_anchoring.rs` pins the worktree-anchored `.tracer-cache/` contract, and `-C`: it answers for the repository it names, carries into every follow-up command, and exits 2 for a missing directory, and a session keeps one record across the repositories it reads.
 - `tests/cache_and_backend.rs` pins the cache lifecycle and the single AST complexity backend.
 - `tests/freshness.rs` pins that every call reflects the bytes on disk when it runs.
 - `tests/concurrency.rs` pins that concurrent calls serialize index maintenance onto one update and all answer cleanly, and that an index update never waits on another schema's lock.
 - `tests/architecture_commands.rs` and `tests/declarations_and_references.rs` pin the relations commands and the resolution model.
 - `tests/docs_load.rs` and `tests/docs_graph.rs` pin doc-graph recognition.
 - `tests/docs_prime.rs` pins the context-primer auto-load set.
-- `tests/session_log.rs` and `tests/docs_load.rs` pin content-hash dedupe in the session log.
+- `tests/session.rs` and `tests/docs_load.rs` pin content-hash dedupe in the session record.
 - `tests/docs_load.rs` pins user-global Rule scope splitting.
 - `tests/document.rs` pins the one `{query, context, results, counts}` shape and the `--filter` contract.
 - `tests/enrichment.rs` pins the per-file enrichment every command carries.
@@ -28,8 +31,8 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `tests/declarations_and_references.rs` and `tests/enrichment.rs` pin declaration classification and annotations.
 - `tests/architecture_commands.rs` and `tests/primer.rs` pin the `stats` directory table and the primer's sections.
 - `tests/enrichment.rs` pins the YAML front matter once per Agent context across `read`, `info`, and `structure`, with its headline and the command's own answer on a repeat, only the lines an edit or a commit changed with a removed fact as `null`, whole again after a reset or for another Agent, every time without a session, whole in `--json`, and whole again for a `structure` file the budget cut to its headline; its `directory` block once per Agent, with only the lines a new importer changed on a repeat, a moved `at_session_start` whole, and its entries without what git ignores; a several-file `read` printing every file but the one it cannot answer and recording none it did not print; a `context`, `read`, `info`, or `structure` whose stdout closes before it prints recording nothing as shown; and `--budget` fitting on `read`, `context`, and `docs`.
-- `tests/session_log.rs` pins `shown.json` holding each directory block, its entries as their content hash, until a context reset, and a resumed Subagent's first write keeping its archived record.
-- `tests/docs_reset.rs` pins that a reset clears shown facts and listings with no `view.json` on disk.
+- `tests/session.rs` pins `record.json`: one per Agent, with the `--agent` flag naming it; each listing kept as line hashes until a context reset; one write per `read`; a record of another version reading as empty; `docs archive` leaving a Subagent's record in place; a session outside any repository keeping a record; and a session's first write removing the old in-repository records.
+- `tests/docs_reset.rs` pins that a reset empties the whole record, shown facts and listings included.
 - `tests/declarations_and_references.rs` holds the per-language inventory fixture: one source per language whose declarations cover that language's row set, asserting `header`, `header_line`, `line`, `end_line`, `container`, and `parent` for each.
 - `tests/declarations_and_references.rs` pins the ctags fallback on a shell fixture, the data-format deny list, retained Markdown headings, and that a warm `context` or `read` spawns no ctags.
 - `tests/enrichment.rs` pins the surface on the first and second `context` of one session, on `read`, `info`, a window, `--offset`/`--limit`, the batch `--json` `results[].content`, `read --at`, and a budget-trimmed read.
@@ -45,11 +48,12 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `tests/enrichment.rs` pins a `structure` over many files keeping every file's declarations and naming the whole command in one closing line.
 - `tests/cache_and_backend.rs` pins that a file spelled differently on a case-insensitive disk settles in the relations index, so a warm call takes no lock.
 - `tests/architecture_commands.rs` pins the surface row on a `defines`, `usages`, and `dependencies` result and the unfabricated module row, a missing symbol naming the repository searched, and a path given as the symbol naming the `--path` command.
-- `tests/session_log.rs` and `tests/concurrency.rs` pin the session directory baseline and the `status` and `diff` directory block.
-- `tests/session_log.rs` pins the session-log event set and read coverage.
+- `tests/session.rs` and `tests/concurrency.rs` pin the session directory baseline and the `status` and `diff` directory block.
+- `tests/session.rs` pins the record's doc entries and read coverage.
+- `tests/cache_and_backend.rs` pins that neither `cache clear` nor `cache clear --all` touches the session record.
 - `tests/enrichment.rs` pins doc delivery: a doc longer than the budget arriving in parts, every line once and in order; a doc read in part continuing after the read; a doc sent whole staying loaded after a partial read; Markdown read verbatim counting as read; several paths with `--skip`; and `--agent` keeping a Subagent's record its own.
 - `tests/concurrency.rs` pins that concurrent doc deliveries for one session never send the same lines.
-- `tests/concurrency.rs` pins that one Agent's parallel windowed `context` calls wait on its lock for under a tenth of their render, because each resolves its `calls:` before its first gate.
+- `tests/concurrency.rs` pins that one Agent's parallel windowed `context` calls wait on its lock for under a tenth of their render, because each resolves its `calls:` before its first offer.
 - `tests/docs_status.rs` pins that a `trace docs` or `read --docs` whose stdout closes before it prints records no doc as sent, in text and `--json`, and that `trace docs --json --filter` records none.
 - `tests/concurrency.rs` holds the deadlock tripwire: a 600-source fixture whose primer runs twenty times under a ten-second deadline.
 - `tests/speed.rs` contains loose regression tripwires for command latency.
@@ -57,3 +61,4 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `survey` outside a git repository exits 0 with structurally valid empty JavaScript Object Notation.
 - `status` outside a git repository exits 0 with structurally valid empty JavaScript Object Notation.
 - Explicit not-found errors use stderr and exit 2.
+- A failing `ctags` is named on stderr on the call that extracts the file and on every call that reads the stored failure, the other files still answer, and the run exits 2.

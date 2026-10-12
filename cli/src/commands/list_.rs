@@ -100,22 +100,35 @@ impl FileRow {
     /// The file's line in a listing: its code facts, then its git headline.
     fn headline(&self) -> Option<String> {
         let mut map = Map::new();
+        for (key, value) in self.headline_lines() {
+            let key = match key.as_str() {
+                "git.status" => "git",
+                key => key.strip_prefix("git.").unwrap_or(key),
+            };
+            map.insert(key.into(), value);
+        }
+        (!map.is_empty()).then(|| crate::yamlfmt::flow(&Value::Object(map), false))
+    }
+
+    /// The facts `headline` shows, under `Facts::to_map`'s keys, a git one
+    /// by its dotted path.
+    fn headline_lines(&self) -> Map<String, Value> {
+        let mut lines = Map::new();
         if let Some(code) = &self.code {
             for key in ["lines", "cyclomatic_complexity", "complexity_rank"] {
                 if let Some(value) = code.get(key) {
-                    map.insert(key.into(), value.clone());
+                    lines.insert(key.into(), value.clone());
                 }
             }
         }
         if let Some(git) = &self.git {
-            for (key, value) in git {
-                let key = if key == "status" { "git" } else { key.as_str() };
-                if matches!(key, "git" | "commits_last_30_days" | "last_commit") {
-                    map.insert(key.into(), value.clone());
+            for key in ["status", "commits_last_30_days", "last_commit"] {
+                if let Some(value) = git.get(key) {
+                    lines.insert(format!("git.{key}"), value.clone());
                 }
             }
         }
-        (!map.is_empty()).then(|| crate::yamlfmt::flow(&Value::Object(map), false))
+        lines
     }
 }
 
@@ -251,7 +264,7 @@ pub fn run(paths: &[PathBuf], show_hidden: bool, recent: bool, limit: Option<usi
 }
 
 fn one(path: &Path, show_hidden: bool, recent: bool, limit: Option<usize>, as_json: bool) -> Result<Value> {
-    crate::pathval::require_dir(path, "PATH");
+    crate::pathval::require_dir(path, "PATH")?;
     // Canonicalize the displayed path (drops trailing `/.`, resolves
     // symlinks).
     let base = path
@@ -507,6 +520,10 @@ fn one(path: &Path, show_hidden: bool, recent: bool, limit: Option<usize>, as_js
         .max()
         .unwrap_or(0)
         .min(48);
+    // A file's facts print once per agent context; its size and age are the
+    // listing's own answer.
+    let mut delivery = crate::session::Delivery::default();
+    let mut offered: Vec<Option<String>> = vec![None; rows.len()];
     for f in &files_out {
         let mut line = format!(
             "  {:<name_width$}  {:>8}  {}",
@@ -514,9 +531,13 @@ fn one(path: &Path, show_hidden: bool, recent: bool, limit: Option<usize>, as_js
             fmt_size(f.size_bytes),
             fmt_mtime(f.mtime_ns),
         );
-        if let Some(headline) = f.headline() {
+        let offer = f
+            .headline()
+            .and_then(|headline| crate::summary::offer_lines(&mut delivery, &base.join(&f.name), f.headline_lines()).map(|key| (key, headline)));
+        if let Some((_, headline)) = &offer {
             line.push_str(&format!("  {headline}"));
         }
+        offered.push(offer.map(|(key, _)| key));
         rows.push(crate::output::Entry {
             rank: -(rows.len() as i64),
             levels: vec![line.trim_end().to_string(), format!("  {}", f.name)],
@@ -534,14 +555,16 @@ fn one(path: &Path, show_hidden: bool, recent: bool, limit: Option<usize>, as_js
     let root = format!("{}/", base.to_string_lossy());
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let fixed = root.len() + 1 + footer.len() + 1 + crate::output::closing_room(rows.len(), "entries");
-    let (texts, shortened) = crate::output::fit_listing(&rows, &names, fixed);
-    println!("{root}");
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &names, fixed);
+    crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
+    let mut answer = format!("{root}\n");
     for text in texts {
-        println!("{text}");
+        answer.push_str(&format!("{text}\n"));
     }
-    println!("{footer}");
+    answer.push_str(&format!("{footer}\n"));
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, rows.len(), "entries"));
+        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "entries")));
     }
+    super::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_list", delivery)?;
     Ok(value)
 }

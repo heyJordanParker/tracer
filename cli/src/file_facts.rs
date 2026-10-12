@@ -19,7 +19,7 @@
 
 use crate::cache;
 use crate::ccn;
-use crate::extraction::{self, ExtractionResult};
+use crate::extraction::{self, Extraction, ExtractionResult};
 use crate::git_activity::{self, GitActivity};
 use crate::repo_files::Stamp;
 use crate::{memo, repo_context};
@@ -29,9 +29,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileFacts {
     pub path: String,
     pub language: Option<String>,
@@ -68,6 +70,16 @@ pub struct FileFacts {
     pub mtime_ns: i64,
     pub size_bytes: i64,
     pub extraction: Option<ExtractionResult>,
+    /// Why `ctags` gave this content no declarations, when it failed. Stored
+    /// so the same content is never retried and every answer names it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_failure: Option<extraction::Failure>,
+    /// `extraction::ctags_build`: the `ctags` the declarations came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctags: Option<extraction::CtagsBinary>,
+    /// The file's leading comment, `extraction::leading_comment`'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_comment: Option<String>,
 }
 
 /// Files resolved per `get_batch` call. The bulk resolver returns every
@@ -88,8 +100,18 @@ impl FileFacts {
         serde_json::to_value(self).expect("FileFacts is serializable")
     }
 
+    /// Stored facts, read back. Facts `ctags` gave are a miss once a
+    /// different `ctags`, or one where there was none, is on `PATH`, so the
+    /// file extracts again. A stored `ctags` failure is reported again,
+    /// because the answer that uses these facts is thinner for it.
     fn from_bytes(bytes: &[u8]) -> Option<FileFacts> {
         let facts: FileFacts = serde_json::from_slice(bytes).ok()?;
+        if !extraction::ctags_build_holds(&facts.path, facts.ctags.as_ref()) {
+            return None;
+        }
+        if let Some(failure) = &facts.extraction_failure {
+            extraction::report_failure(Some(&facts.path), &failure.reason);
+        }
         if facts.rank != rank(facts.cyclomatic_complexity_total) {
             return None;
         }
@@ -122,10 +144,10 @@ impl FileFacts {
 
 pub fn extraction_of(bytes: &[u8], path: &str, repo_root: &Path) -> Option<crate::extraction::ExtractionResult> {
     let key = cache::file_hash_from_bytes(bytes, &repo_root.join(path), repo_root);
-    cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root)
-        .and_then(|stored| FileFacts::from_bytes(&stored))
-        .and_then(|facts| facts.extraction)
-        .or_else(|| crate::extraction::extract(bytes, path))
+    match cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root).and_then(|stored| FileFacts::from_bytes(&stored)) {
+        Some(facts) => facts.extraction,
+        None => crate::extraction::extract(bytes, path).extracted(),
+    }
 }
 
 /// Join the git facts onto code facts. `git_activity` owns every one of them
@@ -166,22 +188,23 @@ pub fn rank(complexity: i64) -> &'static str {
     }
 }
 
-/// CCN scalars from already-computed per-function facts, falling back to
-/// scc when there are none.
-fn ccn_scalars(
-    functions: &[ccn::FunctionFact],
-    scc_data: Option<&repo_context::FileMetrics>,
-) -> (i64, i64, i64) {
-    if !functions.is_empty() {
-        let ccn_total: i64 = functions.iter().map(|f| f.cyclomatic_complexity).sum();
-        let ccn_max: i64 = functions
-            .iter()
-            .map(|f| f.cyclomatic_complexity)
-            .max()
-            .unwrap_or(0);
-        return (ccn_total, ccn_max, functions.len() as i64);
+/// CCN scalars from the per-function facts: total, max, and count.
+fn ccn_scalars(functions: &[ccn::FunctionFact]) -> (i64, i64, i64) {
+    let ccn_total: i64 = functions.iter().map(|f| f.cyclomatic_complexity).sum();
+    let ccn_max: i64 = functions.iter().map(|f| f.cyclomatic_complexity).max().unwrap_or(0);
+    (ccn_total, ccn_max, functions.len() as i64)
+}
+
+/// scc's count for a file whose code gives none of its own: its complexity
+/// when it has no functions, its language when nothing extracted it.
+fn with_scc(facts: &mut FileFacts, scc_data: Option<&repo_context::FileMetrics>) {
+    if facts.functions.is_empty() {
+        facts.cyclomatic_complexity_total = scc_data.map_or(0, |data| data.ccn);
+        facts.rank = rank(facts.cyclomatic_complexity_total).to_string();
     }
-    (scc_data.map(|data| data.ccn).unwrap_or(0), 0, 0)
+    if facts.language.is_none() {
+        facts.language = scc_data.map(|data| data.language.clone());
+    }
 }
 
 /// The file's lines as an editor numbers them: a file's `lines` is every
@@ -195,7 +218,7 @@ fn requires_scc(functions: &[ccn::FunctionFact], extraction: &Option<ExtractionR
     functions.is_empty() || extraction.is_none()
 }
 
-/// Extract per-file facts. `git` is precomputed by the caller.
+/// Extract per-file code facts, with no git facts and no scc count.
 ///
 /// Single-parse: the CCN backend and the import/export extractor share ONE
 /// `tree_sitter::Tree` when the grammars coincide (py/ts/php — the only
@@ -203,24 +226,18 @@ fn requires_scc(functions: &[ccn::FunctionFact], extraction: &Option<ExtractionR
 /// parse of the dominant cost on those files. For CCN-only languages
 /// (go/rust/...) extraction is None anyway, so there is no second parse to
 /// eliminate.
-fn extract_facts(
-    path: &Path,
-    repo_root: &Path,
-    git: &GitActivity,
-    scc_data: Option<&repo_context::FileMetrics>,
-    source_bytes: &[u8],
-) -> FileFacts {
+fn extract_facts(path: &Path, repo_root: &Path, source_bytes: &[u8]) -> FileFacts {
     let relative = cache::relative_to_root(path, repo_root);
     let path_str = path.to_string_lossy().to_string();
 
     // One parse, shared. `ccn::lang_for_path` is the single source of truth
     // for the grammar; the extractor's grammar for py/ts/php is identical.
-    let (functions, extraction): (Vec<ccn::FunctionFact>, Option<extraction::ExtractionResult>) =
+    let (functions, extraction, leading_comment): (Vec<ccn::FunctionFact>, Extraction, Option<String>) =
         match ccn::lang_for_path(&path_str) {
             Some((lang_name, language)) => {
                 let mut parser = tree_sitter::Parser::new();
                 if parser.set_language(&language).is_err() {
-                    (Vec::new(), None)
+                    (Vec::new(), Extraction::Unsupported, extraction::leading_comment(source_bytes, None))
                 } else if let Some(tree) = parser.parse(source_bytes, None) {
                     let facts = ccn::facts_from_tree(&tree, source_bytes, lang_name);
                     // Reuse the tree for extraction whenever the extractor
@@ -229,60 +246,53 @@ fn extract_facts(
                     // with its extractor, so this eliminates the second parse
                     // for all of them.
                     let lower = path_str.to_lowercase();
-                    let extr = if extraction::is_supported(path) {
-                        if lower.ends_with(".py") {
-                            Some(extraction::python::extract_from_tree(&tree, source_bytes))
-                        } else if lower.ends_with(".php") {
-                            Some(extraction::php::extract_from_tree(&tree, source_bytes))
-                        } else if lower.ends_with(".ts")
-                            || lower.ends_with(".js")
-                            || lower.ends_with(".tsx")
-                            || lower.ends_with(".jsx")
-                        {
-                            let is_tsx = lower.ends_with(".tsx") || lower.ends_with(".jsx");
-                            Some(extraction::typescript::extract_from_tree(
-                                &tree,
-                                source_bytes,
-                                is_tsx,
-                            ))
-                        } else if lower.ends_with(".rs") {
-                            Some(extraction::rust::extract_from_tree(&tree, source_bytes))
-                        } else if lower.ends_with(".go") {
-                            Some(extraction::go::extract_from_tree(&tree, source_bytes))
-                        } else if lower.ends_with(".rb") {
-                            Some(extraction::ruby::extract_from_tree(&tree, source_bytes))
-                        } else if lower.ends_with(".java") {
-                            Some(extraction::java::extract_from_tree(&tree, source_bytes))
-                        } else if lower.ends_with(".c") || lower.ends_with(".h") {
-                            Some(extraction::c::extract_from_tree(&tree, source_bytes))
-                        } else {
-                            // is_supported but not a shared-grammar ext:
-                            // fall back to its own parse (rare/none).
-                            extraction::extract(source_bytes, &path_str)
-                        }
+                    let shared = if lower.ends_with(".py") {
+                        Some(extraction::python::extract_from_tree(&tree, source_bytes, &path_str))
+                    } else if lower.ends_with(".php") {
+                        Some(extraction::php::extract_from_tree(&tree, source_bytes))
+                    } else if lower.ends_with(".ts")
+                        || lower.ends_with(".js")
+                        || lower.ends_with(".tsx")
+                        || lower.ends_with(".jsx")
+                    {
+                        Some(extraction::typescript::extract_from_tree(&tree, source_bytes, &path_str))
+                    } else if lower.ends_with(".rs") {
+                        Some(extraction::rust::extract_from_tree(&tree, source_bytes))
+                    } else if lower.ends_with(".go") {
+                        Some(extraction::go::extract_from_tree(&tree, source_bytes))
+                    } else if lower.ends_with(".rb") {
+                        Some(extraction::ruby::extract_from_tree(&tree, source_bytes))
+                    } else if lower.ends_with(".java") {
+                        Some(extraction::java::extract_from_tree(&tree, source_bytes))
+                    } else if lower.ends_with(".c") || lower.ends_with(".h") {
+                        Some(extraction::c::extract_from_tree(&tree, source_bytes, &path_str))
                     } else {
                         None
                     };
-                    (facts, extr)
+                    let extr = match shared {
+                        Some(result) => Extraction::Extracted(result),
+                        // Not a shared-grammar ext: its own extractor, which
+                        // is `ctags` for a grammar like Lua's.
+                        None => extraction::extract(source_bytes, &path_str),
+                    };
+                    (facts, extr, extraction::leading_comment(source_bytes, Some((&tree, lang_name))))
                 } else {
-                    (Vec::new(), None)
+                    (Vec::new(), Extraction::Unsupported, extraction::leading_comment(source_bytes, None))
                 }
             }
             None => {
-                // No CCN grammar (e.g. markdown/json). Extraction also has
-                // none for these, so just the scc fallback path.
-                (
-                    Vec::new(),
-                    if extraction::is_supported(path) {
-                        extraction::extract(source_bytes, &path_str)
-                    } else {
-                        None
-                    },
-                )
+                // No CCN grammar (e.g. markdown/json): `ctags`, when it maps
+                // the language, else the scc fallback path.
+                (Vec::new(), extraction::extract(source_bytes, &path_str), extraction::leading_comment(source_bytes, None))
             }
         };
+    let (extraction, extraction_failure) = match extraction {
+        Extraction::Extracted(result) => (Some(result), None),
+        Extraction::Failed(reason) => (None, Some(reason)),
+        Extraction::Unsupported => (None, None),
+    };
 
-    let (ccn_total, ccn_max, function_count) = ccn_scalars(&functions, scc_data);
+    let (ccn_total, ccn_max, function_count) = ccn_scalars(&functions);
     let loc = line_count(source_bytes);
 
     let (mtime_ns, size_bytes) = match fs::metadata(path) {
@@ -290,35 +300,22 @@ fn extract_facts(
         Err(_) => (0, 0),
     };
 
-    let language = extraction
-        .as_ref()
-        .map(|e| e.language.clone())
-        .or_else(|| scc_data.map(|data| data.language.clone()));
-
     FileFacts {
         path: relative,
-        language,
+        language: extraction.as_ref().map(|e| e.language.clone()),
         loc,
         function_count,
         cyclomatic_complexity_total: ccn_total,
         cyclomatic_complexity_max: ccn_max,
         rank: rank(ccn_total).to_string(),
         functions,
-        last_modified: git.last_modified.clone(),
-        last_author: git.last_author.clone(),
-        commits_30d: git.commits_30d,
-        first_seen: git.first_seen.clone(),
-        commit_count: git.commit_count,
-        commit_count_is_floor: git.commit_count_is_floor,
-        rename_from: git.rename_from.clone(),
-        working_state: git.working_state.clone(),
-        present_in: git.present_in.clone(),
-        last_subject: git.last_subject.clone(),
-        top_author: git.top_author.clone(),
-        co_changed: git.co_changed.clone(),
         mtime_ns,
         size_bytes,
         extraction,
+        extraction_failure,
+        ctags: extraction::ctags_build(&path_str),
+        leading_comment,
+        ..FileFacts::default()
     }
 }
 
@@ -413,10 +410,6 @@ fn stamp_matches<'a>(entry: &'a IndexEntry, s: &crate::repo_files::Stamp) -> Opt
     None
 }
 
-fn mtime_index_key() -> String {
-    format!("mtime_index_v2__{}", cache::active_ccn_backend())
-}
-
 /// Process-wide memo of the mtime index, keyed by repo root — the same memo
 /// `git_activity::bulk_cached` and `repo_context::load_or_compute` keep for
 /// the other two whole-repo maps this layer reads.
@@ -438,20 +431,21 @@ static MTIME_MEMO: memo::Memo<MtimeIndex> = OnceLock::new();
 fn mtime_index_load(repo_root: &Path) -> Arc<MtimeIndex> {
     crate::timing::phase("freshness", || {
         memo::get_or_build(&MTIME_MEMO, repo_root, || {
-            cache::index(&MtimeIndexEntry { repo_root }, repo_root).unwrap_or_default()
+            cache::index(&MtimeIndexEntry { repo_root }, repo_root).ready().unwrap_or_default()
         })
     })
 }
 
 /// Merge `updates` into the index on disk and make the result the memo's
-/// current value, all under the cross-process maintenance lock.
+/// current value, all under the index's cross-process lock.
 ///
 /// The merge base is re-read from disk under the lock, never the memo: two
 /// processes that each merged into the index they loaded at start overwrote
 /// each other, and the loser's files read as moved again on the next call.
 fn mtime_index_store(repo_root: &Path, updates: Vec<(String, Stamp, String)>) {
-    let index = cache::update(&MtimeIndexEntry { repo_root }, repo_root, updates);
-    memo::replace(&MTIME_MEMO, repo_root, index);
+    if let Some(index) = cache::update(&MtimeIndexEntry { repo_root }, repo_root, updates) {
+        memo::replace(&MTIME_MEMO, repo_root, index);
+    }
 }
 
 struct MtimeIndexEntry<'a> {
@@ -463,7 +457,7 @@ impl cache::Index for MtimeIndexEntry<'_> {
     type Change = Vec<(String, Stamp, String)>;
 
     fn key(&self) -> String {
-        mtime_index_key()
+        "mtime_index_v2".to_string()
     }
 
     fn read(&self, bytes: &[u8]) -> Option<MtimeIndex> {
@@ -476,7 +470,7 @@ impl cache::Index for MtimeIndexEntry<'_> {
 
     /// The per-file entry a path's previous key named is removed, so the
     /// namespace holds one entry per file rather than one per version written.
-    fn apply(&self, stored: Option<MtimeIndex>, updates: Self::Change) -> MtimeIndex {
+    fn apply(&self, stored: Option<MtimeIndex>, updates: Self::Change) -> Option<MtimeIndex> {
         let mut index = stored.unwrap_or_default();
         for (rel, stamp, content_key) in updates {
             if let Some(previous) = index.insert(rel, stamp_entry(&stamp, &content_key)) {
@@ -485,7 +479,7 @@ impl cache::Index for MtimeIndexEntry<'_> {
                 }
             }
         }
-        index
+        Some(index)
     }
 }
 
@@ -516,17 +510,40 @@ pub fn get(path: &Path, repo_root: &Path) -> Option<FileFacts> {
 /// never rebuilt per-iteration (the loop hot-path ban in Claude.md).
 ///
 /// Fix, with no lite-facts shortcut:
-///   - supplied or complete git map, scc map, mtime index: loaded ONCE.
+///   - git map, scc map, mtime index: loaded ONCE.
 ///   - in-memory mtime fast-path: unchanged files skip read+hash+extract.
 ///   - parallel extraction for true misses only.
 ///   - the mtime index is written ONCE at the end (no per-file rewrite,
 ///     no rayon write race), atomically via the existing cache::save.
-/// Returns rel -> FileFacts for every readable input path.
+///
+/// Returns rel -> FileFacts for every readable input path, git facts joined:
+/// the facts a command shows.
 pub fn get_batch(paths: &[PathBuf], repo_root: &Path) -> HashMap<String, FileFacts> {
-    crate::timing::phase("facts", || get_batch_inner(paths, repo_root))
+    crate::timing::phase("facts", || {
+        let (resolved, _) = resolve(paths, repo_root, None);
+        let git_paths: Vec<String> = resolved.iter().map(|(_, git_rel, _)| git_rel.clone()).collect();
+        let git_map = git_activity::for_paths(repo_root, &git_paths);
+        resolved.into_iter().map(|(rel, git_rel, facts)| (rel, with_git(facts, &git_rel, &git_map))).collect()
+    })
 }
 
-fn get_batch_inner(paths: &[PathBuf], repo_root: &Path) -> HashMap<String, FileFacts> {
+/// Each file's code facts and extraction without its git facts: what the
+/// relations index and the resolver read, so neither walks git history.
+pub fn extracted(paths: &[PathBuf], repo_root: &Path) -> HashMap<String, FileFacts> {
+    crate::timing::phase("facts", || resolve(paths, repo_root, None).0.into_iter().map(|(rel, _, facts)| (rel, facts)).collect())
+}
+
+/// `extracted` that starts no extraction after `limit`, `None` when it left
+/// a file out. What it extracted is stored, so the next call starts there.
+pub fn extracted_within(paths: &[PathBuf], repo_root: &Path, limit: Option<Instant>) -> Option<HashMap<String, FileFacts>> {
+    let (resolved, complete) = crate::timing::phase("facts", || resolve(paths, repo_root, limit));
+    complete.then(|| resolved.into_iter().map(|(rel, _, facts)| (rel, facts)).collect())
+}
+
+/// Each readable path's code facts, as `(rel, git_rel, facts)`, and whether
+/// `limit` left none out.
+fn resolve(paths: &[PathBuf], repo_root: &Path, limit: Option<Instant>) -> (Vec<(String, String, FileFacts)>, bool) {
+    let cut = AtomicBool::new(false);
     let can_persist = cache::git_dir(repo_root).is_some();
     let scc: OnceLock<Arc<repo_context::Payload>> = OnceLock::new();
     let index = mtime_index_load(repo_root);
@@ -568,13 +585,10 @@ fn get_batch_inner(paths: &[PathBuf], repo_root: &Path) -> HashMap<String, FileF
             abs,
         });
     }
-    let git_paths: Vec<String> = jobs.iter().map(|job| job.git_rel.clone()).collect();
-    let git_map = git_activity::for_paths(repo_root, &git_paths);
-
-    // Parallel resolve. Each job yields (rel, FileFacts, Option<new index
-    // entry>). Index entries are merged single-threaded afterward and the
-    // index is persisted exactly once.
-    let resolved: Vec<(String, FileFacts, Option<(String, Stamp, String)>)> = jobs
+    // Parallel resolve. Each job yields (rel, git_rel, FileFacts, Option<new
+    // index entry>). Index entries are merged single-threaded afterward and
+    // the index is persisted exactly once.
+    let resolved: Vec<(String, String, FileFacts, Option<(String, Stamp, String)>)> = jobs
         .par_iter()
         .filter_map(|j| {
             // (1) in-memory stat fast-path — no I/O beyond the cached
@@ -582,7 +596,7 @@ fn get_batch_inner(paths: &[PathBuf], repo_root: &Path) -> HashMap<String, FileF
             if let Some(k) = index.get(&j.rel).and_then(|e| stamp_matches(e, &j.stamp)) {
                 if let Some(bytes) = cache::load_bytes(cache::NAMESPACE_FILE, k, repo_root) {
                     if let Some(f) = FileFacts::from_bytes(&bytes) {
-                        return Some((j.rel.clone(), with_git(f, &j.git_rel, &git_map), None));
+                        return Some((j.rel.clone(), j.git_rel.clone(), f, None));
                     }
                 }
             }
@@ -591,49 +605,42 @@ fn get_batch_inner(paths: &[PathBuf], repo_root: &Path) -> HashMap<String, FileF
             let key = cache::file_hash_from_bytes(&data, &j.abs, repo_root);
             if let Some(bytes) = cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root) {
                 if let Some(f) = FileFacts::from_bytes(&bytes) {
-                    return Some((
-                        j.rel.clone(),
-                        with_git(f, &j.git_rel, &git_map),
-                        Some((j.rel.clone(), j.stamp.clone(), key)),
-                    ));
+                    return Some((j.rel.clone(), j.git_rel.clone(), f, Some((j.rel.clone(), j.stamp.clone(), key))));
                 }
             }
-            // (3) fresh real extraction (no lite-facts).
-            let git = git_map
-                .get(&j.git_rel)
-                .cloned()
-                .unwrap_or_else(GitActivity::empty);
-            let scc_data = scc
-                .get_or_init(|| repo_context::metrics(repo_root))
-                .per_file
-                .get(&j.git_rel);
-            let facts = extract_facts(&j.abs, repo_root, &git, scc_data, &data);
-            if !can_persist
-                || (requires_scc(&facts.functions, &facts.extraction)
-                    && !scc.get().unwrap().available)
-            {
-                return Some((j.rel.clone(), facts, None));
+            // (3) fresh real extraction (no lite-facts). A file whose code
+            // gives no complexity of its own takes scc's, so only such a
+            // file runs the whole-tree scc count.
+            if limit.is_some_and(|limit| Instant::now() >= limit) {
+                cut.store(true, Ordering::Relaxed);
+                return None;
+            }
+            let mut facts = extract_facts(&j.abs, repo_root, &data);
+            let mut storable = can_persist;
+            if requires_scc(&facts.functions, &facts.extraction) {
+                let scc = scc.get_or_init(|| repo_context::metrics(repo_root));
+                with_scc(&mut facts, scc.per_file.get(&j.git_rel));
+                storable &= scc.available;
+            }
+            if !storable {
+                return Some((j.rel.clone(), j.git_rel.clone(), facts, None));
             }
             let _ = cache::save(cache::NAMESPACE_FILE, &key, &facts.to_json(), repo_root);
-            Some((
-                j.rel.clone(),
-                facts,
-                Some((j.rel.clone(), j.stamp.clone(), key)),
-            ))
+            Some((j.rel.clone(), j.git_rel.clone(), facts, Some((j.rel.clone(), j.stamp.clone(), key))))
         })
         .collect();
 
     // Merge index updates and persist ONCE (was the O(N²) fsync storm).
     let mut updates = Vec::new();
-    let mut out = HashMap::with_capacity(resolved.len());
-    for (rel, facts, upd) in resolved {
+    let mut out = Vec::with_capacity(resolved.len());
+    for (rel, git_rel, facts, upd) in resolved {
         updates.extend(upd);
-        out.insert(rel, facts);
+        out.push((rel, git_rel, facts));
     }
     if !updates.is_empty() {
         mtime_index_store(repo_root, updates);
     }
-    out
+    (out, !cut.into_inner())
 }
 
 /// Resolve a batch input path to `(absolute, repo-relative)` lexically — no

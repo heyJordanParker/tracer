@@ -16,12 +16,9 @@
 //! The batch is chunked and projected to the fields the enrichment renders,
 //! so the whole extraction set for every matched file is never resident.
 //!
-//! Also the shared `facts_by_file` join used by the relations commands
-//! (`callers`, `usages`, `defines`, `structure`) to attach each result's
-//! `source_file` facts — a render-time join of `file/` facts onto the rows
-//! those commands resolve, batched and deduped by path so a file appearing in
-//! many rows is resolved once.
 
+use crate::file_facts::RESOLVE_CHUNK;
+use crate::output::counted;
 use crate::summary::Facts;
 use crate::{cache, digest, file_facts, surface};
 use serde::ser::{SerializeMap, Serializer};
@@ -30,9 +27,6 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use crate::file_facts::RESOLVE_CHUNK;
-use crate::output::counted;
 
 #[derive(Default)]
 pub struct Match {
@@ -51,15 +45,20 @@ pub struct FileEnrichment {
     facts: Option<Facts>,
     nearest_doc: Option<String>,
     in_repository: bool,
+    /// The file's canonical path, which a session's record keys it by.
+    key: PathBuf,
 }
 
 impl FileEnrichment {
-    /// The file's line in a list: its headline facts, how many matches it
-    /// holds, and its nearest doc.
-    fn headline(&self, matches: usize) -> String {
-        let mut map = self.facts.as_ref().map(Facts::headline_map).unwrap_or_default();
+    /// The file's line in a list: how many matches it holds, which is the
+    /// answer, and with `facts`, its headline facts and its nearest doc.
+    fn headline(&self, matches: usize, facts: bool) -> String {
+        let mut map = match &self.facts {
+            Some(shown) if facts => shown.headline_map(),
+            _ => serde_json::Map::new(),
+        };
         map.insert("matches".into(), matches.into());
-        if let Some(doc) = &self.nearest_doc {
+        if let Some(doc) = self.nearest_doc.as_ref().filter(|_| facts) {
             map.insert("nearest_doc".into(), doc.clone().into());
         }
         crate::yamlfmt::flow(&Value::Object(map), false)
@@ -242,6 +241,7 @@ pub fn enrich<'a>(
                     facts: facts.map(|facts| Facts::of(facts, graph.as_ref())),
                     nearest_doc: digest::nearest_doc(path, repo_root),
                     in_repository,
+                    key: path.canonicalize().unwrap_or_else(|_| path.clone()),
                 }),
             );
         }
@@ -270,37 +270,43 @@ pub fn enrich<'a>(
 /// --show-function`'s shape: each file's header once, then every declaration
 /// that encloses a match once, its match lines (`L<n>:`) and `-C` context
 /// lines (`L<n>-`) under it. `files_only` (`-l`, `-c`) stops at each file's
-/// header, which carries its match count.
+/// header, which carries its match count. Returns the text to print. Each
+/// file's facts are offered through `delivery`, which the caller commits once
+/// the text is flushed.
 pub fn render_human(
     enriched: &[EnrichedMatch],
     files: &BTreeMap<String, Arc<FileEnrichment>>,
     surfaces: &BTreeMap<String, Vec<surface::Row>>,
     signpost: Option<&str>,
     files_only: bool,
-) {
+    delivery: &mut crate::session::Delivery,
+) -> String {
     if enriched.is_empty() {
-        println!("(no matches)");
-        if let Some(line) = signpost {
-            println!("{line}");
-        }
-        return;
+        return match signpost {
+            Some(line) => format!("(no matches)\n{line}\n"),
+            None => "(no matches)\n".to_string(),
+        };
     }
     // One entry per file, whole down to its path: the budget shortens the
     // files the fewest others import first, and names every file. A file's
     // block of lines is set off by a blank line; a one-line file is not.
     let mut entries: Vec<crate::output::Entry> = Vec::new();
+    let mut offered: Vec<Option<String>> = Vec::new();
     let mut paths: Vec<&str> = Vec::new();
     for group in enriched.chunk_by(|a, b| a.m.file == b.m.file) {
         let file = group[0].m.file.as_str();
-        let header = format!("{file}  {}", group[0].file.headline(group.len()));
+        let enrichment = &group[0].file;
+        let offer = enrichment.facts.as_ref().and_then(|facts| crate::summary::offer_headline(delivery, &enrichment.key, facts));
+        let header = format!("{file}  {}", enrichment.headline(group.len(), offer.is_some()));
         let levels = if files_only {
             vec![header, file.to_string()]
         } else {
             let rows = surfaces.get(file).map_or(&[][..], Vec::as_slice);
-            vec![format!("\n{header}{}", grouped_lines(group, rows, file)), header, file.to_string()]
+            vec![format!("\n{header}{}", grouped_lines(group, rows, file, false)), header, file.to_string()]
         };
+        offered.push(offer);
         entries.push(crate::output::Entry {
-            rank: group[0].file.imported_by(),
+            rank: enrichment.imported_by(),
             levels,
         });
         paths.push(file);
@@ -311,23 +317,92 @@ pub fn render_human(
         counted(files.len(), "file", "files"),
     );
     let fixed = footer.len() + 1 + signpost.map_or(0, |line| line.len() + 1) + crate::output::closing_room(entries.len(), "files");
-    let (texts, shortened) = crate::output::fit_listing(&entries, &paths, fixed);
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&entries, &paths, fixed);
+    // The bare path is the last level; every level above it has the header.
+    let headline_levels = if files_only { 1 } else { 2 };
+    crate::summary::withdraw_cut(delivery, &offered, &levels, headline_levels);
+    let mut out = String::new();
     for text in texts {
-        println!("{text}");
+        out.push_str(&format!("{text}\n"));
     }
-    println!("{footer}");
+    out.push_str(&format!("{footer}\n"));
     if let Some(line) = signpost {
-        println!("{line}");
+        out.push_str(&format!("{line}\n"));
     }
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, entries.len(), "files"));
+        out.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
     }
+    out
+}
+
+/// The context `trace hook` adds to a native search, which printed its own
+/// paths, counts, or lines: each matching file's headline facts, offered as
+/// its `Facts`, and its matches grouped under their declarations, offered as
+/// its `Matches`, or with `content`, whose lines the search printed, only the
+/// declarations. A file the agent was shown as it is prints nothing.
+pub fn render_native(
+    enriched: &[EnrichedMatch],
+    surfaces: &BTreeMap<String, Vec<surface::Row>>,
+    content: bool,
+    delivery: &mut crate::session::Delivery,
+) -> String {
+    let mut entries: Vec<crate::output::Entry> = Vec::new();
+    let mut offered: Vec<(Option<String>, Option<String>)> = Vec::new();
+    let mut paths: Vec<&str> = Vec::new();
+    for group in enriched.chunk_by(|a, b| a.m.file == b.m.file) {
+        let file = group[0].m.file.as_str();
+        let enrichment = &group[0].file;
+        let facts = enrichment.facts.as_ref().and_then(|facts| crate::summary::offer_headline(delivery, &enrichment.key, facts));
+        let key = enrichment.key.to_string_lossy().to_string();
+        let matched: serde_json::Map<String, Value> =
+            group.iter().map(|found| (found.m.line.to_string(), found.m.snippet.clone().into())).collect();
+        let lines = match delivery.offer(crate::session::Kind::Matches, &key, &Value::Object(matched)) {
+            crate::session::Offer::Same => None,
+            _ => Some(key),
+        };
+        let rows = surfaces.get(file).map_or(&[][..], Vec::as_slice);
+        let body = match lines {
+            Some(_) => grouped_lines(group, rows, file, content),
+            None => String::new(),
+        };
+        if facts.is_none() && body.is_empty() {
+            continue;
+        }
+        let header = match (&facts, &enrichment.facts) {
+            (Some(_), Some(shown)) => format!("{file}  {}", shown.headline()),
+            _ => file.to_string(),
+        };
+        entries.push(crate::output::Entry {
+            rank: enrichment.imported_by(),
+            levels: vec![format!("{header}{body}"), header, file.to_string()],
+        });
+        offered.push((facts, lines));
+        paths.push(file);
+    }
+    if entries.is_empty() {
+        return String::new();
+    }
+    let fixed = crate::output::closing_room(entries.len(), "files");
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&entries, &paths, fixed);
+    for ((_, lines), level) in offered.iter().zip(&levels) {
+        if let Some(key) = lines.as_ref().filter(|_| *level >= 1) {
+            delivery.withdraw(crate::session::Kind::Matches, key);
+        }
+    }
+    let facts: Vec<Option<String>> = offered.into_iter().map(|(facts, _)| facts).collect();
+    crate::summary::withdraw_cut(delivery, &facts, &levels, 2);
+    let mut out: String = texts.iter().map(|text| format!("{text}\n")).collect();
+    if shortened > 0 {
+        out.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
+    }
+    out
 }
 
 /// One file's lines under the declarations that enclose them: each such
 /// declaration once, a match on its own line standing in for it, every
 /// matched line marked `:` and every context line `-`, as grep marks them.
-fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str) -> String {
+/// `declarations_only` keeps the declarations alone.
+fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str, declarations_only: bool) -> String {
     // Source line → marker and text; a match outranks context on a line.
     let mut lines: BTreeMap<i64, (char, &str)> = BTreeMap::new();
     for found in group {
@@ -365,6 +440,9 @@ fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str) -> 
             items.push((row.line, order, surface::depth(index, rows), ' ', surface::inline(row, file)));
         }
     }
+    if declarations_only {
+        lines.clear();
+    }
     let mut source: Vec<(i64, Option<usize>, usize, char, &str)> = Vec::new();
     let mut least: HashMap<Option<usize>, usize> = HashMap::new();
     for (line, (marker, text)) in lines {
@@ -394,62 +472,6 @@ fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str) -> 
         .collect()
 }
 
-pub struct Section {
-    pub heading: String,
-    pub files: Vec<(String, Vec<String>, usize)>,
-}
-
-pub fn render_sections(sections: &[Section], facts: &HashMap<String, Facts>, one: &str, many: &str) {
-    let entries: Vec<Vec<crate::output::Entry>> = sections
-        .iter()
-        .map(|section| {
-            section
-                .files
-                .iter()
-                .map(|(file, rows, count)| {
-                    let head = format!("    {file}");
-                    let headline = facts.get(file).map_or(String::new(), |facts| format!("  {}", facts.headline()));
-                    crate::output::Entry {
-                        rank: facts.get(file).and_then(|facts| facts.imported_by).unwrap_or(0) as i64,
-                        levels: vec![
-                            format!("{head}{headline}\n{}", rows.join("\n")),
-                            format!("{head}  {}", counted(*count, one, many)),
-                        ],
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    let whole: usize = sections
-        .iter()
-        .zip(&entries)
-        .map(|(section, entries)| section.heading.len() + 1 + entries.iter().map(|entry| entry.levels[0].len() + 1).sum::<usize>())
-        .sum();
-    let closing = crate::output::closing_room(entries.iter().map(Vec::len).sum(), "files");
-    let share = crate::output::budget()
-        .filter(|&budget| whole + closing > budget)
-        .map(|budget| budget.saturating_sub(closing) / sections.len().max(1));
-    let mut shortened = 0;
-    let mut files = 0;
-    for (section, entries) in sections.iter().zip(&entries) {
-        println!("{}", section.heading);
-        let paths: Vec<&str> = section.files.iter().map(|(file, _, _)| file.as_str()).collect();
-        let fixed = match (crate::output::budget(), share) {
-            (Some(budget), Some(share)) => budget - share + section.heading.len() + 1,
-            _ => section.heading.len() + 1,
-        };
-        let (texts, cut) = crate::output::fit_listing(entries, &paths, fixed);
-        for text in texts {
-            println!("{text}");
-        }
-        shortened += cut;
-        files += entries.len();
-    }
-    if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, files, "files"));
-    }
-}
-
 /// The one line that turns a partial search into the command that answers
 /// the question whole.
 ///
@@ -465,7 +487,7 @@ pub fn signpost(word: Option<&str>, repo_root: &Path) -> Option<String> {
     let word = word?;
     // The index answers this without resolving call sites: how many places
     // declare the word, and how many files mention it.
-    let index = crate::relations::get(repo_root);
+    let index = crate::relations::ready(repo_root)?;
     if !index.knows(word) {
         return None;
     }
@@ -475,7 +497,7 @@ pub fn signpost(word: Option<&str>, repo_root: &Path) -> Option<String> {
     }
     // The kinds live in the declaring files' extraction, not the index, so
     // they cost the declaring files only — one or two, never the repo.
-    let declarations = crate::relations::declarations(word, repo_root);
+    let declarations = crate::relations::declarations(&index, word);
     let mut kinds: Vec<&str> = Vec::new();
     for candidate in &declarations {
         if !kinds.contains(&candidate.declaration.kind.as_str()) {
@@ -495,6 +517,23 @@ pub fn signpost(word: Option<&str>, repo_root: &Path) -> Option<String> {
     ))
 }
 
+/// The signpost to print, offered through `delivery` once per agent context
+/// for `word` in the repository at `repo_root`: `None` once the agent was
+/// shown this signpost as it is.
+pub fn offer_signpost<'a>(
+    line: Option<&'a str>,
+    word: Option<&str>,
+    repo_root: &Path,
+    delivery: &mut crate::session::Delivery,
+) -> Option<&'a str> {
+    let (line, word) = (line?, word?);
+    let key = format!("{}#{word}", repo_root.display());
+    match delivery.offer(crate::session::Kind::Signpost, &key, &Value::String(line.to_string())) {
+        crate::session::Offer::Same => None,
+        _ => Some(line),
+    }
+}
+
 /// The searched word when the search term is a bare name, so a signpost is
 /// even possible: a regex or a phrase names no symbol.
 pub fn searched_name(term: &str) -> Option<&str> {
@@ -502,22 +541,4 @@ pub fn searched_name(term: &str) -> Option<&str> {
         && term.len() > 1
         && !term.chars().next().is_some_and(|c| c.is_numeric());
     bare.then_some(term)
-}
-
-pub fn facts_of(loaded: &HashMap<String, file_facts::FileFacts>, repo_root: &Path) -> HashMap<String, Facts> {
-    let relations = crate::relations::get(repo_root);
-    loaded
-        .iter()
-        .map(|(rel, facts)| (rel.clone(), Facts::of(facts, relations.module_counts(rel).as_ref())))
-        .collect()
-}
-
-/// The same join as the document's `context.files` slot: each file's facts
-/// under the keys its front matter uses.
-pub fn facts_context(facts: &HashMap<String, Facts>) -> Value {
-    let mut out = serde_json::Map::with_capacity(facts.len());
-    for (path, facts) in facts {
-        out.insert(path.clone(), Value::Object(facts.to_map()));
-    }
-    Value::Object(out)
 }

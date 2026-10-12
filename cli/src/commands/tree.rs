@@ -9,7 +9,28 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-fn rank_marker(rank: &str) -> &'static str {
+/// A listing line's lead for the file at `rel`, a path under the listing's
+/// root: a line for each directory it opens that `open`, the directories of
+/// the file listed before it, did not, then its own indent and name. `open`
+/// becomes `rel`'s directories.
+pub(super) fn lead<'a>(open: &mut Vec<&'a str>, rel: &'a str) -> (String, String, &'a str) {
+    let (directories, name) = match rel.rsplit_once('/') {
+        Some((directories, name)) => (directories.split('/').collect::<Vec<_>>(), name),
+        None => (Vec::new(), rel),
+    };
+    let kept = open.iter().zip(&directories).take_while(|(a, b)| a == b).count();
+    let heading = directories
+        .iter()
+        .enumerate()
+        .skip(kept)
+        .map(|(depth, directory)| format!("{}{directory}/\n", "  ".repeat(depth + 1)))
+        .collect();
+    let indent = "  ".repeat(directories.len() + 1);
+    *open = directories;
+    (heading, indent, name)
+}
+
+pub(super) fn rank_marker(rank: &str) -> &'static str {
     match rank {
         "low" => "·",
         "medium" => "•",
@@ -71,15 +92,16 @@ fn walk(base: &Path, max_depth: usize) -> Vec<Entry> {
     // exists (symlink / `..` normalization, e.g. a symlink into a deeper
     // dir), else the lexical join (keeps indexed-but-deleted files).
     // Applied above when building `selected`.
-    let index = crate::relations::get(&repo_root);
+    let index = crate::relations::ready(&repo_root);
     for chunk in selected.chunks(file_facts::RESOLVE_CHUNK) {
         let facts_map = file_facts::get_batch(chunk, &repo_root);
         for full in chunk {
             let rel = cache::relative_to_root(full, &repo_root);
             let facts = facts_map.get(&rel);
+            let graph = index.as_ref().and_then(|index| index.module_counts(&rel));
             entries.push(Entry {
                 full: full.clone(),
-                facts: facts.map(|f| Facts::of(f, index.module_counts(&rel).as_ref())),
+                facts: facts.map(|f| Facts::of(f, graph.as_ref())),
                 max_function_complexity: facts.map_or(0, |f| f.cyclomatic_complexity_max),
             });
         }
@@ -88,7 +110,7 @@ fn walk(base: &Path, max_depth: usize) -> Vec<Entry> {
 }
 
 pub fn run(path: &Path, depth: usize, as_json: bool) -> Result<Value> {
-    crate::pathval::require_exists(path, "PATH");
+    crate::pathval::require_exists(path, "PATH")?;
     // The displayed base is the resolved path.
     let base = path
         .canonicalize()
@@ -130,49 +152,46 @@ pub fn run(path: &Path, depth: usize, as_json: bool) -> Result<Value> {
         return Ok(value);
     }
 
+    let mut delivery = crate::session::Delivery::default();
     let mut rows: Vec<crate::output::Entry> = Vec::with_capacity(entries.len());
+    let mut offered: Vec<Option<String>> = Vec::with_capacity(entries.len());
     let mut paths: Vec<&str> = Vec::with_capacity(entries.len());
     let mut open: Vec<&str> = Vec::new();
     for (e, row) in entries.iter().zip(&files) {
         let rel = row["path"].as_str().unwrap_or_default();
-        let (directories, name) = match rel.rsplit_once('/') {
-            Some((directories, name)) => (directories.split('/').collect(), name),
-            None => (Vec::new(), rel),
-        };
-        let kept = open.iter().zip(&directories).take_while(|(a, b)| a == b).count();
-        let mut heading = String::new();
-        for (depth, directory) in directories.iter().enumerate().skip(kept) {
-            heading.push_str(&format!("{}{directory}/\n", "  ".repeat(depth + 1)));
-        }
-        let indent = "  ".repeat(directories.len() + 1);
+        let (heading, indent, name) = lead(&mut open, rel);
         let marker = rank_marker(e.facts.as_ref().map_or("unknown", |f| &f.complexity_rank));
         let bare = format!("{heading}{indent}{marker} {name}");
-        rows.push(match &e.facts {
-            Some(facts) => crate::output::Entry {
-                rank: facts.imported_by.unwrap_or(0) as i64,
+        let offer = e.facts.as_ref().and_then(|facts| crate::summary::offer_headline(&mut delivery, &e.full, facts));
+        let rank = e.facts.as_ref().and_then(|facts| facts.imported_by).unwrap_or(0) as i64;
+        rows.push(match (&e.facts, &offer) {
+            (Some(facts), Some(_)) => crate::output::Entry {
+                rank,
                 levels: vec![format!("{bare}  {}", facts.headline()), bare],
             },
-            None => crate::output::Entry { rank: 0, levels: vec![bare] },
+            _ => crate::output::Entry { rank, levels: vec![bare] },
         });
+        offered.push(offer);
         paths.push(rel);
-        open = directories;
     }
-    let facts = json!({
-        "files": ctx["total_files"].as_i64().unwrap_or(0),
-        "median_file_complexity": ctx["median_file_ccn"].as_i64().unwrap_or(0),
-        "complexity_p95": ctx["complexity_p95"].as_i64().unwrap_or(0),
-    });
-    let footer = format!("\nrepo_context: {}", crate::yamlfmt::flow(&facts, false));
+    let footer = repo_context::footer(&base, Some(&mut delivery)).map(|line| format!("\n{line}"));
     let root = format!("{}/", base.to_string_lossy());
-    let fixed = root.len() + 1 + footer.len() + 1 + crate::output::closing_room(rows.len(), "files");
-    let (texts, shortened) = crate::output::fit_listing(&rows, &paths, fixed);
-    println!("{root}");
+    let fixed = root.len()
+        + 1
+        + footer.as_ref().map_or(0, |footer| footer.len() + 1)
+        + crate::output::closing_room(rows.len(), "files");
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
+    let mut answer = format!("{root}\n");
     for text in texts {
-        println!("{text}");
+        answer.push_str(&format!("{text}\n"));
     }
-    println!("{footer}");
+    if let Some(footer) = footer {
+        answer.push_str(&format!("{footer}\n"));
+    }
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, rows.len(), "files"));
+        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
     }
+    super::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_tree", delivery)?;
     Ok(value)
 }

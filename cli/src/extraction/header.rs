@@ -34,6 +34,30 @@ impl<'a> Builder<'a> {
         self
     }
 
+    /// One declarator of a statement that may declare several, through the
+    /// tokens after it up to the next `,` (a C bit-field width), then the
+    /// statement's closing `;`: `b` of `int a, b : 2;` reads `b : 2;` after
+    /// the statement's type. `value`, a part of the declarator, reads
+    /// `{ … }`.
+    pub fn declarator(&mut self, declarator: Node, value: Option<Node>) -> &mut Self {
+        let mut end = declarator.end_byte();
+        let mut next = declarator.next_sibling();
+        while let Some(sibling) = next.filter(|sibling| !matches!(sibling.kind(), "," | ";")) {
+            end = sibling.end_byte();
+            next = sibling.next_sibling();
+        }
+        match value {
+            Some(value) => self.slice(declarator.start_byte(), value.start_byte()).block(value).slice(value.end_byte(), end),
+            None => self.slice(declarator.start_byte(), end),
+        };
+        let statement = declarator.parent();
+        let closing = statement.and_then(|statement| statement.child(statement.child_count().checked_sub(1)?));
+        if let Some(semicolon) = closing.filter(|token| token.kind() == ";") {
+            self.slice(semicolon.start_byte(), semicolon.end_byte());
+        }
+        self
+    }
+
     pub fn finish(&self) -> String {
         let mut out = String::new();
         let mut end = None;

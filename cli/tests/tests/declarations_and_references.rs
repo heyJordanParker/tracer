@@ -6336,7 +6336,7 @@ fn structure_carries_headers_for_remaining_languages_and_ctags() {
                 "typedef struct { … } Point;",
                 "static int count(const char *s) { … }",
                 "enum Color { … }",
-                "RED,",
+                "RED",
                 "struct Node *next;",
             ],
         ),

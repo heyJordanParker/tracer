@@ -3,7 +3,8 @@
 //! AST-derived via `crate::ccn` (name -> line span). Supports fluff
 //! stripping, ref loading, line/anchor scoping, and nested-memory loading.
 
-use super::{context, nested_memory, session_log};
+use super::{context, nested_memory};
+use crate::session;
 use crate::summary::Facts;
 use crate::{cache, ccn, extraction, file_facts, relations, summary, surface};
 use anyhow::{bail, Context, Result};
@@ -13,10 +14,10 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Resolve whether `read` injects project-docs. Off by default; only an
-/// explicit `--docs` turns it on.
-fn docs_enabled(docs_override: Option<bool>) -> bool {
-    docs_override == Some(true)
+/// Whether `read` sends the project docs its files reach: in text under a
+/// session, as every path-taking command does, and always with `--docs`.
+fn docs_enabled(docs_override: Option<bool>, as_json: bool) -> bool {
+    docs_override.unwrap_or_else(|| !as_json && session::active())
 }
 
 const GENERATED_MARKERS: &[&str] = &[
@@ -63,7 +64,7 @@ struct RenderedRead {
     surface_text: String,
     /// What the text output shows once per Agent context, saved once it is
     /// flushed.
-    shown: session_log::ShownRecord,
+    shown: session::Delivery,
 }
 
 fn comment_syntax(file: &str) -> (Option<&'static str>, Option<(&'static str, &'static str)>) {
@@ -488,31 +489,25 @@ fn apply_between<'a>(
     Some(lines[start_idx..end_idx].to_vec())
 }
 
-/// Parse a `L1:L2` range. A malformed or invalid range is a user-input
-/// error, so it exits 2 with an explicit stderr message — the same
-/// contract every other bad-argument path in this command uses (unknown
-/// ref, missing method, `--diff` without `--at`). Returning an `anyhow`
-/// error here would exit 1 and break that contract.
-fn parse_lines(value: &str) -> (i64, i64) {
+/// Parse a `L1:L2` range. A malformed or invalid range is a bad argument,
+/// so it exits 2, like every other bad-argument path in this command.
+fn parse_lines(value: &str) -> Result<(i64, i64)> {
     let re = Regex::new(r"^(\d+):(\d+)$").unwrap();
-    let caps = match re.captures(value) {
-        Some(c) => c,
-        None => {
-            eprintln!("Error: expected format L1:L2 (1-indexed inclusive), got '{value}'");
-            std::process::exit(2);
-        }
+    let Some(caps) = re.captures(value) else {
+        return Err(crate::process::fail(
+            2,
+            format!("Error: expected format L1:L2 (1-indexed inclusive), got '{value}'"),
+        ));
     };
     let l1: i64 = caps[1].parse().unwrap();
     let l2: i64 = caps[2].parse().unwrap();
     if l1 < 1 {
-        eprintln!("Error: line numbers must be >= 1 (got {l1})");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, format!("Error: line numbers must be >= 1 (got {l1})")));
     }
     if l2 < l1 {
-        eprintln!("Error: end line {l2} must be >= start line {l1}");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, format!("Error: end line {l2} must be >= start line {l1}")));
     }
-    (l1, l2)
+    Ok((l1, l2))
 }
 
 fn resolve_ref(ref_: &str, repo_root: &Path) -> Option<Value> {
@@ -575,12 +570,8 @@ fn exports_of(source: Option<&str>, relative: &str) -> Vec<Value> {
         Some(s) => s,
         None => return vec![],
     };
-    match extraction::extract(src.as_bytes(), relative) {
-        Some(r) => r
-            .exports
-            .iter()
-            .map(|e| json!({"name": e.name, "kind": e.kind, "line": e.line}))
-            .collect(),
+    match extraction::extract(src.as_bytes(), relative).extracted() {
+        Some(r) => r.exports().map(|e| json!({"name": e.name, "kind": e.kind, "line": e.line})).collect(),
         None => vec![],
     }
 }
@@ -816,11 +807,11 @@ fn render_one(
         .map(|(number, _)| *number)
         .unwrap_or(start_line);
     let total_lines = line_count(&source);
-    let content_hash = session_log::content_hash(&source);
+    let content_hash = session::content_hash(&source);
     let content_size = source.len();
     let mut facts = file_facts::get(&file_path, &repo_root);
     if let (Some(facts), Some(_)) = (facts.as_mut(), ref_) {
-        facts.extraction = extraction::extract(source.as_bytes(), &relative);
+        facts.extraction = extraction::extract(source.as_bytes(), &relative).extracted();
     }
     // The front matter: at a ref, the commit the source came from, in `git
     // log`'s own words; in the worktree, the file's facts and its directory.
@@ -829,12 +820,12 @@ fn render_one(
     let shown_facts = facts
         .as_ref()
         .filter(|_| in_repository && ref_.is_none())
-        .map(|facts| Facts::of(facts, relations::get(&repo_root).module_counts(&relative).as_ref()));
+        .map(|facts| Facts::of(facts, relations::ready(&repo_root).and_then(|index| index.module_counts(&relative)).as_ref()));
     let window = (start_line as i64, selection_end as i64);
     let windowed = method.is_some() || line_range.is_some() || between.is_some();
-    let calls = match facts.as_ref() {
+    let mut calls = match facts.as_ref() {
         Some(facts) if windowed && in_repository && ref_.is_none() => {
-            summary::calls(facts, &relative, window, &repo_root)
+            crate::calls::calls(facts, &relative, window, &repo_root)
         }
         _ => Vec::new(),
     };
@@ -869,7 +860,7 @@ fn render_one(
     };
     let unread = super::docs::unread(memories.clone());
 
-    let mut shown = session_log::ShownRecord::default();
+    let mut shown = session::Delivery::default();
     let front_matter: Option<serde_json::Map<String, Value>> = if ref_.is_some() {
         ref_meta.as_ref().map(|m| {
             let mut map = serde_json::Map::new();
@@ -883,10 +874,6 @@ fn render_one(
     } else {
         shown_facts.as_ref().map(|shown_facts| {
             let mut map = shown_facts.to_map();
-            let not_loaded = context::docs_not_loaded(&file_path, &repo_root);
-            if !not_loaded.is_empty() {
-                map.insert("docs_not_loaded".into(), not_loaded.into());
-            }
             if let Some(directory) = file_path
                 .parent()
                 .and_then(|directory| context::directory_facts(directory, &mut shown, once))
@@ -914,19 +901,20 @@ fn render_one(
         &format!("{} docs", crate::output::trace_command()),
         std::slice::from_ref(&file_path),
     );
-    let mut surface_text = surface::render_within(
-        &surface_rows,
-        &relative,
-        Some(window),
-        budget.map(|budget| budget.saturating_sub(front_matter_size) / 2),
-    );
+    let rows_budget = budget.map(|budget| budget.saturating_sub(front_matter_size) / 2);
+    // A read of part of the file offers only that part's rows.
+    let mut surface_text = match once && ref_.is_none() {
+        true => surface::delivered(&surface_rows, &relative, windowed.then_some(window), rows_budget, &file_path, &mut shown),
+        false => surface::render_within(&surface_rows, &relative, Some(window), rows_budget),
+    };
     let calls_share = budget.map(|budget| {
         let left = budget.saturating_sub(front_matter_size);
         let content_size: usize = rendered.iter().map(|(_, line)| crate::output::width(line)).sum();
         let docs_size = crate::output::width(&super::docs::fit(unread.clone(), None, &docs_command).text);
         (left / 4).max(left.saturating_sub(surface_text.len() + content_size + docs_size + reserved))
     });
-    surface_text.push_str(&summary::render_calls(&calls, &relative, calls_share));
+    let delivery = (once && ref_.is_none()).then_some(&mut shown);
+    surface_text.push_str(&crate::calls::render_calls("calls", &mut calls, &relative, calls_share, delivery));
     let truncated = budget.is_some_and(|budget| {
         trim_to_budget(
             &mut rendered,
@@ -969,8 +957,9 @@ fn render_one(
         }
     }
 
-    // The docs take the room the file left, and page from there.
-    let docs_room = budget.map(|budget| {
+    // The docs take the room the file left, at most `REACHED_ROOM`, and page
+    // from there.
+    let left = budget.map(|budget| {
         budget.saturating_sub(
             front_matter_size
                 + crate::output::width(&surface_text)
@@ -978,7 +967,8 @@ fn render_one(
                 + reserved,
         )
     });
-    let docs = super::docs::fit(unread, docs_room, &docs_command);
+    let docs_room = left.map_or(super::docs::REACHED_ROOM, |left| left.min(super::docs::REACHED_ROOM));
+    let docs = super::docs::fit(unread, Some(docs_room), &docs_command);
 
     let display_file = cache::relative_to_root(&file_path, &repo_root);
 
@@ -1060,11 +1050,6 @@ fn emit_human(
 ) -> Result<()> {
     write!(output, "{head}")?;
     write!(output, "{surface_text}")?;
-    output.flush()?;
-    if !docs.is_empty() {
-        writeln!(output, "{docs}")?;
-        writeln!(output)?;
-    }
     if !surface_text.is_empty() {
         writeln!(output)?;
     }
@@ -1072,16 +1057,18 @@ fn emit_human(
     if !payload["symbol_diff"].is_null() {
         writeln!(output, "{}", render_symbol_diff(&payload["symbol_diff"]))?;
     }
+    // The docs follow the answer, as every command prints them.
+    if !docs.is_empty() {
+        write!(output, "\n{docs}")?;
+    }
     Ok(())
 }
 
-fn record_delivered_read(rendered: &RenderedRead) {
-    if rendered.delivered_spans.is_empty() {
-        return;
-    }
+/// Queue the lines `rendered` printed as seen.
+fn record_delivered_read(delivery: &mut session::Delivery, rendered: &RenderedRead) {
     let spans: Vec<Option<(usize, usize)>> =
         rendered.delivered_spans.iter().copied().map(Some).collect();
-    session_log::record_read(
+    delivery.seen(
         &rendered.file_path,
         "trace_read",
         &rendered.content_hash,
@@ -1106,17 +1093,15 @@ pub fn run(
     record: bool,
     sink: &crate::output::Sink<'_>,
 ) -> Result<()> {
-    let docs_on = docs_enabled(docs_override);
+    let docs_on = docs_enabled(docs_override, as_json);
     if as_diff && ref_.is_none() {
-        eprintln!("Error: --diff requires --at <ref>");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, "Error: --diff requires --at <ref>"));
     }
     if lines_arg.is_some() && between.is_some() {
-        eprintln!("Error: --lines and --between are mutually exclusive");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, "Error: --lines and --between are mutually exclusive"));
     }
 
-    let line_range = lines_arg.map(parse_lines);
+    let line_range = lines_arg.map(parse_lines).transpose()?;
 
     // Every positional is a path, and a directory reads as the files under
     // it; `--method` names a function. At `--at <ref>` a path may exist only
@@ -1132,13 +1117,12 @@ pub fn run(
     };
     let method = method_flag.map(str::to_string);
     if method.is_some() && (line_range.is_some() || between.is_some()) {
-        eprintln!("Error: --method is not valid with --lines or --between");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, "Error: --method is not valid with --lines or --between"));
     }
 
-    let _delivering = docs_on.then(session_log::delivery_lock);
+    let _delivering = docs_on.then(session::hold);
     let mut session_dedupe = if docs_on {
-        session_log::loaded_paths()
+        session::loaded_paths()
     } else {
         std::collections::BTreeSet::new()
     };
@@ -1180,13 +1164,14 @@ pub fn run(
             }
             emit_human(&rendered.payload, &rendered.head, &rendered.docs.text, &rendered.surface_text, output)?;
             output.flush()?;
-            std::mem::take(&mut rendered.shown).save();
+            let mut delivery = std::mem::take(&mut rendered.shown);
             if record {
-                rendered.docs.record("trace_read");
+                rendered.docs.record(&mut delivery, "trace_read");
                 if ref_.is_none() {
-                    record_delivered_read(&rendered);
+                    record_delivered_read(&mut delivery, &rendered);
                 }
             }
+            delivery.commit();
         }
         results.push(rendered);
     }
@@ -1237,18 +1222,21 @@ pub fn run(
     if as_json {
         sink.emit(&value)?;
         if record {
+            let mut delivery = session::Delivery::default();
             for rendered in &results {
                 if docs_on {
-                    session_log::record_emission(&rendered.memories, "trace_read");
+                    delivery.sent(&rendered.memories, "trace_read");
                 }
                 if ref_.is_none() {
-                    record_delivered_read(rendered);
+                    record_delivered_read(&mut delivery, rendered);
                 }
             }
+            delivery.commit();
         }
     }
     if failed {
-        std::process::exit(2);
+        // Each failed file named its error as it happened.
+        return Err(crate::process::fail(2, ""));
     }
     Ok(())
 }

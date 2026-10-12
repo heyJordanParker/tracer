@@ -1,5 +1,5 @@
 //! `trace cache build|stats|clear` — manage the .tracer-cache/ disk cache.
-//! `build` warms per-file facts and the relations index, `stats` reports
+//! `build` warms per-file facts, the relations index, and git activity, `stats` reports
 //! size and entry count (human + --json, cross-consistent), `clear` empties
 //! the `file/` namespace or wipes the whole tree with --all.
 
@@ -22,7 +22,7 @@ fn print_stats_row(row: &cache::CacheStats) {
 /// relations index, then print timing + index size + per-namespace stats.
 /// Idempotent: a warm cache only does the cheap revalidation path.
 pub fn build(path: &Path) -> Result<()> {
-    crate::pathval::require_exists(path, "PATH");
+    crate::pathval::require_exists(path, "PATH")?;
     // One repository, one index. `.tracer-cache/` exists only at a worktree
     // root, so PATH says which repository to build, never which part of it.
     // Treating PATH as the root indexed a subdirectory in isolation, wrote
@@ -33,7 +33,11 @@ pub fn build(path: &Path) -> Result<()> {
         return Ok(());
     };
     let start = Instant::now();
+    cache::sweep(&repo_root);
     let index = relations::get(&repo_root);
+    // The relations index reads no git history, so the commit index and the
+    // activity map the facts show are warmed beside it.
+    let _ = crate::git_activity::bulk_cached(&repo_root);
     let elapsed = start.elapsed().as_secs_f64();
     println!("Built in {elapsed:.2}s");
     println!(
@@ -57,6 +61,7 @@ pub fn clear(path: &Path, clear_all: bool) -> Result<()> {
         return Ok(());
     }
     let removed = cache::clear(&repo_root)?;
+    cache::sweep(&repo_root);
     println!(
         "Removed {removed} cache entries from {}.",
         cache::NAMESPACE_FILE

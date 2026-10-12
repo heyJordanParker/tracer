@@ -8,7 +8,7 @@
 //! is called, whether a reached row is named by its module or by the symbol
 //! the edge named, and the human wording.
 
-use crate::commands::enrich;
+use crate::sections;
 use crate::{cache, file_facts, relations, surface};
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -84,10 +84,7 @@ pub fn run(
     }
     let symbol = match symbol {
         Some(s) if !s.is_empty() => s,
-        _ => {
-            eprintln!("Error: pass a SYMBOL or --path <path>.");
-            std::process::exit(2);
-        }
+        _ => return Err(crate::process::fail(2, "Error: pass a SYMBOL or --path <path>.")),
     };
     symbol_mode(direction, symbol, depth, as_json)
 }
@@ -156,36 +153,35 @@ fn reached_row(
 fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) -> Result<Value> {
     let here = Path::new(".");
     let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
-    let declarations = relations::declarations(symbol, &repo_root);
+    let index = relations::get(&repo_root);
+    let declarations = relations::declarations(&index, symbol);
     let modules = if declarations.is_empty() {
         relations::modules_named(symbol, &repo_root)
     } else {
         Vec::new()
     };
     if declarations.is_empty() && modules.is_empty() {
-        if Path::new(symbol).exists() {
+        let message = if Path::new(symbol).exists() {
             let command = match direction {
                 Direction::Dependents => "usages",
                 Direction::Dependencies => "dependencies",
             };
-            eprintln!(
+            format!(
                 "'{symbol}' is a path, not a symbol. Run {} {command} --path {symbol}.",
                 crate::output::trace_command()
-            );
+            )
         } else {
-            eprintln!("{}", crate::output::not_declared(symbol, &repo_root));
-        }
-        std::process::exit(2);
+            crate::output::not_declared(symbol, &repo_root)
+        };
+        return Err(crate::process::fail(2, message));
     }
     if !declarations.is_empty()
         && declarations
             .iter()
             .all(|declaration| declaration.declaration.kind == "property")
     {
-        eprintln!("a property has readers, not callers; tracer does not extract reads");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, "a property has readers, not callers; tracer does not extract reads"));
     }
-    let index = relations::get(&repo_root);
 
     // (node_id, label, kind, the file to walk from, source line)
     let mut subjects: Vec<(String, String, String, String, i64)> = Vec::new();
@@ -223,7 +219,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
     reached_files.sort();
     reached_files.dedup();
     let facts = loaded(&reached_files, &repo_root);
-    let file_facts_by_path = enrich::facts_of(&facts, &repo_root);
+    let file_facts_by_path = sections::facts_of(&facts, &repo_root);
     let file_rows = rows_of(&facts, matches!(direction, Direction::Dependencies));
     let declared: Vec<Vec<Option<surface::Row>>> = chains
         .iter()
@@ -259,7 +255,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
     }
 
     if !as_json {
-        let mut sections: Vec<enrich::Section> = Vec::with_capacity(subjects.len());
+        let mut sections: Vec<sections::Section> = Vec::with_capacity(subjects.len());
         for ((_, label, kind, source_file, source_line), ((chain, symbol), declared)) in
             subjects.iter().zip(chains.iter().zip(&symbols).zip(&declared))
         {
@@ -283,13 +279,13 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
                 rows.push(format!("      [d={}] {rendered}", r.depth));
                 *count += 1;
             }
-            sections.push(enrich::Section { heading, files });
+            sections.push(sections::Section { heading, files });
         }
         let (one, many) = match direction {
             Direction::Dependents => ("dependent", "dependents"),
             Direction::Dependencies => ("dependency", "dependencies"),
         };
-        enrich::render_sections(&sections, &file_facts_by_path, one, many);
+        sections::render_sections(&sections, &file_facts_by_path, &repo_root, one, many);
     }
     let total: i64 = symbols
         .iter()
@@ -297,7 +293,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
         .sum();
     Ok(crate::output::document(
         json!({"symbol": symbol, "depth": depth, "mode": "symbol"}),
-        json!({"files": enrich::facts_context(&file_facts_by_path)}),
+        json!({"files": sections::facts_context(&file_facts_by_path)}),
         json!(symbols),
         json!({"symbols": symbols.len(), rows_key: total}),
     ))
@@ -325,18 +321,12 @@ fn path_mode(
                 .ok()
                 .map(|path| path.to_string_lossy().replace('\\', "/"))
         });
-    let ranked = relations::ranked_by_reach(
-        depth,
-        limit.max(0) as usize,
-        direction.reach(),
-        scope.as_deref(),
-        &repo_root,
-    );
     let index = relations::get(&repo_root);
+    let ranked = relations::ranked_by_reach(&index, depth, limit.max(0) as usize, direction.reach(), scope.as_deref());
 
     let ranked_files: Vec<String> = ranked.iter().map(|r| r.file.clone()).collect();
     let facts = loaded(&ranked_files, &repo_root);
-    let file_facts_by_path = enrich::facts_of(&facts, &repo_root);
+    let file_facts_by_path = sections::facts_of(&facts, &repo_root);
     let file_rows = rows_of(&facts, matches!(direction, Direction::Dependents));
     let declared: Vec<Option<surface::Row>> = ranked
         .iter()
@@ -394,48 +384,53 @@ fn path_mode(
             "depth": depth,
             "mode": "path",
         }),
-        json!({"files": enrich::facts_context(&file_facts_by_path)}),
+        json!({"files": sections::facts_context(&file_facts_by_path)}),
         json!(rows),
         json!({"nodes": rows.len()}),
     );
 
     if !as_json {
+        let mut delivery = crate::session::Delivery::default();
+        let mut answer = String::new();
         if rows.is_empty() {
-            println!(
-                "(no files with {} found in this scope)",
-                direction.rows_key()
-            );
+            answer.push_str(&format!("(no files with {} found in this scope)\n", direction.rows_key()));
         } else {
-            println!(
-                "Top {} {} nodes in {} (transitive depth ≤ {depth}):",
+            answer.push_str(&format!(
+                "Top {} {} nodes in {} (transitive depth ≤ {depth}):\n",
                 rows.len(),
                 direction.path_heading(),
                 path.to_string_lossy(),
-            );
-            println!(
-                "  {:<3} {:>6}  {:>10}  {:<10}  symbol @ source",
+            ));
+            answer.push_str(&format!(
+                "  {:<3} {:>6}  {:>10}  {:<10}  symbol @ source\n",
                 "#", "direct", "transitive", "kind"
-            );
+            ));
             for (row, declared) in rows.iter().zip(&declared) {
-                println!(
-                    "  {:<3} {:>6}  {:>10}  {:<10}  {} @ {}:1",
+                answer.push_str(&format!(
+                    "  {:<3} {:>6}  {:>10}  {:<10}  {} @ {}:1\n",
                     row["rank"].as_i64().unwrap_or(0),
                     row[direct_key].as_i64().unwrap_or(0),
                     row[transitive_key].as_i64().unwrap_or(0),
                     row["kind"].as_str().unwrap_or(""),
                     row["label"].as_str().unwrap_or(""),
                     row["source_file"].as_str().unwrap_or(""),
-                );
+                ));
                 if let Some(declaration) = declared {
-                    println!("        {}", surface::inline(declaration, row["source_file"].as_str().unwrap_or("")));
+                    answer.push_str(&format!(
+                        "        {}\n",
+                        surface::inline(declaration, row["source_file"].as_str().unwrap_or(""))
+                    ));
                 }
-                if let Some(facts) =
-                    row["source_file"].as_str().and_then(|f| file_facts_by_path.get(f))
+                let file = row["source_file"].as_str().unwrap_or("");
+                if let Some(facts) = file_facts_by_path
+                    .get(file)
+                    .filter(|facts| crate::summary::offer_headline(&mut delivery, &repo_root.join(file), facts).is_some())
                 {
-                    println!("        {}", facts.headline());
+                    answer.push_str(&format!("        {}\n", facts.headline()));
                 }
             }
         }
+        super::docs::print_with_docs(&answer, &[path.to_path_buf()], "trace_reach", delivery)?;
     }
     Ok(out)
 }

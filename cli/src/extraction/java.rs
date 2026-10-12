@@ -8,14 +8,13 @@
 //! the site), object creation (`new Type(..)` — `Static`) and parameter /
 //! return type hints (`Static`, the type names the class).
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use tree_sitter::{Node, Parser};
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "java".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
@@ -34,28 +33,38 @@ pub fn extract(source: &[u8]) -> ExtractionResult {
     extract_from_tree(&tree, source)
 }
 
-/// Imports/exports/declarations/references from an already-parsed Java tree.
+/// Imports/declarations/references from an already-parsed Java tree.
 /// Caller guarantees `tree` came from the Java grammar.
 pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
     let root = tree.root_node();
     let imports = walk_imports(root, source);
     let declarations = walk_declarations(root, source);
-    let exports = declarations
-        .iter()
-        .filter(|d| d.container.is_none())
-        .map(|d| Export {
-            name: d.name.clone(),
-            kind: d.kind.clone(),
-            line: d.line,
-        })
-        .collect();
     let references = walk_references(root, source);
     ExtractionResult {
         language: "java".into(),
         imports,
-        exports,
         declarations,
         references,
+    }
+}
+
+/// `public` is public, `private` file-local, and `protected` or no modifier
+/// reachable from the package and subclasses. A member of an interface or
+/// annotation type is public unless it says `private`.
+fn visibility(node: Node, source: &[u8], in_interface: bool) -> Visibility {
+    let mut cursor = node.walk();
+    let modifiers = node
+        .children(&mut cursor)
+        .find(|child| child.kind() == "modifiers")
+        .and_then(|modifiers| modifiers.utf8_text(source).ok())
+        .unwrap_or_default();
+    let has = |word: &str| modifiers.split_whitespace().any(|modifier| modifier == word);
+    if has("private") {
+        Visibility::FileLocal
+    } else if has("public") || in_interface {
+        Visibility::Public
+    } else {
+        Visibility::Restricted
     }
 }
 
@@ -67,6 +76,7 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
     while let Some(n) = stack.pop() {
         if n.kind() == "import_declaration" {
             let line = n.start_position().row as i64 + 1;
+            let end_line = n.end_position().row as i64 + 1;
             // The declaration holds a scoped_identifier (and optionally a `*`
             // for wildcard imports).
             let mut c = n.walk();
@@ -88,7 +98,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                         symbol: None,
                         locals: Vec::new(),
                         line,
+                        end_line,
                         block: None,
+                        visibility: None,
                     });
                 } else {
                     let (module, symbol) = match p.rsplit_once('.') {
@@ -100,7 +112,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                         symbol,
                         locals: Vec::new(),
                         line,
+                        end_line,
                         block: None,
+                        visibility: None,
                     });
                 }
             }
@@ -118,9 +132,15 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
 /// its declared name.
 fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
     let mut out = Vec::new();
+    let mut ranges = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut stack: Vec<(Node, Option<String>)> = vec![(root, None)];
-    while let Some((n, container)) = stack.pop() {
+    let mut stack: Vec<(Node, Option<String>, bool)> = vec![(root, None, false)];
+    while let Some((n, container, in_interface)) = stack.pop() {
+        let child_in_interface = match n.kind() {
+            "interface_declaration" | "annotation_type_declaration" => true,
+            "class_declaration" | "enum_declaration" | "record_declaration" => false,
+            _ => in_interface,
+        };
         let kind: Option<&str> = match n.kind() {
             "class_declaration" => Some("class"),
             "interface_declaration" => Some("interface"),
@@ -148,88 +168,60 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                 .or_else(|| container.clone());
         }
         if let Some(k) = kind {
-            if let Some(name_node) = n.child_by_field_name("name").or_else(|| {
-                if n.kind() == "field_declaration" {
-                    let mut cursor = n.walk();
-                    let name = n
-                        .named_children(&mut cursor)
-                        .find(|child| child.kind() == "variable_declarator")
-                        .and_then(|declarator| declarator.child_by_field_name("name"));
-                    name
-                } else {
-                    None
-                }
-            }) {
-                if let Ok(name) = name_node.utf8_text(source) {
-                    let line = name_node.start_position().row as i64 + 1;
-                    let decl_container = if matches!(
-                        n.kind(),
-                        "method_declaration" | "constructor_declaration" | "field_declaration"
-                    ) {
-                        container.clone()
-                    } else {
-                        None
+            // A field declares one name per declarator, `int a = 1, b;`, each
+            // with a header of its own.
+            let mut cursor = n.walk();
+            let declarators: Vec<Node> = n.children_by_field_name("declarator", &mut cursor).collect();
+            let named: Vec<(Node, String)> = match n.child_by_field_name("name") {
+                Some(name) => {
+                    let mut header = crate::extraction::header::Builder::new(source);
+                    match n.child_by_field_name("body") {
+                        Some(body) => header.slice(n.start_byte(), body.start_byte()).block(body),
+                        None => header.node(n),
                     };
-                    if seen.insert((name.to_string(), line)) {
-                        out.push(Declaration {
-                            name: name.to_string(),
-                            kind: k.to_string(),
-                            header_line: line,
-                            line,
-                            end_line: n.end_position().row as i64 + 1,
-                            container: decl_container,
-                            parent: None,
-                            header: {
-                                let mut builder = crate::extraction::header::Builder::new(source);
-                                if n.kind() == "field_declaration" {
-                                    let mut cursor = n.walk();
-                                    if let Some(declarator) = n
-                                        .named_children(&mut cursor)
-                                        .find(|child| child.kind() == "variable_declarator")
-                                    {
-                                        builder
-                                            .slice(n.start_byte(), declarator.end_byte())
-                                            .slice(n.end_byte() - 1, n.end_byte());
-                                    } else {
-                                        builder.node(n);
-                                    };
-                                } else if let Some(body) = n.child_by_field_name("body") {
-                                    builder.slice(n.start_byte(), body.start_byte()).block(body);
-                                } else {
-                                    builder.node(n);
-                                }
-                                builder.finish()
-                            },
-                            annotations: java_annotations(n, source),
-                            self_type: None,
-                            module_file: None,
-                            supertypes: Vec::new(),
-                        });
-                    }
+                    vec![(name, header.finish())]
+                }
+                None => declarators
+                    .iter()
+                    .filter_map(|declarator| {
+                        let mut header = crate::extraction::header::Builder::new(source);
+                        header.slice(n.start_byte(), declarators[0].start_byte()).declarator(*declarator, None);
+                        Some((declarator.child_by_field_name("name")?, header.finish()))
+                    })
+                    .collect(),
+            };
+            let decl_container = matches!(n.kind(), "method_declaration" | "constructor_declaration" | "field_declaration")
+                .then(|| container.clone())
+                .flatten();
+            for (name_node, header) in named {
+                let Ok(name) = name_node.utf8_text(source) else { continue };
+                let line = name_node.start_position().row as i64 + 1;
+                if seen.insert((name.to_string(), line)) {
+                    ranges.push(n.start_byte()..n.end_byte());
+                    out.push(Declaration {
+                        name: name.to_string(),
+                        kind: k.to_string(),
+                        header_line: line,
+                        line,
+                        end_line: n.end_position().row as i64 + 1,
+                        container: decl_container.clone(),
+                        parent: None,
+                        header,
+                        annotations: java_annotations(n, source),
+                        self_type: None,
+                        module_file: None,
+                        supertypes: Vec::new(),
+                        visibility: visibility(n, source, in_interface),
+                    });
                 }
             }
         }
         let mut c = n.walk();
         for child in n.children(&mut c) {
-            stack.push((child, child_container.clone()));
+            stack.push((child, child_container.clone(), child_in_interface));
         }
     }
-    out.sort_by_key(|d| d.line);
-    for index in 0..out.len() {
-        if let Some((parent, _)) = out[..index]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, candidate)| {
-                matches!(candidate.kind.as_str(), "class" | "interface" | "enum")
-                    && candidate.line < out[index].line
-                    && candidate.end_line >= out[index].line
-            })
-        {
-            out[index].parent = Some(parent as u32);
-        }
-    }
-    out
+    crate::extraction::nest(out, ranges, |candidate| matches!(candidate.kind.as_str(), "class" | "interface" | "enum"))
 }
 
 fn java_annotations(node: Node, source: &[u8]) -> Vec<String> {

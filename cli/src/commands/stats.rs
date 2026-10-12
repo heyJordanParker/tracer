@@ -1,56 +1,14 @@
-//! `trace stats` — repo-wide complexity distribution via scc.
-//! One `scc --format json --by-file <path>` sweep → per-language
-//! LOC/complexity aggregates, a per-file complexity distribution
-//! (median/p75/p90/p95/max), and the top-10 most-complex files.
+//! `trace stats` — complexity distribution under a path, read from the scc
+//! snapshot every call shares: per-language LOC/complexity aggregates, a
+//! per-file complexity distribution (median/p75/p90/p95/max), and the
+//! top-10 most-complex files.
 
+use crate::repo_context::{FileMetrics, LanguageRow, Payload};
 use anyhow::Result;
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
-
-#[derive(Deserialize)]
-struct SccLanguage {
-    #[serde(rename = "Name")]
-    name: String,
-    #[serde(rename = "Count")]
-    count: i64,
-    #[serde(rename = "Code")]
-    code: i64,
-    #[serde(rename = "Complexity")]
-    complexity: i64,
-    #[serde(rename = "Files")]
-    files: Vec<SccFile>,
-}
-
-#[derive(Deserialize)]
-struct SccFile {
-    #[serde(rename = "Location")]
-    location: String,
-    #[serde(rename = "Language")]
-    language: String,
-    /// Every line, as a file's `lines` fact counts them.
-    #[serde(rename = "Lines")]
-    lines: i64,
-    #[serde(rename = "Complexity")]
-    complexity: i64,
-}
-
-struct Summary {
-    total_files: usize,
-    languages: Vec<Language>,
-    distribution: Option<Distribution>,
-    top_complex: Vec<(usize, usize)>,
-}
-
-struct Language {
-    name: String,
-    files: i64,
-    loc: i64,
-    complexity: i64,
-}
 
 struct Distribution {
     median: i64,
@@ -60,38 +18,9 @@ struct Distribution {
     max: i64,
 }
 
-/// scc failure → stderr + exit 1 (hard-fail contract).
-fn scc_by_file(path: &Path) -> Vec<SccLanguage> {
-    let out = match Command::new("scc")
-        .args([
-            "--format",
-            "json",
-            "--by-file",
-            "--exclude-dir",
-            ".tracer-cache",
-        ])
-        .arg(path)
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("Error: scc failed: {e}");
-            std::process::exit(1);
-        }
-    };
-    if !out.status.success() {
-        eprintln!(
-            "Error: scc failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-        std::process::exit(1);
-    }
-    serde_json::from_slice(&out.stdout).unwrap_or_default()
-}
-
 /// `int(statistics.median(values))` — average of the two middles for even
 /// counts, truncated toward zero. `complexities` is sorted in place.
-fn distribution(complexities: &mut Vec<i64>) -> Option<Distribution> {
+fn distribution(complexities: &mut [i64]) -> Option<Distribution> {
     if complexities.is_empty() {
         return None;
     }
@@ -115,36 +44,12 @@ fn distribution(complexities: &mut Vec<i64>) -> Option<Distribution> {
     })
 }
 
-/// Builds per-language totals, the complexity distribution, and the top-10 indices.
-fn summary(by_file: &[SccLanguage]) -> Summary {
-    let mut languages = Vec::with_capacity(by_file.len());
-    let mut complexities = Vec::new();
-    let mut top_complex = Vec::new();
-    for (language_index, language) in by_file.iter().enumerate() {
-        languages.push(Language {
-            name: language.name.clone(),
-            files: language.count,
-            loc: language.code,
-            complexity: language.complexity,
-        });
-        for (file_index, file) in language.files.iter().enumerate() {
-            complexities.push(file.complexity);
-            top_complex.push((language_index, file_index));
-        }
-    }
-    top_complex.sort_by(|(left_language, left_file), (right_language, right_file)| {
-        by_file[*right_language].files[*right_file]
-            .complexity
-            .cmp(&by_file[*left_language].files[*left_file].complexity)
-    });
-    top_complex.truncate(10);
-    let total_files = complexities.len();
-    Summary {
-        total_files,
-        languages,
-        distribution: distribution(&mut complexities),
-        top_complex,
-    }
+/// The ten most complex files, most complex first, then by path.
+fn top_complex(payload: &Payload) -> Vec<(&String, &FileMetrics)> {
+    let mut files: Vec<(&String, &FileMetrics)> = payload.per_file.iter().collect();
+    files.sort_by(|left, right| right.1.ccn.cmp(&left.1.ccn).then_with(|| left.0.cmp(right.0)));
+    files.truncate(10);
+    files
 }
 
 fn directory_scope(path: &Path, repo_root: &Path) -> String {
@@ -188,37 +93,40 @@ fn compare_directories(
 }
 
 pub fn run(path: &Path, as_json: bool) -> Result<Value> {
-    crate::pathval::require_exists(path, "PATH");
+    crate::pathval::require_exists(path, "PATH")?;
     let abs = crate::cache::absolutize(path);
     let resolved = abs.canonicalize().unwrap_or(abs);
     let repo_root =
         crate::cache::worktree_root_for(&resolved).unwrap_or_else(|| PathBuf::from("."));
-    let (by_file, metrics) = thread::scope(|scope| {
+    let (payload, metrics) = thread::scope(|scope| {
         let relations = scope.spawn(|| {
             crate::timing::phase("relations", || {
                 crate::relations::get(&repo_root).directory_metrics()
             })
         });
-        let scc = scope.spawn(|| crate::timing::phase("scc", || scc_by_file(&resolved)));
-        (scc.join().unwrap(), relations.join().unwrap())
+        let payload = crate::timing::phase("scc", || crate::repo_context::metrics_under(&resolved));
+        (payload, relations.join().unwrap())
     });
-    let summary = crate::timing::phase("summary", || summary(&by_file));
+    let payload = payload.map_err(|e| crate::process::fail(1, format!("Error: scc failed: {e:#}")))?;
+    let (distribution, top_complex) = crate::timing::phase("summary", || {
+        (distribution(&mut payload.per_file.values().map(|file| file.ccn).collect::<Vec<i64>>()), top_complex(&payload))
+    });
     let scope = directory_scope(&resolved, &repo_root);
 
     if as_json {
         return Ok(crate::timing::phase("document", || {
             let mut languages = Map::new();
-            for language in &summary.languages {
+            for language in &payload.languages {
                 languages.insert(
                     language.name.clone(),
                     json!({
-                        "files": language.files,
-                        "lines_of_code": language.loc,
+                        "files": language.count,
+                        "lines_of_code": language.code,
                         "cyclomatic_complexity": language.complexity,
                     }),
                 );
             }
-            let distribution = summary.distribution.as_ref().map_or_else(
+            let distribution = distribution.as_ref().map_or_else(
                 || json!({}),
                 |distribution| {
                     json!({
@@ -230,16 +138,14 @@ pub fn run(path: &Path, as_json: bool) -> Result<Value> {
                     })
                 },
             );
-            let top_complex = summary
-                .top_complex
+            let top_complex = top_complex
                 .iter()
-                .map(|(language_index, file_index)| {
-                    let file = &by_file[*language_index].files[*file_index];
+                .map(|(path, file)| {
                     json!({
-                        "path": crate::cache::relative_to_root(Path::new(&file.location), &repo_root),
+                        "path": path,
                         "language": file.language,
                         "lines": file.lines,
-                        "cyclomatic_complexity": file.complexity,
+                        "cyclomatic_complexity": file.ccn,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -256,7 +162,7 @@ pub fn run(path: &Path, as_json: bool) -> Result<Value> {
                 json!({"distribution": distribution, "directories": directories}),
                 json!({"languages": languages, "top_complex": top_complex}),
                 json!({
-                    "files": summary.total_files,
+                    "files": payload.per_file.len(),
                     "directories": metrics
                         .directories
                         .keys()
@@ -268,19 +174,19 @@ pub fn run(path: &Path, as_json: bool) -> Result<Value> {
     }
 
     crate::timing::phase("render", || {
-        let mut head = format!("Files: {}\n\nLanguages:\n", summary.total_files);
-        let mut languages: Vec<&Language> = summary.languages.iter().collect();
-        languages.sort_by(|left, right| right.loc.cmp(&left.loc));
+        let mut head = format!("Files: {}\n\nLanguages:\n", payload.per_file.len());
+        let mut languages: Vec<&LanguageRow> = payload.languages.iter().collect();
+        languages.sort_by_key(|language| std::cmp::Reverse(language.code));
         for language in languages.iter().take(15) {
             let facts = json!({
-                "files": language.files,
-                "lines_of_code": language.loc,
+                "files": language.count,
+                "lines_of_code": language.code,
                 "cyclomatic_complexity": language.complexity,
             });
             head.push_str(&format!("  {:<20} {}\n", language.name, crate::yamlfmt::flow(&facts, false)));
         }
         head.push('\n');
-        if let Some(distribution) = &summary.distribution {
+        if let Some(distribution) = &distribution {
             head.push_str(&format!(
                 "Complexity distribution (per file):\n  median={}  p75={}  p90={}  p95={}  max={}\n",
                 distribution.median,
@@ -291,17 +197,11 @@ pub fn run(path: &Path, as_json: bool) -> Result<Value> {
             ));
         }
         head.push_str("\nTop 10 most-complex files:\n");
-        for (language_index, file_index) in &summary.top_complex {
-            let file = &by_file[*language_index].files[*file_index];
-            let facts = json!({"cyclomatic_complexity": file.complexity, "lines": file.lines});
-            head.push_str(&format!(
-                "  {}  {}\n",
-                crate::cache::relative_to_root(Path::new(&file.location), &repo_root),
-                crate::yamlfmt::flow(&facts, false),
-            ));
+        for (path, file) in &top_complex {
+            let facts = json!({"cyclomatic_complexity": file.ccn, "lines": file.lines});
+            head.push_str(&format!("  {path}  {}\n", crate::yamlfmt::flow(&facts, false)));
         }
-        head.push_str(&format!("\nDirectories under {scope} (most imported first, direct files only):"));
-        println!("{head}");
+        head.push_str(&format!("\nDirectories under {scope} (most imported first, direct files only):\n"));
         let columns = "  imported_by  imports  files  directory                        annotations\n";
         let mut rows: Vec<(&String, &crate::relations::DirectoryMetrics)> = metrics
             .directories
@@ -337,14 +237,15 @@ pub fn run(path: &Path, as_json: bool) -> Result<Value> {
             });
             paths.push(directory);
         }
-        let fixed = head.len() + 1 + crate::output::closing_room(entries.len(), "directories");
-        let (texts, shortened) = crate::output::fit_listing(&entries, &paths, fixed);
+        let fixed = head.len() + crate::output::closing_room(entries.len(), "directories");
+        let crate::output::Fitted { texts, shortened, .. } = crate::output::fit_listing(&entries, &paths, fixed);
         for text in texts {
-            println!("{text}");
+            head.push_str(&format!("{text}\n"));
         }
         if shortened > 0 {
-            println!("{}", crate::output::shortened_line(shortened, entries.len(), "directories"));
+            head.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "directories")));
         }
-    });
+        super::docs::print_with_docs(&head, std::slice::from_ref(&resolved), "trace_stats", crate::session::Delivery::default())
+    })?;
     Ok(Value::Null)
 }

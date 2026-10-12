@@ -395,23 +395,22 @@ pub fn run(
     let surface: Vec<surface::Row> =
         serde_json::from_value(payload["context"]["files"][&display_file]["surface"].clone())
             .unwrap_or_default();
+    // The symbol's rows are extra context, offered as the window they are.
+    let mut delivery = crate::session::Delivery::default();
+    let mut answer = String::new();
     if !surface.is_empty() {
         // The rows take at most half the budget; the blame regions take the rest.
         let budget = crate::output::budget().map(|budget| budget / 2);
-        print!("{}", surface::render_within(&surface, &display_file, None, budget));
+        answer.push_str(&surface::delivered(&surface, &display_file, line_range, budget, &path, &mut delivery));
     }
-    println!(
-        "Regions: {}  Lines blamed: {}",
-        regions.len(),
-        blame_lines.len()
-    );
-    println!();
-    println!(
-        "  {:<14} {:<11} {:<10}  {:<10}  {:<22} subject",
+    answer.push_str(&format!("Regions: {}  Lines blamed: {}\n\n", regions.len(), blame_lines.len()));
+    answer.push_str(&format!(
+        "  {:<14} {:<11} {:<10}  {:<10}  {:<22} subject\n",
         "lines", "commit", "date", "age", "author"
-    );
+    ));
     for region in &regions {
-        println!("{}", format_region(region));
+        answer.push_str(&format!("{}\n", format_region(region)));
     }
+    super::docs::print_with_docs(&answer, std::slice::from_ref(&path), "trace_blame", delivery)?;
     Ok(payload)
 }

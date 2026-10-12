@@ -1461,3 +1461,298 @@ fn listing_freshness_covers_directory_index_and_ignore_changes() {
         after_ignored.stderr
     );
 }
+
+// ---------------------------------------------------------------------------
+// trace api
+// ---------------------------------------------------------------------------
+
+/// One file per extracted language and the ctags fallback, each with rows at
+/// every visibility its language has.
+fn api_repo() -> Fixture {
+    let f = Fixture::new();
+    f.write(
+        "lib.rs",
+        concat!(
+            "//! Shapes and their areas. Drawn on demand.\n",
+            "pub struct Shape { pub side: u32, hidden: u32 }\n",
+            "struct Inner;\n",
+            "impl Shape { pub fn area(&self) -> u32 { 0 } fn helper(&self) {} }\n",
+            "impl Inner { pub fn noop(&self) {} }\n",
+            "pub trait Draw { fn draw(&self); }\n",
+            "impl Draw for Shape { fn draw(&self) {} }\n",
+            "pub enum Mode { On, Off }\n",
+            "pub(crate) fn shared() {}\n",
+            "pub use crate::other::Thing;\n",
+        ),
+    );
+    f.write(
+        "box.ts",
+        concat!(
+            "export interface Shape { side: number; area(): number; }\n",
+            "export class Box { open(): void {} protected seal(): void {} private peek(): void {} }\n",
+            "function local(): void {}\n",
+            "function hidden(): void {}\n",
+            "export default { local };\n",
+        ),
+    );
+    f.write("index.ts", "export { Box } from './box';\n");
+    f.write(
+        "lib.go",
+        "package lib\n\ntype Shape struct{}\n\nfunc (s Shape) Area() int { return 0 }\n\nfunc (s Shape) area() int { return 0 }\n\ntype inner struct{}\n\nfunc (i inner) Area() int { return 0 }\n\nfunc Open() {}\n",
+    );
+    f.write(
+        "Lib.java",
+        "public class Lib {\n  public void open() {}\n  void pkg() {}\n  protected void prot() {}\n  private void priv() {}\n}\ninterface Hidden { void run(); }\n",
+    );
+    f.write(
+        "shape.php",
+        "<?php\nclass Shape {\n  public function area() {}\n  protected function scale() {}\n  private function cache() {}\n  function plain() {}\n}\n",
+    );
+    f.write(
+        "shape.py",
+        "# Copyright 2026 Acme. All rights reserved.\n\n\"\"\"Opens shapes. Second sentence.\"\"\"\n\ndef open():\n    pass\n\ndef _hidden():\n    pass\n\nclass Shape:\n    def area(self):\n        pass\n\n    def _scale(self):\n        pass\n",
+    );
+    f.write("pkg/core.py", "def start():\n    pass\n");
+    f.write("pkg/__init__.py", "from .core import start\n");
+    f.write("shape.rb", "class Shape\n  def area\n  end\n\n  private\n\n  def cache\n  end\nend\n");
+    f.write("lib.c", "int open(void) { return 0; }\nstatic int hidden(void) { return 1; }\n");
+    f.write("lib.h", "static inline int helper(void) { return 2; }\nint open(void);\n");
+    f.write("util.sh", "#!/usr/bin/env bash\n\nalpha() {\n    return 1\n}\n");
+    f.commit("api");
+    f
+}
+
+/// Each listed file's row names at `visibility`, sorted.
+fn api_names(f: &Fixture, visibility: &str) -> HashMap<String, Vec<String>> {
+    let v = f.trace(&["api", ".", "--visibility", visibility, "--json"]).json();
+    let mut names: HashMap<String, Vec<String>> = HashMap::new();
+    for row in v["results"].as_array().unwrap() {
+        let file = row["file"].as_str().unwrap().trim_start_matches("./").to_string();
+        names.entry(file).or_default().push(row["name"].as_str().unwrap().to_string());
+    }
+    for listed in names.values_mut() {
+        listed.sort();
+    }
+    names
+}
+
+#[test]
+fn api_lists_each_languages_public_rows_and_re_exports() {
+    let f = api_repo();
+    let public = api_names(&f, "public");
+    let expected: &[(&str, &[&str])] = &[
+        ("lib.rs", &["Draw", "Mode", "Off", "On", "Shape", "Shape", "Shape", "Thing", "area", "draw", "draw", "side"]),
+        ("box.ts", &["Box", "Shape", "area", "local", "open", "side"]),
+        ("index.ts", &["./box"]),
+        ("lib.go", &["Area", "Open", "Shape", "lib"]),
+        ("Lib.java", &["Lib", "open"]),
+        ("shape.php", &["Shape", "area", "plain"]),
+        ("shape.py", &["Shape", "area", "open"]),
+        ("pkg/core.py", &["start"]),
+        ("pkg/__init__.py", &["start"]),
+        ("shape.rb", &["Shape", "area"]),
+        ("lib.c", &["open"]),
+        ("lib.h", &["open"]),
+        ("util.sh", &["alpha"]),
+    ];
+    for (file, names) in expected {
+        assert_eq!(public.get(*file).map(Vec::as_slice), Some(&names.iter().map(|name| name.to_string()).collect::<Vec<_>>()[..]), "{file}: {public:?}");
+    }
+    assert_eq!(public.len(), expected.len(), "a file with no public rows is left out: {public:?}");
+}
+
+#[test]
+fn api_restricted_adds_the_rows_other_files_reach() {
+    let f = api_repo();
+    let (public, restricted) = (api_names(&f, "public"), api_names(&f, "restricted"));
+    let added = |file: &str| -> Vec<String> {
+        let mut rows = restricted.get(file).cloned().unwrap_or_default();
+        for name in public.get(file).into_iter().flatten() {
+            let at = rows.iter().position(|row| row == name).unwrap_or_else(|| panic!("{file} lost {name}: {restricted:?}"));
+            rows.remove(at);
+        }
+        rows
+    };
+    assert_eq!(added("lib.rs"), ["shared"]);
+    assert_eq!(added("box.ts"), ["seal"]);
+    assert_eq!(added("lib.go"), ["Area", "area", "inner"]);
+    assert_eq!(added("Lib.java"), ["Hidden", "pkg", "prot", "run"]);
+    assert_eq!(added("shape.php"), ["scale"]);
+    assert_eq!(added("shape.py"), ["_hidden", "_scale"]);
+    assert_eq!(added("shape.rb"), ["cache"]);
+    assert_eq!(added("lib.h"), ["helper"]);
+    assert!(added("lib.c").is_empty(), "a .c file's static stays in its file: {restricted:?}");
+    let all = api_names(&f, "all");
+    for (file, private) in [("lib.rs", "helper"), ("box.ts", "peek"), ("box.ts", "hidden"), ("Lib.java", "priv"), ("shape.php", "cache"), ("lib.c", "hidden"), ("shape.rb", "private")] {
+        assert!(!restricted[file].contains(&private.to_string()), "{file} {private}: {restricted:?}");
+        assert!(all[file].contains(&private.to_string()), "{file} {private}: {all:?}");
+    }
+}
+
+/// Each row of `trace api <path> --visibility all` as its header and its
+/// parent's header.
+fn api_tree(f: &Fixture, path: &str) -> Vec<(String, Option<String>)> {
+    let v = f.trace(&["api", path, "--visibility", "all", "--json"]).json();
+    let rows = v["results"].as_array().unwrap();
+    let header = |row: &serde_json::Value| row["header"].as_str().unwrap().to_string();
+    rows.iter().map(|row| (header(row), row["parent"].as_u64().map(|at| header(&rows[at as usize])))).collect()
+}
+
+/// Every declaration comes from the syntax tree: each name a statement
+/// declares has a row and a header of its own, a member nests under the
+/// declaration whose body holds it even when the name follows the body, a
+/// function body declares nothing, and one-line forms read like multi-line
+/// ones.
+#[test]
+fn api_reads_each_declaration_from_the_syntax_tree() {
+    let f = Fixture::new();
+    f.write(
+        "shapes.c",
+        concat!(
+            "typedef struct {\n    int width;\n    int (*draw)(int, char *);\n} Canvas;\n",
+            "typedef int (*callback)(int);\n",
+            "struct Tree { struct Tree *left, *right; unsigned flag : 1; };\n",
+            "static struct { int retries; } config;\n",
+            "int counter = 0;\n",
+            "static const char *names[] = { \"a\", \"b\" };\n",
+            "int run(int n) {\n    int total = n;\n    return total;\n}\n",
+        ),
+    );
+    f.write("vars.go", "package vars\n\nvar Width, Height int\n\nconst A, B = 1, 2\n\ntype Point struct{ X, Y int }\n\nfunc run() {\n\tvar inner int\n\t_ = inner\n}\n");
+    f.write("Box.java", "public class Box {\n    public static final int MAX = 3, MIN = 0;\n}\n");
+    f.write("Flag.php", "<?php\nenum Flag { case On; case Off; }\n");
+    f.write("shape.rb", "class Shape\n  def area\n    total = width * height\n    total\n  end\n\n  def size = @data.size\nend\n");
+    f.commit("shapes");
+    let canvas = Some("typedef struct { … } Canvas;");
+    let tree = Some("struct Tree { … }");
+    let expected: &[(&str, &[(&str, Option<&str>)])] = &[
+        (
+            "shapes.c",
+            &[
+                ("typedef struct { … } Canvas;", None),
+                ("int width;", canvas),
+                ("int (*draw)(int, char *);", canvas),
+                ("typedef int (*callback)(int);", None),
+                ("struct Tree { … }", None),
+                ("struct Tree *left;", tree),
+                ("struct Tree *right;", tree),
+                ("unsigned flag : 1;", tree),
+                ("static struct { … } config;", None),
+                ("int retries;", Some("static struct { … } config;")),
+                ("int counter = 0;", None),
+                ("static const char *names[] = { … };", None),
+                ("int run(int n) { … }", None),
+            ],
+        ),
+        (
+            "vars.go",
+            &[
+                ("package vars", None),
+                ("var Width int", None),
+                ("var Height int", None),
+                ("const A = 1", None),
+                ("const B = 2", None),
+                ("type Point struct { … }", None),
+                ("X int", Some("type Point struct { … }")),
+                ("Y int", Some("type Point struct { … }")),
+                ("func run() { … }", None),
+            ],
+        ),
+        (
+            "Box.java",
+            &[
+                ("public class Box { … }", None),
+                ("public static final int MAX = 3;", Some("public class Box { … }")),
+                ("public static final int MIN = 0;", Some("public class Box { … }")),
+            ],
+        ),
+        ("Flag.php", &[("enum Flag { … }", None), ("case On;", Some("enum Flag { … }")), ("case Off;", Some("enum Flag { … }"))]),
+        ("shape.rb", &[("class Shape { … }", None), ("def area { … }", Some("class Shape { … }")), ("def size = …", Some("class Shape { … }"))]),
+    ];
+    for (file, rows) in expected {
+        let rows: Vec<(String, Option<String>)> = rows.iter().map(|(header, parent)| (header.to_string(), parent.map(str::to_string))).collect();
+        assert_eq!(api_tree(&f, file), rows, "{file}");
+    }
+}
+
+/// Visibility comes from each language's syntax, never from text that only
+/// looks like it: a `private` inside a Ruby heredoc, a Rust `for<'a>` bound
+/// on an inherent impl, and `require(` in a script's comment change nothing.
+#[test]
+fn api_visibility_ignores_text_that_only_looks_like_syntax() {
+    let f = Fixture::new();
+    f.write("shape.rb", "class Shape\n  def doc\n    <<~TEXT\n      private\n    TEXT\n  end\n\n  def visible\n  end\nend\n");
+    f.write("parser.rs", "pub struct Parser<F> { run: F }\n\nimpl<F> Parser<F>\nwhere\n    F: for<'a> Fn(&'a str),\n{\n    fn helper(&self) {}\n}\n\npub enum Event { Moved { x: u32 } }\n");
+    f.write("script.js", "// This script never calls require( or sets module.exports.\nfunction visible() {}\n");
+    f.commit("lookalikes");
+    let public = api_names(&f, "public");
+    assert_eq!(public["shape.rb"], ["Shape", "doc", "visible"]);
+    assert_eq!(public["parser.rs"], ["Event", "Moved", "Parser", "Parser<F>", "x"], "an inherent impl's private fn stays private, and a variant's fields are as public as its enum");
+    assert_eq!(public["script.js"], ["visible"], "a script's top level is global");
+}
+
+/// An import or re-export prints once per statement, whole, however many
+/// names it binds and lines it spans.
+#[test]
+fn api_prints_each_import_statement_once_and_whole() {
+    let f = Fixture::new();
+    f.write("index.ts", "export {\n  first,\n  second,\n} from './parts';\nimport {\n  helper,\n} from './helper';\n");
+    f.write("lib.rs", "pub use crate::shapes::{Circle, Square};\nuse std::{fs, io};\n");
+    f.commit("imports");
+    let v = f.trace(&["api", ".", "--visibility", "all", "--json"]).json();
+    let rows: Vec<(String, String, String)> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["kind"].as_str().unwrap().to_string(), row["name"].as_str().unwrap().to_string(), row["header"].as_str().unwrap().to_string()))
+        .collect();
+    let row = |kind: &str, name: &str, header: &str| (kind.to_string(), name.to_string(), header.to_string());
+    assert_eq!(
+        rows,
+        [
+            row("reexport", "./parts", "export {\n  first,\n  second,\n} from './parts';"),
+            row("import", "helper", "import {\n  helper,\n} from './helper';"),
+            row("reexport", "Circle, Square", "pub use crate::shapes::{Circle, Square};"),
+            row("import", "fs, io", "use std::{fs, io};"),
+        ]
+    );
+}
+
+#[test]
+fn api_annotates_each_file_with_its_purposes_first_sentence() {
+    let f = api_repo();
+    let out = f.trace(&["api", "lib.rs", "shape.py"]);
+    out.ok();
+    assert!(out.stdout.contains("lib.rs") && out.stdout.contains("— Shapes and their areas.\n"), "{}", out.stdout);
+    assert!(out.stdout.contains("— Opens shapes.\n"), "the license header never passes for the purpose: {}", out.stdout);
+    assert!(out.stdout.contains("L2    pub struct Shape { … }"), "{}", out.stdout);
+}
+
+/// Past the budget a header is never cut to its name: the least-imported
+/// files collapse first, each to a line naming the command that lists it.
+#[test]
+fn api_collapses_the_least_imported_files_first_and_keeps_headers_whole() {
+    let f = Fixture::new();
+    let exports = |prefix: &str| (0..6).map(|n| format!("export function {prefix}{n}(value: string, count: number): string {{ return value; }}\n")).collect::<String>();
+    f.write("core.ts", &exports("core"));
+    f.write("mid.ts", &format!("import {{ core0 }} from './core';\n{}", exports("mid")));
+    f.write("leaf.ts", &format!("import {{ core0 }} from './core';\nimport {{ mid0 }} from './mid';\n{}", exports("leaf")));
+    f.commit("chain");
+    let mut collapsed_any = false;
+    for budget in (300..4000).step_by(100) {
+        let out = f.trace(&["api", ".", "--budget", &budget.to_string()]);
+        out.ok();
+        let collapsed = |file: &str| out.stdout.lines().any(|line| line.contains(&format!(" {file}  … ")) && line.contains("→ trace api"));
+        for line in out.stdout.lines().filter(|line| line.trim_start().starts_with('L')) {
+            assert!(line.ends_with("{ … }  // complexity 1"), "a header was cut at --budget {budget}: {line}\n{}", out.stdout);
+        }
+        if collapsed("core.ts") {
+            assert!(collapsed("mid.ts") && collapsed("leaf.ts"), "core.ts collapsed before less-imported files at --budget {budget}:\n{}", out.stdout);
+        }
+        if collapsed("mid.ts") {
+            assert!(collapsed("leaf.ts"), "mid.ts collapsed before leaf.ts at --budget {budget}:\n{}", out.stdout);
+        }
+        collapsed_any |= collapsed("leaf.ts");
+    }
+    assert!(collapsed_any, "no budget collapsed a file");
+}

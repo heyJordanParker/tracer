@@ -12,7 +12,7 @@ use std::path::Path;
 
 /// True when `file_path` matches any glob, using fnmatch semantics with
 /// the `**/` special-case.
-pub(super) fn matches_paths(file_path: &Path, globs: &[String], repo_root: &Path) -> bool {
+pub(crate) fn matches_paths(file_path: &Path, globs: &[String], repo_root: &Path) -> bool {
     let relative = match file_path.strip_prefix(repo_root) {
         Ok(r) => r.to_string_lossy().to_string(),
         Err(_) => file_path.to_string_lossy().to_string(),

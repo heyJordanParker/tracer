@@ -6,15 +6,12 @@
 //! output.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static MISSING: AtomicBool = AtomicBool::new(false);
 
 /// Every file the path arguments name: a file as itself, a directory as the
 /// files under it from the repository's own listing, so ignored files,
 /// nested repositories and linked worktrees stay out. A path that does not
 /// exist is reported and skipped, the way ripgrep reports one and searches
-/// the rest; `missing` then turns the run's exit status to 2.
+/// the rest, and the run's exit status turns to 2.
 pub fn files_under(paths: &[PathBuf], arg: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for path in paths {
@@ -36,43 +33,37 @@ pub fn files_under(paths: &[PathBuf], arg: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Whether a path argument named something that does not exist.
-pub fn missing() -> bool {
-    MISSING.load(Ordering::Relaxed)
-}
-
 /// Path must exist (file or directory).
-pub fn require_exists(path: &Path, arg: &str) {
+pub fn require_exists(path: &Path, arg: &str) -> anyhow::Result<()> {
     if !path.exists() {
-        fail(path, arg, "does not exist");
+        return Err(fail(path, arg, "does not exist"));
     }
+    Ok(())
 }
 
 /// Path must exist AND be a directory (used by `list`).
-pub fn require_dir(path: &Path, arg: &str) {
+pub fn require_dir(path: &Path, arg: &str) -> anyhow::Result<()> {
     if !path.exists() {
-        fail(path, arg, "does not exist");
+        return Err(fail(path, arg, "does not exist"));
     }
     if !path.is_dir() {
-        fail(path, arg, "is a file");
+        return Err(fail(path, arg, "is a file"));
     }
+    Ok(())
 }
 
-fn fail(path: &Path, arg: &str, why: &str) -> ! {
-    report(path, arg, why);
-    std::process::exit(2);
+fn fail(path: &Path, arg: &str, why: &str) -> anyhow::Error {
+    crate::process::fail(2, invalid(path, arg, why))
 }
 
 /// Name a bad path argument on stderr and let the run go on; the run's exit
-/// status is 2 when it ends (see `missing`).
+/// status is 2 when it ends.
 pub fn report(path: &Path, arg: &str, why: &str) {
-    // "Invalid value for 'ARG': 'path' why" — a single recognizable
-    // diagnostic class for every bad path argument.
-    eprintln!(
-        "Error: Invalid value for '{}': '{}' {}",
-        arg,
-        path.display(),
-        why
-    );
-    MISSING.store(true, Ordering::Relaxed);
+    crate::process::report(&invalid(path, arg, why));
+}
+
+/// "Invalid value for 'ARG': 'path' why": one recognizable diagnostic for
+/// every bad path argument.
+fn invalid(path: &Path, arg: &str, why: &str) -> String {
+    format!("Error: Invalid value for '{}': '{}' {}", arg, path.display(), why)
 }

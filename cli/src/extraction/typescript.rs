@@ -4,8 +4,8 @@
 //! `#eq?` text predicates, so the `(#eq? @_fn "require")` predicate is
 //! enforced manually below.
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
-use std::collections::HashMap;
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 const QUERY_SRC: &str = r#"
@@ -21,47 +21,25 @@ const QUERY_SRC: &str = r#"
           function: (identifier) @_fn
           arguments: (arguments (string (string_fragment) @import.module))
           (#eq? @_fn "require"))
-
-        ; exported function declarations
-        (export_statement
-          declaration: (function_declaration name: (identifier) @export.function))
-        (export_statement
-          declaration: (generator_function_declaration name: (identifier) @export.function))
-
-        ; exported class declarations
-        (export_statement
-          declaration: (class_declaration name: (type_identifier) @export.class))
-
-        ; exported const / let / var declarations
-        (export_statement
-          declaration: (lexical_declaration
-                         (variable_declarator name: (identifier) @export.constant)))
-        (export_statement
-          declaration: (variable_declaration
-                         (variable_declarator name: (identifier) @export.constant)))
-
-        ; exported interfaces and types
-        (export_statement
-          declaration: (interface_declaration name: (type_identifier) @export.interface))
-        (export_statement
-          declaration: (type_alias_declaration name: (type_identifier) @export.type))
 "#;
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "typescript".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
 }
 
-pub fn extract(source: &[u8], path: &str, _is_tsx_arg: bool) -> ExtractionResult {
-    // The parser/query is keyed by the `.tsx`/`.jsx` suffix on the path.
+/// Whether `path` is parsed with the TSX grammar, by its suffix.
+fn is_tsx(path: &str) -> bool {
     let lower = path.to_lowercase();
-    let is_tsx = lower.ends_with(".tsx") || lower.ends_with(".jsx");
-    let lang: tree_sitter::Language = if is_tsx {
+    lower.ends_with(".tsx") || lower.ends_with(".jsx")
+}
+
+pub fn extract(source: &[u8], path: &str) -> ExtractionResult {
+    let lang: tree_sitter::Language = if is_tsx(path) {
         tree_sitter_typescript::LANGUAGE_TSX.into()
     } else {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
@@ -74,18 +52,15 @@ pub fn extract(source: &[u8], path: &str, _is_tsx_arg: bool) -> ExtractionResult
         Some(t) => t,
         None => return empty(),
     };
-    extract_from_tree(&tree, source, is_tsx)
+    extract_from_tree(&tree, source, path)
 }
 
-/// Imports/exports from an already-parsed TS/TSX tree. Decoupled from the
-/// parse for the single-parse optimization. `is_tsx` MUST match the grammar
-/// the caller used to produce `tree` (so the query grammar matches the tree).
-pub fn extract_from_tree(
-    tree: &tree_sitter::Tree,
-    source: &[u8],
-    is_tsx: bool,
-) -> ExtractionResult {
-    let lang: tree_sitter::Language = if is_tsx {
+/// Imports/declarations/references from an already-parsed TS/TSX tree at
+/// `path`. Decoupled from the parse for the single-parse optimization. The
+/// caller parsed `tree` with the grammar `path`'s suffix picks, so the query
+/// grammar matches the tree.
+pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8], path: &str) -> ExtractionResult {
+    let lang: tree_sitter::Language = if is_tsx(path) {
         tree_sitter_typescript::LANGUAGE_TSX.into()
     } else {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
@@ -100,7 +75,9 @@ pub fn extract_from_tree(
     struct Cap {
         name: String,
         text: String,
-        line: i64,
+        /// The first and last lines of the `import` statement or `require`
+        /// call that holds the capture.
+        lines: (i64, i64),
         /// For an `import.symbol`: the module of its enclosing
         /// `import_statement`, resolved structurally (an `import { a } from
         /// 'm'` has the module string AFTER the specifiers, so a
@@ -141,10 +118,13 @@ pub fn extract_from_tree(
                 "import.symbol" => import_specifier_binding(node, source).into_iter().collect(),
                 _ => Vec::new(),
             };
+            let statement = std::iter::successors(Some(node), Node::parent)
+                .find(|holder| matches!(holder.kind(), "import_statement" | "call_expression"))
+                .unwrap_or(node);
             caps.push(Cap {
                 name: name.to_string(),
                 text: node.utf8_text(source).unwrap_or("").to_string(),
-                line: node.start_position().row as i64 + 1,
+                lines: (statement.start_position().row as i64 + 1, statement.end_position().row as i64 + 1),
                 owner_module,
                 locals,
             });
@@ -161,7 +141,6 @@ pub fn extract_from_tree(
     }
 
     let mut imports: Vec<Import> = Vec::new();
-    let mut exports: Vec<Export> = Vec::new();
 
     for name in &order {
         for c in &groups[name] {
@@ -171,8 +150,10 @@ pub fn extract_from_tree(
                         module: c.text.clone(),
                         symbol: None,
                         locals: c.locals.clone(),
-                        line: c.line,
+                        line: c.lines.0,
+                        end_line: c.lines.1,
                         block: None,
+                        visibility: None,
                     });
                 }
                 "import.symbol" => {
@@ -184,50 +165,152 @@ pub fn extract_from_tree(
                         module,
                         symbol: Some(c.text.clone()),
                         locals: c.locals.clone(),
-                        line: c.line,
+                        line: c.lines.0,
+                        end_line: c.lines.1,
                         block: None,
+                        visibility: None,
                     });
                 }
-                "export.function" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "function".into(),
-                    line: c.line,
-                }),
-                "export.class" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "class".into(),
-                    line: c.line,
-                }),
-                "export.constant" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "constant".into(),
-                    line: c.line,
-                }),
-                "export.interface" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "interface".into(),
-                    line: c.line,
-                }),
-                "export.type" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "type".into(),
-                    line: c.line,
-                }),
                 _ => {}
             }
         }
     }
+    // A script's top level is global, and so is a declaration file's; a
+    // module's top-level declaration is public when an export names it. The
+    // query's imports are `import` statements and `require` calls.
+    let global = path.to_lowercase().ends_with(".d.ts") || !is_module(tree.root_node(), source, !imports.is_empty());
     imports.extend(reexport_and_dynamic_imports(tree.root_node(), source));
 
-    let declarations = walk_declarations(tree.root_node(), source);
+    let mut declarations = walk_declarations(tree.root_node(), source);
+    let exported = exported_names(tree.root_node(), source);
+    for declaration in declarations.iter_mut().filter(|row| row.parent.is_none() && row.visibility == Visibility::FileLocal) {
+        if global || exported.contains(&declaration.name) {
+            declaration.visibility = Visibility::Public;
+        }
+    }
     let references = walk_references(tree.root_node(), source);
 
     ExtractionResult {
         language: "typescript".into(),
         imports,
-        exports,
         declarations,
         references,
+    }
+}
+
+/// Whether the file is a module: it calls `require`, or a top-level
+/// statement imports, exports, or assigns a CommonJS export.
+fn is_module(root: Node, source: &[u8], requires: bool) -> bool {
+    let mut cursor = root.walk();
+    let statements = root.named_children(&mut cursor).any(|statement| match statement.kind() {
+        "import_statement" | "export_statement" => true,
+        _ => commonjs_export(statement, source).is_some(),
+    });
+    requires || statements
+}
+
+/// The assignment of a CommonJS export statement: `module.exports = …`,
+/// `module.exports.a = …`, or `exports.a = …`.
+fn commonjs_export<'a>(statement: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+    let assignment = statement.named_child(0).filter(|node| statement.kind() == "expression_statement" && node.kind() == "assignment_expression")?;
+    let left = assignment.child_by_field_name("left")?.utf8_text(source).ok()?;
+    (left == "module.exports" || left.starts_with("exports.") || left.starts_with("module.exports.")).then_some(assignment)
+}
+
+/// The top-level names an export names apart from its own declaration:
+/// `export { a, b as c }`, `export = a`, `export default a`,
+/// `module.exports = a` or `{ a }`, `exports.c = a`, and each shorthand
+/// property of an exported object literal, as in `export default { a }`.
+fn exported_names(root: Node, source: &[u8]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let text = |node: Node| node.utf8_text(source).unwrap_or_default().to_string();
+    let add_value = |value: Node, names: &mut HashSet<String>| match value.kind() {
+        "identifier" => {
+            names.insert(text(value));
+        }
+        "object" => {
+            let mut cursor = value.walk();
+            for property in value.named_children(&mut cursor) {
+                if property.kind() == "shorthand_property_identifier" {
+                    names.insert(text(property));
+                }
+            }
+        }
+        _ => {}
+    };
+    let mut cursor = root.walk();
+    for statement in root.named_children(&mut cursor) {
+        match statement.kind() {
+            "export_statement" if statement.child_by_field_name("source").is_none() => {
+                let mut inner = statement.walk();
+                for child in statement.named_children(&mut inner) {
+                    match child.kind() {
+                        "export_clause" => {
+                            let mut specifiers = child.walk();
+                            for specifier in child.named_children(&mut specifiers) {
+                                if let Some(name) = specifier.child_by_field_name("name") {
+                                    names.insert(text(name));
+                                }
+                            }
+                        }
+                        "lexical_declaration" | "variable_declaration" => {
+                            let mut declarators = child.walk();
+                            for declarator in child.named_children(&mut declarators) {
+                                if let Some(value) = declarator.child_by_field_name("value") {
+                                    add_value(value, &mut names);
+                                }
+                            }
+                        }
+                        _ => add_value(child, &mut names),
+                    }
+                }
+            }
+            _ => {
+                if let Some(value) = commonjs_export(statement, source).and_then(|assignment| assignment.child_by_field_name("right")) {
+                    add_value(value, &mut names);
+                }
+            }
+        }
+    }
+    names
+}
+
+/// A top-level declaration an `export` holds directly, `export default`
+/// included.
+fn directly_exported(node: Node) -> bool {
+    let mut up = node.parent();
+    while let Some(parent) = up {
+        match parent.kind() {
+            "export_statement" => return true,
+            "lexical_declaration" | "variable_declaration" | "ambient_declaration" => up = parent.parent(),
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A row's own visibility as the walk meets it. A class member is public
+/// unless `protected` or `private` says otherwise, an interface member is
+/// public, a top-level declaration is public when an export holds it, and
+/// anything declared inside a function stays in its file. The file's other
+/// exports raise the top level afterwards.
+fn declared(node: Node, source: &[u8], top_level: bool) -> Visibility {
+    match node.kind() {
+        "method_definition" | "public_field_definition" | "abstract_method_signature" => {
+            let mut cursor = node.walk();
+            let modifier = node
+                .children(&mut cursor)
+                .find(|child| child.kind() == "accessibility_modifier")
+                .and_then(|modifier| modifier.utf8_text(source).ok());
+            match modifier {
+                Some("private") => Visibility::FileLocal,
+                Some("protected") => Visibility::Restricted,
+                _ => Visibility::Public,
+            }
+        }
+        "method_signature" | "property_signature" => Visibility::Public,
+        _ if top_level && directly_exported(node) => Visibility::Public,
+        _ => Visibility::FileLocal,
     }
 }
 
@@ -250,12 +333,16 @@ fn reexport_and_dynamic_imports(root: Node, source: &[u8]) -> Vec<Import> {
         if let Some(source_node) = source_node.and_then(|node| string_fragment(node).or(Some(node)))
         {
             if let Ok(module) = source_node.utf8_text(source) {
+                // `export … from` passes its names on as this file's API.
+                let reexport = node.kind() == "export_statement";
                 out.push(Import {
                     module: module.to_string(),
                     symbol: None,
                     locals: Vec::new(),
-                    line: source_node.start_position().row as i64 + 1,
+                    line: node.start_position().row as i64 + 1,
+                    end_line: node.end_position().row as i64 + 1,
                     block: None,
+                    visibility: reexport.then_some(Visibility::Public),
                 });
             }
         }
@@ -381,6 +468,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                             self_type: None,
                             module_file: None,
                             supertypes: Vec::new(),
+                            visibility: declared(n, source, lexical_parent.is_none()),
                         });
                     }
                 }

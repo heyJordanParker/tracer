@@ -3,23 +3,25 @@
 //!
 //! C has no methods or classes — every function is free and every call is a
 //! `Free` reference (no container, no member/static shapes). Declarations
-//! cover function definitions (the name nested in the declarator), structs /
-//! unions (`class`) and enums (`enum`). Imports are `#include` paths.
+//! cover function definitions, structs / unions (`class`), enums (`enum`)
+//! and their enumerators, struct and union fields, typedefs (`type`), and
+//! file-scope variables and prototypes. Imports are `#include` paths.
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
+use crate::extraction::header::Builder;
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
+use std::ops::Range;
 use tree_sitter::{Node, Parser};
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "c".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
 }
 
-pub fn extract(source: &[u8]) -> ExtractionResult {
+pub fn extract(source: &[u8], path: &str) -> ExtractionResult {
     let lang: tree_sitter::Language = tree_sitter_c::LANGUAGE.into();
     let mut parser = Parser::new();
     if parser.set_language(&lang).is_err() {
@@ -29,32 +31,34 @@ pub fn extract(source: &[u8]) -> ExtractionResult {
         Some(t) => t,
         None => return empty(),
     };
-    extract_from_tree(&tree, source)
+    extract_from_tree(&tree, source, path)
 }
 
-/// Imports/exports/declarations/references from an already-parsed C tree.
+/// Imports/declarations/references from an already-parsed C tree at `path`.
 /// Caller guarantees `tree` came from the C grammar.
-pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
+pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8], path: &str) -> ExtractionResult {
     let root = tree.root_node();
-    let imports = walk_imports(root, source);
-    let declarations = walk_declarations(root, source);
-    // Every C top-level declaration is "exported" (visible to other TUs
-    // unless `static`); the structure view wants them all.
-    let exports = declarations
-        .iter()
-        .map(|d| Export {
-            name: d.name.clone(),
-            kind: d.kind.clone(),
-            line: d.line,
-        })
-        .collect();
-    let references = walk_references(root, source);
+    let header_file = path.to_lowercase().ends_with(".h");
     ExtractionResult {
         language: "c".into(),
-        imports,
-        exports,
-        declarations,
-        references,
+        imports: walk_imports(root, source),
+        declarations: walk_declarations(root, source, header_file),
+        references: walk_references(root, source),
+    }
+}
+
+/// `static` keeps a declaration in its translation unit: file-local in a
+/// `.c` file, and restricted in a header, whose every includer calls it.
+/// Anything else links from every file.
+fn linkage(node: Node, source: &[u8], header_file: bool) -> Visibility {
+    let mut cursor = node.walk();
+    let local = node
+        .children(&mut cursor)
+        .any(|child| child.kind() == "storage_class_specifier" && child.utf8_text(source) == Ok("static"));
+    match local {
+        true if header_file => Visibility::Restricted,
+        true => Visibility::FileLocal,
+        false => Visibility::Public,
     }
 }
 
@@ -75,7 +79,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                         symbol: None,
                         locals: Vec::new(),
                         line: n.start_position().row as i64 + 1,
+                        end_line: path.end_position().row as i64 + 1,
                         block: None,
+                        visibility: None,
                     });
                 }
             }
@@ -88,295 +94,129 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
     out
 }
 
-/// Function definitions, structs / unions, and enums. C has no nesting of
-/// named functions, so every declaration has no container.
-fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
+/// Every declaration the file makes outside a function body: a body
+/// declares nothing other code reaches, so the walk never enters one. A
+/// field or enumerator's container is the struct, union, enum, or typedef
+/// that holds it.
+fn walk_declarations(root: Node, source: &[u8], header_file: bool) -> Vec<Declaration> {
     let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut stack = vec![root];
-    while let Some(n) = stack.pop() {
+    let mut ranges = Vec::new();
+    let mut add = |declaration: Declaration, range: Range<usize>| {
+        out.push(declaration);
+        ranges.push(range);
+    };
+    let mut stack: Vec<(Node, Option<String>)> = vec![(root, None)];
+    while let Some((n, container)) = stack.pop() {
+        let mut members = container.clone();
         match n.kind() {
+            "compound_statement" => continue,
             "function_definition" => {
-                if let Some((name, line)) = function_name(n, source) {
-                    if seen.insert((name.clone(), line)) {
-                        out.push(Declaration {
-                            name,
-                            kind: "function".to_string(),
-                            header_line: line,
-                            line,
-                            end_line: n.end_position().row as i64 + 1,
-                            container: None,
-                            parent: None,
-                            header: {
-                                let mut builder = crate::extraction::header::Builder::new(source);
-                                if let Some(body) = n.child_by_field_name("body") {
-                                    builder.slice(n.start_byte(), body.start_byte()).block(body);
-                                } else {
-                                    builder.node(n);
-                                }
-                                builder.finish()
-                            },
-                            annotations: Vec::new(),
-                            self_type: None,
-                            module_file: None,
-                            supertypes: Vec::new(),
-                        });
-                    }
+                if let Some(name) = n.child_by_field_name("declarator").and_then(declared_name) {
+                    let mut header = Builder::new(source);
+                    match n.child_by_field_name("body") {
+                        Some(body) => header.slice(n.start_byte(), body.start_byte()).block(body),
+                        None => header.node(n),
+                    };
+                    add(declaration(n, name, source, "function", None, header.finish(), linkage(n, source, header_file)), n.byte_range());
                 }
             }
             "struct_specifier" | "union_specifier" | "enum_specifier" => {
-                if matches!(n.kind(), "struct_specifier" | "union_specifier")
-                    && n.child_by_field_name("body").is_none()
-                {
-                    continue;
-                }
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    if let Ok(name) = name_node.utf8_text(source) {
-                        let kind = if n.kind() == "enum_specifier" {
-                            "enum"
-                        } else {
-                            "class"
-                        };
-                        let line = name_node.start_position().row as i64 + 1;
-                        if seen.insert((name.to_string(), line)) {
-                            out.push(Declaration {
-                                name: name.to_string(),
-                                kind: kind.to_string(),
-                                header_line: line,
-                                line,
-                                end_line: n.end_position().row as i64 + 1,
-                                container: None,
-                                parent: None,
-                                header: {
-                                    let mut builder =
-                                        crate::extraction::header::Builder::new(source);
-                                    if let Some(body) = n.child_by_field_name("body") {
-                                        builder
-                                            .slice(n.start_byte(), body.start_byte())
-                                            .block(body);
-                                    } else {
-                                        builder.node(n);
-                                    }
-                                    builder.finish()
-                                },
-                                annotations: Vec::new(),
-                                self_type: None,
-                                module_file: None,
-                                supertypes: Vec::new(),
-                            });
-                        }
-                    }
-                }
-            }
-            "type_definition" => {
-                if let Some((name, line)) = function_name(n, source) {
-                    if seen.insert((name.clone(), line)) {
-                        let mut builder = crate::extraction::header::Builder::new(source);
-                        let mut cursor = n.walk();
-                        if let Some(body) = n
-                            .named_children(&mut cursor)
-                            .find(|child| {
-                                matches!(
-                                    child.kind(),
-                                    "struct_specifier" | "union_specifier" | "enum_specifier"
-                                ) && child.child_by_field_name("body").is_some()
-                            })
-                            .and_then(|specification| specification.child_by_field_name("body"))
-                        {
-                            builder
-                                .slice(n.start_byte(), body.start_byte())
-                                .block(body)
-                                .slice(body.end_byte(), n.end_byte());
-                        } else {
-                            builder.node(n);
-                        }
-                        out.push(Declaration {
-                            name,
-                            kind: "type".into(),
-                            header_line: n.start_position().row as i64 + 1,
-                            line,
-                            end_line: n.end_position().row as i64 + 1,
-                            container: None,
-                            parent: None,
-                            header: builder.finish(),
-                            annotations: Vec::new(),
-                            self_type: None,
-                            module_file: None,
-                            supertypes: Vec::new(),
-                        });
-                    }
-                }
-            }
-            "declaration" => {
-                if let Some((name, line)) = function_name(n, source) {
-                    if seen.insert((name.clone(), line)) {
-                        out.push(Declaration {
-                            name,
-                            kind: "property".into(),
-                            header_line: n.start_position().row as i64 + 1,
-                            line,
-                            end_line: n.end_position().row as i64 + 1,
-                            container: None,
-                            parent: None,
-                            header: crate::extraction::line_text(
-                                source,
-                                n.start_position().row as i64 + 1,
-                            ),
-                            annotations: Vec::new(),
-                            self_type: None,
-                            module_file: None,
-                            supertypes: Vec::new(),
-                        });
-                    }
+                // A specifier without a body names a type declared elsewhere.
+                if let (Some(name), Some(body)) = (n.child_by_field_name("name"), n.child_by_field_name("body")) {
+                    let kind = if n.kind() == "enum_specifier" { "enum" } else { "class" };
+                    let mut header = Builder::new(source);
+                    header.slice(n.start_byte(), body.start_byte()).block(body);
+                    let specifier = declaration(n, name, source, kind, None, header.finish(), Visibility::Public);
+                    members = Some(specifier.name.clone());
+                    add(specifier, n.byte_range());
                 }
             }
             "enumerator" => {
-                if let Some(name_node) = n.child_by_field_name("name") {
-                    if let Ok(name) = name_node.utf8_text(source) {
-                        let line = name_node.start_position().row as i64 + 1;
-                        if seen.insert((name.to_string(), line)) {
-                            out.push(Declaration {
-                                name: name.to_string(),
-                                kind: "property".into(),
-                                header_line: n.start_position().row as i64 + 1,
-                                line,
-                                end_line: n.end_position().row as i64 + 1,
-                                container: None,
-                                parent: None,
-                                header: crate::extraction::line_text(
-                                    source,
-                                    n.start_position().row as i64 + 1,
-                                ),
-                                annotations: Vec::new(),
-                                self_type: None,
-                                module_file: None,
-                                supertypes: Vec::new(),
-                            });
-                        }
+                if let Some(name) = n.child_by_field_name("name") {
+                    let header = Builder::new(source).node(n).finish();
+                    add(declaration(n, name, source, "property", container.clone(), header, Visibility::Public), n.byte_range());
+                }
+            }
+            "type_definition" | "declaration" | "field_declaration" => {
+                let kind = if n.kind() == "type_definition" { "type" } else { "property" };
+                let visibility = linkage(n, source, header_file);
+                let unnamed_body = n
+                    .child_by_field_name("type")
+                    .is_some_and(|kind| kind.child_by_field_name("body").is_some() && kind.child_by_field_name("name").is_none());
+                let mut cursor = n.walk();
+                let declarators: Vec<Node> = n.children_by_field_name("declarator", &mut cursor).collect();
+                for (index, declarator) in declarators.iter().enumerate() {
+                    let Some(name) = declared_name(*declarator) else { continue };
+                    let declared = declaration(n, name, source, kind, container.clone(), statement_header(n, declarators[0], *declarator, source), visibility);
+                    // The first declarator holds an unnamed body, so the
+                    // fields of `typedef struct { … } A, *B;` nest under `A`.
+                    let holds = index == 0 && unnamed_body;
+                    if holds {
+                        members = Some(declared.name.clone());
                     }
+                    let start = if holds { n.start_byte() } else { declarator.start_byte() };
+                    add(declared, start..declarator.end_byte());
                 }
             }
             _ => {}
         }
         let mut c = n.walk();
         for child in n.children(&mut c) {
-            stack.push(child);
+            stack.push((child, members.clone()));
         }
     }
-    let text = String::from_utf8_lossy(source);
-    let lines: Vec<&str> = text.lines().collect();
-    for (index, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.contains("(*handler)") {
-            let line = index as i64 + 1;
-            if seen.insert(("handler".into(), line)) {
-                out.push(Declaration {
-                    name: "handler".into(),
-                    kind: "property".into(),
-                    header_line: line,
-                    line,
-                    end_line: line,
-                    container: None,
-                    parent: None,
-                    header: trimmed.into(),
-                    annotations: Vec::new(),
-                    self_type: None,
-                    module_file: None,
-                    supertypes: Vec::new(),
-                });
-            }
-        }
-        if trimmed == "typedef struct {" {
-            if let Some((end, closing)) = lines
-                .iter()
-                .enumerate()
-                .skip(index + 1)
-                .find(|(_, candidate)| candidate.trim_start().starts_with("}"))
-            {
-                let name = closing
-                    .trim()
-                    .trim_start_matches('}')
-                    .trim()
-                    .trim_end_matches(';')
-                    .to_string();
-                let line = index as i64 + 1;
-                if !name.is_empty() && seen.insert((name.clone(), line)) {
-                    out.push(Declaration {
-                        name,
-                        kind: "type".into(),
-                        header_line: line,
-                        line,
-                        end_line: end as i64 + 1,
-                        container: None,
-                        parent: None,
-                        header: format!(
-                            "typedef struct {{ … }} {}",
-                            closing.trim().trim_start_matches('}').trim()
-                        ),
-                        annotations: Vec::new(),
-                        self_type: None,
-                        module_file: None,
-                        supertypes: Vec::new(),
-                    });
-                }
-            }
-        }
-        if trimmed == "struct Node *next;" {
-            let line = index as i64 + 1;
-            if seen.insert(("next".into(), line)) {
-                out.push(Declaration {
-                    name: "next".into(),
-                    kind: "property".into(),
-                    header_line: line,
-                    line,
-                    end_line: line,
-                    container: Some("Node".into()),
-                    parent: None,
-                    header: trimmed.into(),
-                    annotations: Vec::new(),
-                    self_type: None,
-                    module_file: None,
-                    supertypes: Vec::new(),
-                });
-            }
-        }
-    }
-    out.sort_by_key(|d| d.line);
-    for index in 0..out.len() {
-        if let Some((parent, _)) = out[..index]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, candidate)| {
-                matches!(candidate.kind.as_str(), "class" | "enum" | "type")
-                    && candidate.line < out[index].line
-                    && candidate.end_line >= out[index].line
-            })
-        {
-            out[index].parent = Some(parent as u32);
-        }
-    }
-    out
+    // Any declaration holds the members of the body it defines, so the
+    // fields of `struct { int a; } config;` nest under `config`.
+    crate::extraction::nest(out, ranges, |_| true)
 }
 
-/// The function name of a `function_definition`: drill through the
-/// declarator chain (pointer / array declarators wrap a `function_declarator`
-/// whose declarator is the `identifier`).
-fn function_name(n: Node, source: &[u8]) -> Option<(String, i64)> {
-    let mut node = n.child_by_field_name("declarator")?;
-    loop {
-        match node.kind() {
-            "identifier" => {
-                let txt = node.utf8_text(source).ok()?;
-                return Some((txt.to_string(), node.start_position().row as i64 + 1));
-            }
-            "function_declarator"
-            | "pointer_declarator"
-            | "array_declarator"
-            | "parenthesized_declarator" => {
-                node = node.child_by_field_name("declarator")?;
-            }
-            _ => return None,
+/// One declaration named by `name`, spanning `node`.
+fn declaration(node: Node, name: Node, source: &[u8], kind: &str, container: Option<String>, header: String, visibility: Visibility) -> Declaration {
+    Declaration {
+        name: name.utf8_text(source).unwrap_or_default().to_string(),
+        kind: kind.into(),
+        header_line: node.start_position().row as i64 + 1,
+        line: name.start_position().row as i64 + 1,
+        end_line: node.end_position().row as i64 + 1,
+        container,
+        parent: None,
+        header,
+        annotations: Vec::new(),
+        self_type: None,
+        module_file: None,
+        supertypes: Vec::new(),
+        visibility,
+    }
+}
+
+/// The header of one declarator of `statement`, as if it were declared
+/// alone: `struct Tree *left, *right;` gives `struct Tree *right;` for
+/// `right`. A struct, union, or enum body the statement defines, and an
+/// initializer list, read `{ … }`.
+fn statement_header(statement: Node, first: Node, declarator: Node, source: &[u8]) -> String {
+    let mut header = Builder::new(source);
+    match statement.child_by_field_name("type").and_then(|kind| kind.child_by_field_name("body")) {
+        Some(body) => header.slice(statement.start_byte(), body.start_byte()).block(body).slice(body.end_byte(), first.start_byte()),
+        None => header.slice(statement.start_byte(), first.start_byte()),
+    };
+    header.declarator(declarator, declarator.child_by_field_name("value").filter(|value| value.kind() == "initializer_list"));
+    header.finish()
+}
+
+/// The name a declarator declares, through every pointer, array, function,
+/// parenthesized, attributed, and initialized wrapper: `int (*handler)(int)`
+/// declares `handler`.
+fn declared_name(declarator: Node) -> Option<Node> {
+    match declarator.kind() {
+        "identifier" | "field_identifier" | "type_identifier" => Some(declarator),
+        _ => {
+            let mut cursor = declarator.walk();
+            let inner = declarator.child_by_field_name("declarator").or_else(|| {
+                declarator.named_children(&mut cursor).find(|child| {
+                    child.kind().ends_with("declarator") || matches!(child.kind(), "identifier" | "field_identifier" | "type_identifier")
+                })
+            });
+            inner.and_then(declared_name)
         }
     }
 }

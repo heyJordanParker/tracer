@@ -17,14 +17,14 @@
 //! stands for inside the block that holds its `use`, so an aliased call is the
 //! path call it names.
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
+use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "rust".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
@@ -40,31 +40,75 @@ fn parse(source: &[u8]) -> Option<tree_sitter::Tree> {
     parser.parse(source, None)
 }
 
-/// Imports/exports/declarations/references from an already-parsed Rust tree.
+/// Imports/declarations/references from an already-parsed Rust tree.
 /// Decoupled from the parse so `file_facts` shares one tree with `ccn`.
 /// Caller guarantees `tree` came from the Rust grammar.
 pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
     let root = tree.root_node();
     let imports = walk_imports(root, source);
-    let declarations = walk_declarations(root, source, &imports);
-    // Exports are the public, module-level items — the narrower set the
-    // structure/module-API views want. A `pub` item is exported.
-    let exports = declarations
-        .iter()
-        .filter(|d| d.container.is_none())
-        .map(|d| Export {
-            name: d.name.clone(),
-            kind: d.kind.clone(),
-            line: d.line,
-        })
-        .collect();
+    let mut declarations = walk_declarations(root, source, &imports);
+    inherit_visibility(&mut declarations);
     let references = walk_references(Site::of(root, source), &imports);
     ExtractionResult {
         language: "rust".into(),
         imports,
-        exports,
         declarations,
         references,
+    }
+}
+
+/// The visibility an item's `pub` states: `pub` is public, `pub(crate)`,
+/// `pub(super)`, and `pub(in …)` reach other files, and no `pub` or
+/// `pub(self)` keeps the item in its module.
+fn declared(node: Node, source: &[u8]) -> Visibility {
+    let mut cursor = node.walk();
+    let modifier = node
+        .children(&mut cursor)
+        .find(|child| child.kind() == "visibility_modifier")
+        .and_then(|modifier| modifier.utf8_text(source).ok());
+    match modifier.map(|text| text.split_whitespace().collect::<String>()) {
+        None => Visibility::FileLocal,
+        Some(text) if text == "pub" => Visibility::Public,
+        Some(text) if text == "pub(self)" => Visibility::FileLocal,
+        Some(_) => Visibility::Restricted,
+    }
+}
+
+/// Whether an item states no visibility of its own and takes its holder's:
+/// a trait's items, an enum's variants and their fields, and a trait impl's
+/// items.
+fn follows_holder(item: Node) -> bool {
+    item.parent().and_then(|list| list.parent()).is_some_and(|holder| match holder.kind() {
+        "trait_item" | "enum_item" | "enum_variant" => true,
+        "impl_item" => holder.child_by_field_name("trait").is_some(),
+        _ => false,
+    })
+}
+
+/// The items whose visibility is not their own: an `impl` block takes its
+/// self type's when this file declares the type, else it is public, and an
+/// item `follows_holder` marks `Unknown` takes its parent's. `declarations`
+/// are in line order, each parent before its children.
+fn inherit_visibility(declarations: &mut [Declaration]) {
+    let types: HashMap<String, Visibility> = declarations
+        .iter()
+        .filter(|row| matches!(row.kind.as_str(), "class" | "enum" | "interface" | "type"))
+        .map(|row| (row.name.clone(), row.visibility))
+        .collect();
+    for index in 0..declarations.len() {
+        let parent = declarations[index].parent.map(|parent| &declarations[parent as usize]);
+        let inherited = match (declarations[index].kind.as_str(), parent) {
+            ("impl", _) => {
+                let name = &declarations[index].name;
+                let base = name.split('<').next().unwrap_or(name).trim();
+                Some(types.get(base.rsplit("::").next().unwrap_or(base)).copied().unwrap_or(Visibility::Public))
+            }
+            (_, Some(parent)) if declarations[index].visibility == Visibility::Unknown => Some(parent.visibility),
+            _ => None,
+        };
+        if let Some(inherited) = inherited {
+            declarations[index].visibility = inherited;
+        }
     }
 }
 
@@ -86,9 +130,11 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
             .filter(|holder| holder.kind() != "source_file")
             .map(|holder| (holder.start_position().row as i64 + 1, holder.end_position().row as i64 + 1));
         let line = n.start_position().row as i64 + 1;
+        let end_line = n.end_position().row as i64 + 1;
         match n.kind() {
             "use_declaration" => {
                 if let Some(argument) = n.child_by_field_name("argument") {
+                    let reexport = Some(declared(n, source)).filter(|visibility| *visibility != Visibility::FileLocal);
                     let mut leaves = Vec::new();
                     collect_use(argument, source, &[], &mut leaves);
                     for (path, alias) in leaves {
@@ -105,7 +151,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                             symbol,
                             locals: local.into_iter().collect(),
                             line,
+                            end_line,
                             block,
+                            visibility: reexport,
                         });
                     }
                 }
@@ -119,7 +167,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                         symbol,
                         locals: vec![name],
                         line,
+                        end_line,
                         block,
+                        visibility: None,
                     });
                 }
             }
@@ -306,6 +356,7 @@ fn file_level(mut path: Vec<String>, site: Site) -> Vec<String> {
 /// item carries its `#[path]` value. Source-order, deduped on (name, line).
 fn walk_declarations(root: Node, source: &[u8], imports: &[Import]) -> Vec<Declaration> {
     let mut out = Vec::new();
+    let mut ranges = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut stack: Vec<(Node, Option<String>)> = vec![(root, None)];
     while let Some((n, container)) = stack.pop() {
@@ -377,6 +428,7 @@ fn walk_declarations(root: Node, source: &[u8], imports: &[Import]) -> Vec<Decla
                     };
                     let method = container.is_some() && matches!(n.kind(), "function_item" | "function_signature_item");
                     if seen.insert((name.to_string(), line)) {
+                        ranges.push(n.start_byte()..n.end_byte());
                         out.push(Declaration {
                             name: name.to_string(),
                             kind: k.to_string(),
@@ -434,41 +486,25 @@ fn walk_declarations(root: Node, source: &[u8], imports: &[Import]) -> Vec<Decla
                                 .then(|| path_attribute(&attributes, source))
                                 .flatten(),
                             supertypes: Vec::new(),
+                            visibility: if follows_holder(n) { Visibility::Unknown } else { declared(n, source) },
                         });
                     }
                 }
             }
         }
-        // Pushed in reverse so the walk meets declarations in source order:
-        // two on one line (a variant's fields) keep that order after the
-        // stable sort by line.
+        // Pushed in reverse so the walk meets declarations in source order,
+        // and `seen` keeps the first of two with one name on one line.
         let mut c = n.walk();
         let children: Vec<Node> = n.children(&mut c).collect();
         for child in children.into_iter().rev() {
             stack.push((child, child_container.clone()));
         }
     }
-    out.sort_by_key(|d| d.line);
-    for index in 0..out.len() {
-        if let Some((parent, _)) = out[..index]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, candidate)| {
-                // A struct-like variant holds its fields, often on its own line.
-                let variant = candidate.kind == "property" && candidate.header.ends_with("{ … }");
-                (matches!(
-                    candidate.kind.as_str(),
-                    "impl" | "class" | "enum" | "interface"
-                ) && candidate.line < out[index].line
-                    || variant && candidate.line <= out[index].line)
-                    && candidate.end_line >= out[index].line
-            })
-        {
-            out[index].parent = Some(parent as u32);
-        }
-    }
-    out
+    // A struct-like variant holds its fields.
+    crate::extraction::nest(out, ranges, |candidate| {
+        matches!(candidate.kind.as_str(), "impl" | "class" | "enum" | "interface")
+            || candidate.kind == "property" && candidate.header.ends_with("{ … }")
+    })
 }
 
 /// The implemented type name of an `impl_item` — `impl Foo { .. }` or

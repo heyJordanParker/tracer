@@ -162,11 +162,7 @@ fn scc_rows(
             .collect(),
     };
     for batch in batches {
-        let out = Command::new(executable)
-            .args(SCC_ARGS)
-            .args(&batch)
-            .output()
-            .context("start scc")?;
+        let out = crate::process::output(Command::new(executable).args(SCC_ARGS).args(&batch)).context("start scc")?;
         if !out.status.success() {
             anyhow::bail!(
                 "scc failed: {}",
@@ -187,6 +183,7 @@ fn scc_rows(
                     FileMetrics {
                         ccn: file.complexity,
                         loc: file.code,
+                        lines: file.lines,
                         language: language.name.clone(),
                     },
                 );
@@ -259,6 +256,8 @@ pub struct Summary {
 pub struct FileMetrics {
     pub ccn: i64,
     pub loc: i64,
+    /// Every line, as a file's `lines` fact counts them.
+    pub lines: i64,
     pub language: String,
 }
 
@@ -301,6 +300,8 @@ struct SccFile {
     complexity: i64,
     #[serde(rename = "Code")]
     code: i64,
+    #[serde(rename = "Lines")]
+    lines: i64,
     #[serde(rename = "Location")]
     location: String,
 }
@@ -391,7 +392,7 @@ fn load_or_compute_uncached(repo_root: &Path) -> Payload {
         identity,
         failed: Cell::new(false),
     };
-    match cache::index(&index, repo_root) {
+    match cache::index(&index, repo_root).ready() {
         Some(stored) if !index.failed.get() => payload_from(stored.per_file),
         _ => empty_payload(),
     }
@@ -428,7 +429,7 @@ impl cache::Index for ContextIndex<'_> {
         (!matches!(refresh, Refresh::Nothing)).then_some(refresh)
     }
 
-    fn apply(&self, stored: Option<Stored>, change: Refresh) -> Stored {
+    fn apply(&self, stored: Option<Stored>, change: Refresh) -> Option<Stored> {
         let counted = match (change, stored) {
             (Refresh::Paths { changed, removed }, Some(stored)) => {
                 let mut per_file = stored.per_file;
@@ -448,11 +449,11 @@ impl cache::Index for ContextIndex<'_> {
             self.failed.set(true);
             BTreeMap::new()
         });
-        Stored {
+        Some(Stored {
             executable: self.identity.clone(),
             per_file,
             stamps: self.current.clone(),
-        }
+        })
     }
 
     fn complete(&self, _stored: &Stored) -> bool {
@@ -465,8 +466,52 @@ pub fn repo_context(path: &Path) -> Value {
     serde_json::to_value(&load_or_compute(&root).summary).unwrap_or_else(|_| json!({}))
 }
 
+/// The `repo_context:` footer line for the repository holding `path`. With
+/// a `delivery`, it is extra context shown once per agent context: `None`
+/// when the agent was shown it as it is, and only the changed keys when it
+/// changed. Without one, the whole line, for output where it is the answer.
+pub fn footer(path: &Path, delivery: Option<&mut crate::session::Delivery>) -> Option<String> {
+    let root = cache::worktree_root_for(path).unwrap_or_else(|| cache::display_root(path));
+    let summary = &load_or_compute(&root).summary;
+    let facts = json!({
+        "files": summary.total_files,
+        "median_file_complexity": summary.median_file_ccn,
+        "complexity_p95": summary.complexity_p95,
+    });
+    let shown = match delivery {
+        None => facts,
+        Some(delivery) => {
+            let offered = json!({ "repo_context": facts });
+            match delivery.offer(crate::session::Kind::RepoContext, &root.to_string_lossy(), &offered) {
+                crate::session::Offer::New => facts,
+                crate::session::Offer::Same => return None,
+                crate::session::Offer::Changed(mut lines) => lines.remove("repo_context").unwrap_or(facts),
+            }
+        }
+    };
+    Some(format!("repo_context: {}", crate::yamlfmt::flow(&shown, false)))
+}
+
 pub fn metrics(repo_root: &Path) -> Arc<Payload> {
     load_or_compute(repo_root)
+}
+
+/// The counted files under `path`, summarized as the repository's are, each
+/// keyed by its path from the repository root. Inside a repository they come
+/// from the snapshot every call shares; outside one, scc walks `path` and
+/// each file is keyed by its absolute path. Fails when scc can't count.
+pub fn metrics_under(path: &Path) -> Result<Payload> {
+    let Some(root) = cache::worktree_root_for(path) else {
+        let rows = scc_rows(path, &executable_path("scc")?, None)?;
+        return Ok(payload_from(rows.into_iter().map(|(file, row)| (path.join(file).to_string_lossy().into_owned(), row)).collect()));
+    };
+    let payload = load_or_compute(&root);
+    if !payload.available {
+        anyhow::bail!("scc could not count {}", root.display());
+    }
+    let scope = path.strip_prefix(&root).ok().and_then(Path::to_str).unwrap_or_default();
+    let under = |file: &str| scope.is_empty() || file == scope || file.strip_prefix(scope).is_some_and(|rest| rest.starts_with('/'));
+    Ok(payload_from(payload.per_file.iter().filter(|(file, _)| under(file)).map(|(file, row)| (file.clone(), row.clone())).collect()))
 }
 
 pub fn language_summary(repo_root: &Path) -> Vec<LanguageRow> {
@@ -495,6 +540,7 @@ mod tests {
         let metrics = FileMetrics {
             ccn: 3,
             loc: 12,
+            lines: 15,
             language: "Rust".to_string(),
         };
 
@@ -514,6 +560,7 @@ mod tests {
                 FileMetrics {
                     ccn: 3,
                     loc: 12,
+                    lines: 15,
                     language: "Rust".to_string(),
                 },
             ),
@@ -522,6 +569,7 @@ mod tests {
                 FileMetrics {
                     ccn: 5,
                     loc: 20,
+                    lines: 24,
                     language: "Rust".to_string(),
                 },
             ),
@@ -530,6 +578,7 @@ mod tests {
                 FileMetrics {
                     ccn: 1,
                     loc: 4,
+                    lines: 4,
                     language: "Python".to_string(),
                 },
             ),
@@ -573,6 +622,7 @@ mod tests {
                 FileMetrics {
                     ccn: 0,
                     loc: 1,
+                    lines: 1,
                     language: "Python".to_string(),
                 },
             )]),

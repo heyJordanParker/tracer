@@ -222,14 +222,13 @@ fn describe(path: PathBuf) -> LogFile {
 
 /// Log files under `path`, newest first. Ignore rules are never consulted:
 /// a log is gitignored in every project that has one.
-fn select(path: &str, file_glob: &str) -> Vec<LogFile> {
+fn select(path: &str, file_glob: &str) -> Result<Vec<LogFile>> {
     let root = Path::new(path);
     if root.is_file() {
-        return vec![describe(root.to_path_buf())];
+        return Ok(vec![describe(root.to_path_buf())]);
     }
     if !root.exists() {
-        eprintln!("Error: path not found: {path}");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, format!("Error: path not found: {path}")));
     }
     let file_glob = glob_match::matcher(file_glob);
     let mut found: Vec<LogFile> = Vec::new();
@@ -258,7 +257,7 @@ fn select(path: &str, file_glob: &str) -> Vec<LogFile> {
     // Newest first, and reverse-path within one day, so the render — which
     // reverses this order — reads oldest first and path-ascending.
     found.sort_by(|a, b| b.order.cmp(&a.order).then(b.path.cmp(&a.path)));
-    found
+    Ok(found)
 }
 
 fn reader(path: &Path) -> Option<Box<dyn BufRead>> {
@@ -556,9 +555,14 @@ fn parse_window(value: &str, anchor: Date, end: bool) -> Option<Stamp> {
     Some((y, m, d, hh, mm, ss))
 }
 
-fn bad_window(value: &str) -> ! {
-    eprintln!("Error: expected YYYY-MM-DD, 'YYYY-MM-DD HH:MM[:SS]', or HH:MM[:SS], got '{value}'");
-    std::process::exit(2);
+/// `value` as a window bound, or the error naming the formats a bound takes.
+fn window(value: &str, anchor: Date, end: bool) -> Result<Stamp> {
+    parse_window(value, anchor, end).ok_or_else(|| {
+        crate::process::fail(
+            2,
+            format!("Error: expected YYYY-MM-DD, 'YYYY-MM-DD HH:MM[:SS]', or HH:MM[:SS], got '{value}'"),
+        )
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -572,7 +576,7 @@ pub fn run(
     limit: usize,
     as_json: bool,
 ) -> Result<Value> {
-    let mut files = select(path, file_glob);
+    let mut files = select(path, file_glob)?;
     // A bare `HH:MM` means that time on the day of the newest log selected,
     // so a window needs no clock and no timezone: both sides of every
     // comparison are the wall clock the log itself wrote.
@@ -581,9 +585,8 @@ pub fn run(
         .map(|f| f.order.0)
         .unwrap_or_else(|| civil_from_epoch(0));
 
-    let since_stamp =
-        since.map(|v| parse_window(v, anchor, false).unwrap_or_else(|| bad_window(v)));
-    let until_stamp = until.map(|v| parse_window(v, anchor, true).unwrap_or_else(|| bad_window(v)));
+    let since_stamp = since.map(|v| window(v, anchor, false)).transpose()?;
+    let until_stamp = until.map(|v| window(v, anchor, true)).transpose()?;
 
     // A dated filename is the cheapest window filter there is: a day
     // outside the window is never opened.

@@ -2,6 +2,7 @@
 //! Per-function cyclomatic complexity is AST-derived (tree-sitter
 //! decision-node walker), the single CCN backend.
 mod cache;
+mod calls;
 mod ccn;
 mod commands;
 mod digest;
@@ -10,15 +11,22 @@ mod extraction;
 mod file_facts;
 mod filter;
 mod git_activity;
+mod hook;
 mod jsonfmt;
 mod lang;
+mod matches;
 mod memo;
 mod output;
 mod summary;
 mod pathval;
+mod primer;
+mod process;
 mod relations;
+mod session;
 mod repo_context;
 mod repo_files;
+mod sections;
+mod shell;
 mod surface;
 mod timing;
 mod yamlfmt;
@@ -84,6 +92,27 @@ enum Command {
     Cache {
         #[command(subcommand)]
         command: CacheCommand,
+    },
+    /// The public API of the files and folders named: each file's facts and
+    /// purpose, then every declaration and re-export the visibility reaches,
+    /// with its whole header.
+    Api {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// The rows listed: `public`, also `restricted` ones other files
+        /// reach, or `all` with each file's imports.
+        #[arg(long, value_enum, default_value = "public")]
+        visibility: commands::api::Level,
+        /// Only files another file imports.
+        #[arg(long)]
+        imported: bool,
+        #[arg(long, default_value_t = 4)]
+        depth: usize,
+        /// Include or, with `!`, exclude files, as ripgrep's `-g` does.
+        #[arg(short = 'g', long = "glob", value_name = "GLOB")]
+        globs: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Methods, properties, variables, imports, and exports for every file
     /// named; a directory names the files under it.
@@ -283,10 +312,26 @@ enum Command {
         #[arg(long = "state", value_parser = ["added", "renamed", "modified", "deleted", "untracked"])]
         state: Option<String>,
     },
+    /// Everything tracer does on a harness hook event: reads the hook's input
+    /// as JSON on stdin and prints its answer as JSON on stdout.
+    Hook {
+        /// The hook event, as the harness names it (`SessionStart`, `PostToolUse`, …).
+        event: String,
+        /// The harness whose input format and tool names the input uses.
+        #[arg(long, value_enum)]
+        harness: hook::Harness,
+        /// The harness's timeout for this hook: past it the answer is thrown
+        /// away, so nothing is recorded as shown and the process ends.
+        #[arg(long, value_name = "MS")]
+        deadline_ms: u64,
+        /// Refuse shell commands that read this project's code without tracer.
+        #[arg(long)]
+        tracer_only: bool,
+    },
     /// Project-docs surface: path-scoped deduped set (default), `--graph` for
     /// the whole-repo docs graph, `status` for the session manifest, `reset`
-    /// to forget what was loaded, `archive` to set a stopped agent's log aside,
-    /// or `prime` to record what the harness loaded.
+    /// to forget what was loaded, `prime` to record what the harness loaded,
+    /// or `archive`, which does nothing.
     #[command(args_conflicts_with_subcommands = true)]
     Docs {
         /// Paths for the default path-mode (`trace docs <paths>`), or the one
@@ -304,15 +349,15 @@ enum Command {
         #[arg(long = "graph")]
         graph: bool,
         /// Names the calling surface (e.g. `trace_inject_hook`, `agent_read`).
-        /// Lands verbatim in the log event's `source` field.
+        /// Recorded verbatim as each sent doc's `source`.
         #[arg(long, default_value = "trace_docs")]
         source: String,
-        /// Tool that triggered this load (Bash, Read, Glob, …). Recorded
-        /// on the log event for downstream auditing.
+        /// Tool that triggered this load (Bash, Read, Glob, …). Echoed in
+        /// the JSON query only.
         #[arg(long = "triggering-tool")]
         triggering_tool: Option<String>,
-        /// Command string that triggered this load (the agent's Bash
-        /// invocation, the Read file_path, etc.).
+        /// Command string that triggered this load. Echoed in the JSON query
+        /// only.
         #[arg(long = "triggering-command")]
         triggering_command: Option<String>,
         #[arg(long)]
@@ -399,8 +444,8 @@ enum Command {
 
 #[derive(Subcommand)]
 enum DocsCommand {
-    /// Agent-facing "what do I have right now?" query against the session
-    /// log. No path arg → the full session manifest with source
+    /// Agent-facing "what do I have right now?" query against the agent's
+    /// record. No path arg → every doc and file it holds, with source
     /// attribution. With a path arg → that path's ancestor chain
     /// partitioned into loaded (with source) and not_loaded.
     Status {
@@ -408,22 +453,20 @@ enum DocsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Clear the surfaced-docs state for the current session so a subsequent
-    /// `trace docs <path>` re-surfaces docs as new. Driven by the Codex
-    /// compaction/clear hook: a context reset drops injected rule text from
-    /// the model, so the surfaced-docs state must reset to re-inject it.
-    /// Append-only history is preserved — only the materialized view is cleared.
+    /// Clear the agent's record so a subsequent `trace docs <path>`
+    /// re-surfaces docs as new. Driven by the compaction and clear hooks: a
+    /// context reset drops injected rule text from the model, so the record
+    /// must reset to re-inject it.
     Reset {
-        /// Names the calling surface (e.g. `codex_compact_hook`). Lands
-        /// verbatim in the log event's `source` field.
+        /// Names the calling surface (e.g. `codex_compact_hook`). Echoed in
+        /// the JSON query.
         #[arg(long, default_value = "trace_docs_reset")]
         source: String,
         #[arg(long)]
         json: bool,
     },
-    /// Move the agent's session log under `archived/` when the agent stops,
-    /// so the active sessions directory stays bounded. A resumed agent's first
-    /// write takes it back. The agent is `--agent`, else `TRACER_AGENT_ID`.
+    /// Does nothing: each agent's record stays under its own agent id, so a
+    /// resumed Subagent finds it, and records untouched for 7 days are swept.
     Archive {
         #[arg(long)]
         json: bool,
@@ -466,7 +509,7 @@ enum CacheCommand {
 /// once, and a call that took every core made them fight each other.
 const THREADS: usize = 8;
 
-fn main() -> Result<()> {
+fn main() {
     let started = timing::start();
     // rayon's pool holds the process's thread count; the file-stamping
     // workers, ripgrep and ast-grep read it back from
@@ -475,25 +518,38 @@ fn main() -> Result<()> {
     let _ = rayon::ThreadPoolBuilder::new().num_threads(cores.min(THREADS)).build_global();
     let result = run();
     timing::total(started);
-    if result.is_ok() && pathval::missing() {
-        std::process::exit(2);
-    }
-    result
+    let code = match result {
+        Ok(()) if process::reported() => 2,
+        Ok(()) => 0,
+        Err(error) => match error.downcast_ref::<process::TraceError>() {
+            Some(failure) => {
+                if !failure.message.is_empty() {
+                    eprintln!("{failure}");
+                }
+                failure.code
+            }
+            None => {
+                eprintln!("Error: {error:?}");
+                1
+            }
+        },
+    };
+    process::exit(code)
 }
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    let detachable = matches!(cli.command, Command::Cache { command: CacheCommand::Build { .. } });
+    process::guard(!detachable);
     if let Some(dir) = &cli.directory {
-        commands::session_log::set_session_home(std::env::current_dir()?);
         if let Err(error) = std::env::set_current_dir(dir) {
-            eprintln!("-C {}: {error}", dir.display());
-            std::process::exit(2);
+            return Err(process::fail(2, format!("-C {}: {error}", dir.display())));
         }
         output::set_directory(dir.to_string_lossy().into_owned());
     }
     output::set_budget(cli.budget);
     if let Some(agent) = cli.agent {
-        commands::session_log::set_agent(agent);
+        session::set_agent(agent);
     }
     let filter = cli.filter.as_deref();
     match cli.command {
@@ -520,6 +576,9 @@ fn run() -> Result<()> {
                 commands::cache::stats(Path::new("."), json)
             }),
         },
+        Command::Api { paths, visibility, imported, depth, globs, json } => output::run_value(json, filter, || {
+            commands::api::run(&paths, &commands::api::Scope { visibility, imported, depth, globs: &globs }, json)
+        }),
         Command::Structure { paths, json } => {
             output::run_value(json, filter, || commands::structure::run(&paths, json))
         }
@@ -673,6 +732,10 @@ fn run() -> Result<()> {
         Command::Status { json, state } => output::run_value(json, filter, || {
             commands::status::run(json, state.as_deref())
         }),
+        Command::Hook { event, harness, deadline_ms, tracer_only } => {
+            output::guard(false, filter)?;
+            hook::run(&event, harness, deadline_ms, tracer_only)
+        }
         Command::Docs {
             paths,
             skip,
@@ -702,8 +765,10 @@ fn run() -> Result<()> {
             }),
             None => output::run_streamed(json, filter, |sink| {
                 if paths.is_empty() {
-                    eprintln!("Error: <PATHS> is required (use `trace docs --graph` for the whole-repo graph)");
-                    std::process::exit(2)
+                    return Err(process::fail(
+                        2,
+                        "Error: <PATHS> is required (use `trace docs --graph` for the whole-repo graph)",
+                    ));
                 }
                 commands::docs::run(
                     &paths,

@@ -38,7 +38,7 @@ impl Entry {
     }
 }
 
-fn entries(repo_root: &Path, states: &[(String, String)], index: &relations::Relations) -> Vec<Entry> {
+fn entries(repo_root: &Path, states: &[(String, String)], index: Option<&relations::Relations>) -> Vec<Entry> {
     // Staging is one more fact per file, from the same `git status` read the
     // states came from.
     let staging = git_activity::staging_state(repo_root);
@@ -59,7 +59,7 @@ fn entries(repo_root: &Path, states: &[(String, String)], index: &relations::Rel
                 .ok()
                 .map(|abs| cache::relative_to_root(&abs, repo_root))
                 .and_then(|rel| facts_map.get(&rel))
-                .map(|facts| Facts::of(facts, index.module_counts(relative).as_ref()));
+                .map(|facts| Facts::of(facts, index.and_then(|index| index.module_counts(relative)).as_ref()));
             out.push(Entry {
                 path: relative.clone(),
                 state: state.clone(),
@@ -80,11 +80,13 @@ pub fn run(as_json: bool, state_filter: Option<&str>) -> Result<Value> {
         .collect();
     states.sort();
 
-    let index = relations::get(&repo_root);
-    let mut entries = entries(&repo_root, &states, &index);
+    let index = relations::ready(&repo_root);
+    let mut entries = entries(&repo_root, &states, index.as_deref());
     entries.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
-    let directories = diff::directory_context(&index, &repo_root, &paths);
+    let directories = index
+        .as_deref()
+        .map_or_else(|| json!({}), |index| diff::directory_context(index, &repo_root, &paths));
 
     let mut files = Map::new();
     let rows: Vec<Value> = entries
@@ -121,7 +123,9 @@ pub fn run(as_json: bool, state_filter: Option<&str>) -> Result<Value> {
     // their path first.
     let mut by_state: Vec<&Entry> = entries.iter().collect();
     by_state.sort_by_key(|entry| state_rank(&entry.state));
+    let mut delivery = crate::session::Delivery::default();
     let mut rows: Vec<crate::output::Entry> = Vec::with_capacity(entries.len());
+    let mut offered: Vec<Option<String>> = Vec::with_capacity(entries.len());
     let mut paths: Vec<&str> = Vec::with_capacity(entries.len());
     let mut current_state: Option<&str> = None;
     for entry in by_state {
@@ -134,21 +138,30 @@ pub fn run(as_json: bool, state_filter: Option<&str>) -> Result<Value> {
         };
         let staging = entry.staging.as_deref().map(|s| format!(" · {s}")).unwrap_or_default();
         let path = format!("{heading}  {}{staging}", entry.path);
-        rows.push(match &entry.facts {
-            Some(facts) => crate::output::Entry {
-                rank: facts.imported_by.unwrap_or(0) as i64,
+        let offer = entry
+            .facts
+            .as_ref()
+            .and_then(|facts| crate::summary::offer_headline(&mut delivery, &repo_root.join(&entry.path), facts));
+        let rank = entry.facts.as_ref().and_then(|facts| facts.imported_by).unwrap_or(0) as i64;
+        rows.push(match (&entry.facts, &offer) {
+            (Some(facts), Some(_)) => crate::output::Entry {
+                rank,
                 levels: vec![format!("{path}  {}", facts.headline()), path],
             },
-            None => crate::output::Entry { rank: 0, levels: vec![path] },
+            _ => crate::output::Entry { rank, levels: vec![path] },
         });
+        offered.push(offer);
     }
     let fixed = head.len() + crate::output::closing_room(rows.len(), "files");
-    let (texts, shortened) = crate::output::fit_listing(&rows, &paths, fixed);
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
     for text in texts {
         println!("{text}");
     }
     if shortened > 0 {
         println!("{}", crate::output::shortened_line(shortened, rows.len(), "files"));
     }
+    std::io::Write::flush(&mut std::io::stdout())?;
+    delivery.commit();
     Ok(value)
 }

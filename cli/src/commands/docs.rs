@@ -3,7 +3,7 @@
 //!
 //! - default (no flag, no sub-verb): the project docs for the paths that the
 //!   agent does not hold whole yet. Walks each path's ancestor chain, nearest
-//!   doc first, and partitions it against the per-session log. As text, each
+//!   doc first, and partitions it against the agent's record. As text, each
 //!   doc is a Markdown section (`## <path>` then its text), sent from its first
 //!   unread line; the first doc that does not fit `--budget` is cut at a whole
 //!   line and ends in `read`'s trim marker, and the docs after it are queued
@@ -11,32 +11,30 @@
 //!   prints when every doc is already loaded. As JSON the new docs arrive
 //!   whole, with the skipped slice in `context.already_loaded`.
 //!
-//!   `--source` / `--triggering-tool` / `--triggering-command` flags let
-//!   hook callers stamp the log event with the calling
-//!   surface and the tool/command that triggered the load. The flags
-//!   default to `trace_docs` / `None` / `None` so direct CLI calls keep
-//!   working without them.
+//!   `--source` names the delivering surface in the record, `trace_docs` by
+//!   default. `--triggering-tool` and `--triggering-command` are only echoed
+//!   back in the JSON query.
 //!
 //! - `--graph`: the whole-repo docs graph (doc-file nodes + `@include`
 //!   edges), built in memory per call, plus the "available but not loaded"
-//!   set computed against the session log when one is active.
+//!   set computed against the agent's record when a session is active.
 //! - `status`: the agent-facing "what do I have right now?" query. With no
 //!   path argument returns the full session manifest (every loaded doc with
 //!   source attribution). With a path argument returns that path's ancestor
 //!   chain partitioned into `loaded` (with source) and `not_loaded`.
-//! - `reset`: clears the surfaced-docs state for the current session so a
-//!   subsequent `trace docs <path>` re-surfaces docs as new. Driven by the
-//!   Codex compaction/clear hook: a context reset drops injected rule text
-//!   from the model, so the surfaced-docs state must reset to re-inject it.
-//!   Append-only history is preserved — only the view is cleared.
-//! - `archive`: moves the current agent's session log under `archived/` when
-//!   the agent stops; the agent's first write after a resume takes it back.
+//! - `reset`: clears the agent's record so a subsequent `trace docs <path>`
+//!   re-surfaces docs as new. Driven by the compaction and clear hooks: a
+//!   context reset drops injected rule text from the model, so the record
+//!   must reset to re-inject it.
+//! - `archive`: does nothing. Each agent's record is keyed by its own agent
+//!   id, so a resumed Subagent finds its record where it left it.
 
-use super::{nested_memory, session_log};
+use super::nested_memory;
+use crate::session;
 use crate::{cache, docs_graph};
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -58,13 +56,11 @@ pub fn run(
     record: bool,
     sink: &crate::output::Sink<'_>,
 ) -> Result<()> {
-    // Triggering env vars feed `session_log::record_emission`, which reads
-    // them at append time. Setting them here keeps the log
-    // API unchanged and lets the same flag shape work for every caller.
-    let _guard = TriggeringEnv::set(triggering_tool, triggering_command);
-    let _delivering = session_log::delivery_lock();
+    // One delivery at a time per agent, from reading what it holds to
+    // recording what was sent, so calls side by side send the next lines.
+    let _delivering = session::hold();
 
-    let pre_loaded: BTreeSet<String> = session_log::loaded_paths();
+    let pre_loaded: BTreeSet<String> = session::loaded_paths();
     let skip: BTreeSet<String> = skip
         .iter()
         .filter_map(|path| path.canonicalize().ok())
@@ -77,7 +73,7 @@ pub fn run(
     let mut new_docs: Vec<nested_memory::LoadedMemory> = Vec::new();
     let mut skipped: Vec<nested_memory::LoadedMemory> = Vec::new();
     for target_raw in targets_raw {
-        let (target, repo_root, scope_dir) = resolve_target(target_raw, directory_mode);
+        let (target, repo_root, scope_dir) = resolve_target(target_raw, directory_mode)?;
         displays.push(cache::relative_to_root(&target, &repo_root));
         scoped |= scope_dir;
         let mut empty_dedupe: BTreeSet<String> = BTreeSet::new();
@@ -101,11 +97,13 @@ pub fn run(
         let fitted = fit(unread(new_docs), crate::output::budget(), &again);
         print!("{}", fitted.text);
         std::io::stdout().flush()?;
-        fitted.record(source);
+        let mut delivery = session::Delivery::default();
+        fitted.record(&mut delivery, source);
+        delivery.commit();
         return Ok(());
     }
 
-    let prior_sources: BTreeMap<String, String> = prior_source_map();
+    let prior_sources: BTreeMap<String, String> = source_map(&session::loaded_entries());
     let already_loaded: Vec<Value> = skipped
         .iter()
         .map(|m| {
@@ -145,9 +143,73 @@ pub fn run(
         json!({"docs": new_docs.len(), "skipped": already_loaded.len()}),
     ))?;
     if record {
-        session_log::record_emission(&new_docs, source);
+        session::record_emission(&new_docs, source);
     }
     Ok(())
+}
+
+/// The most a command's own docs take after its answer.
+pub const REACHED_ROOM: usize = 10_000;
+
+/// The project docs `paths` reach that this agent does not hold, nearest
+/// first, as a command prints them after its answer: only under a session,
+/// fit to `room` and at most `REACHED_ROOM`, the rest named under the
+/// `trace docs` command that sends them. What prints is queued in
+/// `delivery`, which the caller commits once the text is flushed.
+pub fn reached(paths: &[PathBuf], room: Option<usize>, source: &str, delivery: &mut session::Delivery) -> String {
+    if !session::active() {
+        return String::new();
+    }
+    crate::timing::phase("docs", || reached_text(paths, room, source, delivery))
+}
+
+/// Print a command's `answer` with the docs `anchors` reach after it, in the
+/// room the budget leaves, then commit `delivery` once the text is flushed,
+/// so a call that dies before its answer arrives records nothing.
+pub fn print_with_docs(answer: &str, anchors: &[PathBuf], source: &str, mut delivery: session::Delivery) -> Result<()> {
+    let room = crate::output::budget().map(|budget| budget.saturating_sub(crate::output::width(answer)));
+    print!("{answer}{}", reached(anchors, room, source, &mut delivery));
+    std::io::stdout().flush()?;
+    delivery.commit();
+    Ok(())
+}
+
+fn reached_text(paths: &[PathBuf], room: Option<usize>, source: &str, delivery: &mut session::Delivery) -> String {
+    // Held from reading what the agent holds until the delivery commits, so
+    // calls side by side never send the same lines.
+    delivery.hold();
+    let mut held = crate::timing::phase("docs held", session::loaded_paths);
+    let mut chain = Vec::new();
+    for path in paths {
+        if let Ok((target, repo_root, scope_dir)) = resolve_target(path, false) {
+            chain.extend(crate::timing::phase("docs walk", || {
+                nested_memory::load_for_file(&target, &repo_root, &mut held, scope_dir)
+            }));
+        }
+    }
+    let again = shell_command(&format!("{} docs", crate::output::trace_command()), paths);
+    match deliver(chain, room, &again, source, delivery) {
+        text if text.is_empty() => text,
+        text => format!("\n{text}"),
+    }
+}
+
+/// `docs`, each from its first unread line, fit to `room` and at most
+/// `REACHED_ROOM`, the rest named under `again`, queued in `delivery`.
+pub fn deliver(
+    docs: Vec<nested_memory::LoadedMemory>,
+    room: Option<usize>,
+    again: &str,
+    source: &str,
+    delivery: &mut session::Delivery,
+) -> String {
+    if docs.is_empty() {
+        return String::new();
+    }
+    let room = room.map_or(REACHED_ROOM, |room| room.min(REACHED_ROOM));
+    let fitted = fit(unread(docs), Some(room), again);
+    fitted.record(delivery, source);
+    fitted.text
 }
 
 /// A doc the agent does not hold whole, from its first unread line. `start`
@@ -159,6 +221,16 @@ pub struct Unread {
     pub start: usize,
     pub from: usize,
     pub total: usize,
+    /// Set when the agent was sent the doc whole before it changed.
+    changed: Option<Changed>,
+}
+
+/// What changed in a doc since it was sent whole: its added or changed
+/// lines, 1-based, and how many lines were removed.
+#[derive(Clone)]
+struct Changed {
+    lines: Vec<usize>,
+    removed: usize,
 }
 
 impl Unread {
@@ -168,24 +240,47 @@ impl Unread {
 }
 
 /// Each doc from the line the agent stopped at, when it read part of the
-/// same content before; from the top of its text otherwise.
+/// same content before; only its changed lines, when it was sent whole
+/// before it changed; from the top of its text otherwise.
 pub fn unread(memories: Vec<nested_memory::LoadedMemory>) -> Vec<Unread> {
-    let partial = session_log::partial_reads();
+    let states = session::doc_states();
     memories
         .into_iter()
         .map(|memory| {
             let total = memory.content.lines().count();
             let start = body_start(&memory.content, total);
-            let from = partial
-                .get(&memory.path)
-                .filter(|(hash, read)| {
-                    *hash == session_log::content_hash(&memory.content) && read.total_lines == total
-                })
-                .map_or(start, |(_, read)| read.first_unread().clamp(start, total));
+            let hash = session::content_hash(&memory.content);
+            let (from, changed) = match states.get(&memory.path) {
+                Some(session::DocState::Partial { hash: read, coverage }) if *read == hash && coverage.total_lines == total => {
+                    (coverage.first_unread().clamp(start, total), None)
+                }
+                Some(session::DocState::Whole { hash: sent, lines }) if *sent != hash => {
+                    (start, Some(changed_lines(lines, &memory.content, start)))
+                }
+                _ => (start, None),
+            };
             let name = shown(&memory);
-            Unread { memory, name, start, from, total }
+            Unread { memory, name, start, from, total, changed }
         })
         .collect()
+}
+
+/// The lines of `content` from `start` on whose hash is not among the lines
+/// sent, each sent line matching once, and how many sent lines are gone.
+fn changed_lines(sent: &[String], content: &str, start: usize) -> Changed {
+    let mut left: HashMap<&str, usize> = HashMap::new();
+    for line in sent {
+        *left.entry(line.as_str()).or_default() += 1;
+    }
+    let mut lines = Vec::new();
+    for (at, line) in session::line_hashes(content).iter().enumerate() {
+        match left.get_mut(line.as_str()).filter(|count| **count > 0) {
+            Some(count) => *count -= 1,
+            None if at + 1 >= start => lines.push(at + 1),
+            None => {}
+        }
+    }
+    Changed { lines, removed: left.values().sum() }
 }
 
 /// A doc's path as the agent reads it: relative to the repository it works
@@ -200,7 +295,8 @@ fn shown(memory: &nested_memory::LoadedMemory) -> String {
     if let Some(relative) = here.as_deref().and_then(|root| path.strip_prefix(root).ok()) {
         return relative.to_string_lossy().to_string();
     }
-    match nested_memory::home_dir().and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+    let home = nested_memory::home_dir().map(|home| home.canonicalize().unwrap_or(home));
+    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
         Some(relative) => format!("~/{}", relative.to_string_lossy()),
         None => memory.path.clone(),
     }
@@ -271,26 +367,26 @@ pub fn fit(docs: Vec<Unread>, budget: Option<usize>, again: &str) -> Fitted {
 }
 
 impl Fitted {
-    /// Record what printed: a doc sent from its first line to its last as
-    /// loaded, any other span as the lines read, so a doc cut short is
-    /// offered again from where it stopped.
-    pub fn record(&self, source: &str) {
+    /// Queue what printed in `delivery`: a doc sent from its first line to
+    /// its last as loaded, any other span as the lines seen, so a doc cut
+    /// short is offered again from where it stopped.
+    pub fn record(&self, delivery: &mut session::Delivery, source: &str) {
         let whole: Vec<nested_memory::LoadedMemory> = self
             .sent
             .iter()
             .filter(|(doc, through)| doc.from_start() && *through == doc.total)
             .map(|(doc, _)| doc.memory.clone())
             .collect();
-        session_log::record_emission(&whole, source);
+        delivery.sent(&whole, source);
         for (doc, through) in &self.sent {
             if (doc.from_start() && *through == doc.total) || *through < doc.from {
                 continue;
             }
             let first = if doc.from_start() { 1 } else { doc.from };
-            session_log::record_read(
+            delivery.seen(
                 Path::new(&doc.memory.path),
                 source,
-                &session_log::content_hash(&doc.memory.content),
+                &session::content_hash(&doc.memory.content),
                 doc.memory.content.len(),
                 doc.total,
                 &[Some((first, *through))],
@@ -304,6 +400,18 @@ impl Fitted {
 /// <total>)`, ending in the trim marker while lines remain.
 fn section(doc: &Unread, through: usize) -> String {
     let lines: Vec<&str> = doc.memory.content.lines().collect();
+    if let Some(changed) = &doc.changed {
+        let mut out = format!(
+            "## {} (changed since sent: {} lines, {} removed)\n\n",
+            doc.name,
+            changed.lines.len(),
+            changed.removed
+        );
+        for &line in &changed.lines {
+            out.push_str(&format!("L{line}: {}\n", lines[line - 1]));
+        }
+        return out;
+    }
     if doc.from_start() && through == doc.total {
         let text = lines[doc.start - 1..].join("\n");
         return format!("## {}\n\n{}\n", doc.name, text.trim());
@@ -331,6 +439,10 @@ fn section(doc: &Unread, through: usize) -> String {
 /// not even its first unread line fits, as much of that line as does.
 /// `None` when the room cannot hold the section's own heading and marker.
 fn cut(doc: &Unread, room: usize) -> Option<(usize, String)> {
+    // A changed doc's lines are scattered, so it goes whole or queued.
+    if doc.changed.is_some() {
+        return None;
+    }
     let frame = crate::output::width(&section_frame(doc));
     let mut left = room.checked_sub(frame)?;
     let mut through = doc.from - 1;
@@ -406,6 +518,9 @@ fn queue_block(queued: &[Unread], again: &str, room: Option<usize>) -> String {
 }
 
 fn queue_line(doc: &Unread) -> String {
+    if let Some(changed) = &doc.changed {
+        return format!("- {} (changed since sent: {} lines)\n", doc.name, changed.lines.len());
+    }
     if !doc.from_start() {
         return format!(
             "- {} (L{}-L{} of {} unread)\n",
@@ -460,7 +575,7 @@ pub fn shell_command(command: &str, paths: &[PathBuf]) -> String {
 /// With `target_raw` Some: returns the ancestor chain for that path
 /// partitioned into `loaded` (with per-entry source) and `not_loaded`. The
 /// chain is the same one path-mode would walk; the partition is computed
-/// against the live session log so the agent can immediately
+/// against the agent's record so the agent can immediately
 /// tell whether a path's rules are in context.
 ///
 /// With `target_raw` None: returns the full session manifest — every doc
@@ -468,8 +583,8 @@ pub fn shell_command(command: &str, paths: &[PathBuf]) -> String {
 ///
 /// Pure read. Never records, never mutates the log.
 pub fn run_status(target_raw: Option<&Path>, as_json: bool) -> Result<Value> {
-    let loaded_entries = session_log::loaded_entries();
-    let session_active = session_log::session_active();
+    let loaded_entries = session::loaded_entries();
+    let session_active = session::active();
 
     match target_raw {
         Some(path) => run_status_path(path, &loaded_entries, session_active, as_json),
@@ -478,7 +593,7 @@ pub fn run_status(target_raw: Option<&Path>, as_json: bool) -> Result<Value> {
 }
 
 fn run_status_session(
-    loaded_entries: &[session_log::LoadedEntry],
+    loaded_entries: &[session::LoadedEntry],
     session_active: bool,
     as_json: bool,
 ) -> Result<Value> {
@@ -517,11 +632,11 @@ fn run_status_session(
 
 fn run_status_path(
     target_raw: &Path,
-    loaded_entries: &[session_log::LoadedEntry],
+    loaded_entries: &[session::LoadedEntry],
     session_active: bool,
     as_json: bool,
 ) -> Result<Value> {
-    let (target, repo_root, scope_dir) = resolve_target(target_raw, false);
+    let (target, repo_root, scope_dir) = resolve_target(target_raw, false)?;
 
     // Walk-up with NO dedupe — every doc reachable for this path. We don't
     // record anything; status is a pure read.
@@ -533,7 +648,7 @@ fn run_status_path(
     let source_map = source_map(loaded_entries);
     // The same rule the docs path sends by: a doc seen only in part is not
     // loaded, so status never calls a doc loaded that the hook would resend.
-    let loaded_set: BTreeSet<String> = session_log::loaded_paths();
+    let loaded_set: BTreeSet<String> = session::loaded_paths();
 
     let (loaded_chain, not_loaded_chain): (Vec<_>, Vec<_>) =
         chain.iter().partition(|m| loaded_set.contains(&m.path));
@@ -579,13 +694,12 @@ fn run_status_path(
     Ok(out)
 }
 
-/// Reset-mode: clear the current session's surfaced-docs state so the next
-/// `trace docs <path>` re-surfaces docs as new. Records one `context_reset`
-/// event and clears the view; append-only history is preserved. A clean no-op
-/// when no session is active or nothing was surfaced.
+/// Reset-mode: clear the agent's record so the next `trace docs <path>`
+/// re-surfaces docs as new. A clean no-op when no session is active or
+/// nothing was surfaced.
 pub fn run_reset(source: &str, as_json: bool) -> Result<Value> {
-    let session_active = session_log::session_active();
-    let cleared = session_log::record_context_reset(source);
+    let session_active = session::active();
+    let cleared = session::reset();
 
     let out = crate::output::document(
         json!({"scope": "reset", "source": source}),
@@ -600,28 +714,23 @@ pub fn run_reset(source: &str, as_json: bool) -> Result<Value> {
     if !session_active {
         println!("# docs reset · no active session (nothing to clear)");
     } else {
-        println!("# docs reset · cleared {cleared} surfaced doc(s) from session log");
+        println!("# docs reset · cleared {cleared} file(s) from the agent's record");
     }
     Ok(out)
 }
 
-/// Archive-mode: move the current agent's session log under `archived/`, run
-/// when that agent stops. A resumed agent's first write takes it back.
+/// Archive-mode: nothing to move. Each agent's record is keyed by its own
+/// agent id, so a resumed Subagent finds its record where it left it, and
+/// the 7-day sweep removes old ones.
 pub fn run_archive(as_json: bool) -> Result<Value> {
-    let archived = session_log::archive();
     let out = crate::output::document(
         json!({"scope": "archive"}),
-        json!({"session_active": session_log::session_active()}),
+        json!({"session_active": session::active()}),
         Value::Array(vec![]),
-        json!({"archived": archived}),
+        json!({"archived": false}),
     );
-    if as_json {
-        return Ok(out);
-    }
-    if archived {
-        println!("# docs archive · moved the agent's session log under archived/");
-    } else {
-        println!("# docs archive · no session log to archive");
+    if !as_json {
+        println!("# docs archive · each agent's record stays under its own agent id; nothing to archive");
     }
     Ok(out)
 }
@@ -645,11 +754,11 @@ pub fn run_graph(path: Option<&Path>, as_json: bool) -> Result<Value> {
     let docs = docs_graph::build(&repo_root);
     let graph_json = docs.to_json();
 
-    // Diff against the session log to surface "available but
-    // not loaded" — the agent-facing report. The log keys by
+    // Diff against the agent's record to surface "available but
+    // not loaded" — the agent-facing report. The record keys by
     // canonical absolute path, so re-canonicalize each node path under the
     // repo root to compare.
-    let log_paths: BTreeSet<String> = session_log::loaded_paths();
+    let loaded: BTreeSet<String> = session::loaded_paths();
     let mut not_loaded: Vec<String> = Vec::new();
     for n in &docs.nodes {
         let abs = repo_root.join(&n.path);
@@ -657,7 +766,7 @@ pub fn run_graph(path: Option<&Path>, as_json: bool) -> Result<Value> {
             .canonicalize()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| abs.to_string_lossy().to_string());
-        if !log_paths.contains(&canonical) {
+        if !loaded.contains(&canonical) {
             not_loaded.push(n.path.clone());
         }
     }
@@ -678,42 +787,22 @@ pub fn run_graph(path: Option<&Path>, as_json: bool) -> Result<Value> {
 
 // ---------- shared helpers ----------
 
-fn resolve_target(target_raw: &Path, directory_mode: bool) -> (PathBuf, PathBuf, bool) {
+fn resolve_target(target_raw: &Path, directory_mode: bool) -> Result<(PathBuf, PathBuf, bool)> {
     let target = target_raw
         .canonicalize()
         .unwrap_or_else(|_| cache::absolutize(target_raw));
     if !target.exists() {
-        eprintln!("Error: path not found: {}", target_raw.display());
-        std::process::exit(2);
+        return Err(crate::process::fail(2, format!("Error: path not found: {}", target_raw.display())));
     }
     let repo_root =
         cache::worktree_root_for(&target).unwrap_or_else(|| cache::display_root(&target));
     let scope_dir = directory_mode || target.is_dir();
-    (target, repo_root, scope_dir)
+    Ok((target, repo_root, scope_dir))
 }
 
-/// Build a canonical-path -> source map from the log events.
-/// The most recent event for each path wins, so a path that was
-/// surfaced by `agent_read` and later re-touched by `trace_docs` reports
-/// the latest source. One pass over the events log, no per-entry replay.
-fn prior_source_map() -> BTreeMap<String, String> {
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
-    for ev in session_log::events() {
-        let path = match ev.get("path").and_then(|p| p.as_str()) {
-            Some(p) => p.to_string(),
-            None => continue,
-        };
-        if let Some(source) = ev.get("source").and_then(|v| v.as_str()) {
-            out.insert(path, source.to_string());
-        }
-    }
-    out
-}
-
-/// path -> latest source map, built from the loaded entries. Matches the
-/// attribution `prior_source_map` produces, so `status` and path-mode report
-/// the same source for any given path.
-fn source_map(entries: &[session_log::LoadedEntry]) -> BTreeMap<String, String> {
+/// path -> source map, built from the loaded entries, so `status` and
+/// path-mode report the same source for any given path.
+fn source_map(entries: &[session::LoadedEntry]) -> BTreeMap<String, String> {
     entries
         .iter()
         .map(|e| (e.path.clone(), e.source.clone()))
@@ -722,7 +811,7 @@ fn source_map(entries: &[session_log::LoadedEntry]) -> BTreeMap<String, String> 
 
 /// source -> count breakdown of the session manifest. Stable sorted by
 /// source string so the human-readable form is deterministic.
-fn group_by_source(entries: &[session_log::LoadedEntry]) -> BTreeMap<String, usize> {
+fn group_by_source(entries: &[session::LoadedEntry]) -> BTreeMap<String, usize> {
     let mut out: BTreeMap<String, usize> = BTreeMap::new();
     for e in entries {
         *out.entry(e.source.clone()).or_insert(0) += 1;
@@ -731,7 +820,7 @@ fn group_by_source(entries: &[session_log::LoadedEntry]) -> BTreeMap<String, usi
 }
 
 fn print_status_session_human(
-    entries: &[session_log::LoadedEntry],
+    entries: &[session::LoadedEntry],
     session_active: bool,
     by_source: &BTreeMap<String, usize>,
 ) {
@@ -827,44 +916,6 @@ fn print_graph_human(graph: &docs_graph::DocsGraph, not_loaded: &[String]) {
         println!("## edges");
         for e in &graph.edges {
             println!("  {} --{}--> {}", e.source, e.relation, e.target);
-        }
-    }
-}
-
-/// RAII guard for the triggering-tool / triggering-command env vars the
-/// session log reads at append time. Restores prior values
-/// on drop so concurrent test invocations don't leak env state.
-struct TriggeringEnv {
-    prior_tool: Option<std::ffi::OsString>,
-    prior_command: Option<std::ffi::OsString>,
-}
-
-impl TriggeringEnv {
-    fn set(tool: Option<&str>, command: Option<&str>) -> Self {
-        let prior_tool = std::env::var_os("TRACER_TRIGGERING_TOOL");
-        let prior_command = std::env::var_os("TRACER_TRIGGERING_COMMAND");
-        if let Some(t) = tool {
-            std::env::set_var("TRACER_TRIGGERING_TOOL", t);
-        }
-        if let Some(c) = command {
-            std::env::set_var("TRACER_TRIGGERING_COMMAND", c);
-        }
-        Self {
-            prior_tool,
-            prior_command,
-        }
-    }
-}
-
-impl Drop for TriggeringEnv {
-    fn drop(&mut self) {
-        match self.prior_tool.take() {
-            Some(v) => std::env::set_var("TRACER_TRIGGERING_TOOL", v),
-            None => std::env::remove_var("TRACER_TRIGGERING_TOOL"),
-        }
-        match self.prior_command.take() {
-            Some(v) => std::env::set_var("TRACER_TRIGGERING_COMMAND", v),
-            None => std::env::remove_var("TRACER_TRIGGERING_COMMAND"),
         }
     }
 }

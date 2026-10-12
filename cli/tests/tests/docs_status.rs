@@ -248,22 +248,21 @@ fn path_status_with_everything_loaded_has_empty_not_loaded() {
 // --- per-Read context-awareness hint via `trace context <file>` -----------
 
 #[test]
-fn context_file_mode_appends_docs_hint_when_nothing_loaded() {
+fn context_file_mode_sends_every_doc_it_reaches_when_nothing_loaded() {
     let f = docs_repo();
     let sid = fresh_session_id("hint-empty");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
     let r = f.trace_env(&["context", &f.path("sub/util.py")], &env);
     r.ok();
-    let combined = r.combined();
-    assert!(
-        combined.contains("docs_not_loaded: [sub/Claude.md, Claude.md]"),
-        "context must name both unloaded ancestors, nearest first: {combined}"
-    );
+    let sub = r.stdout.find("\n## sub/Claude.md\n").expect(&r.stdout);
+    let root = r.stdout.find("\n## Claude.md\n").expect(&r.stdout);
+    assert!(sub < root, "the docs follow the answer, nearest first: {}", r.stdout);
+    assert!(!r.stdout.contains("docs_not_loaded"), "{}", r.stdout);
 }
 
 #[test]
-fn context_file_mode_hint_reflects_partial_load() {
+fn context_file_mode_sends_only_the_docs_not_yet_loaded() {
     let f = docs_repo();
     let sid = fresh_session_id("hint-partial");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
@@ -283,15 +282,12 @@ fn context_file_mode_hint_reflects_partial_load() {
 
     let r = f.trace_env(&["context", &f.path("sub/util.py")], &env);
     r.ok();
-    let combined = r.combined();
-    assert!(
-        combined.contains("docs_not_loaded: [sub/Claude.md]"),
-        "with root Claude.md loaded, only the still-unloaded ancestor is named: {combined}"
-    );
+    assert!(r.stdout.contains("\n## sub/Claude.md\n"), "the still-unloaded doc arrives: {}", r.stdout);
+    assert!(!r.stdout.contains("\n## Claude.md\n"), "a loaded doc never arrives twice: {}", r.stdout);
 }
 
 #[test]
-fn context_file_mode_hint_omits_not_loaded_when_everything_in_context() {
+fn context_file_mode_sends_no_docs_when_everything_is_loaded() {
     let f = docs_repo();
     let sid = fresh_session_id("hint-full");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
@@ -310,11 +306,7 @@ fn context_file_mode_hint_omits_not_loaded_when_everything_in_context() {
 
     let r = f.trace_env(&["context", &f.path("sub/util.py")], &env);
     r.ok();
-    let combined = r.combined();
-    assert!(
-        !combined.contains("docs_not_loaded"),
-        "with the full chain loaded, no doc is named as missing: {combined}"
-    );
+    assert!(!r.stdout.contains("## "), "with the full chain loaded, no doc arrives: {}", r.stdout);
 }
 
 // --- per-file %-read coverage in the session manifest ----------------------
@@ -696,11 +688,8 @@ fn no_record_still_renders_the_facts() {
 
     let r = f.trace_env(&["context", &f.path("hundred.txt"), "--no-record"], &env);
     r.ok();
-    let combined = r.combined();
-    assert!(
-        combined.contains("docs_not_loaded: [Claude.md]"),
-        "an edit must still get the file's facts, unloaded docs included: {combined}"
-    );
+    assert!(r.stdout.contains("\nfile: hundred.txt\n"), "an edit still gets the file's facts: {}", r.stdout);
+    assert!(r.stdout.contains("\n## Claude.md\n"), "and the docs it reaches: {}", r.stdout);
 }
 
 #[test]
@@ -866,19 +855,19 @@ fn closed_stdout_does_not_record_human_or_json_delivery() {
         vec!["read", "hundred.txt", "--docs"],
         vec!["read", "hundred.txt", "--docs", "--json"],
     ] {
-        let mut child = Command::new(tracer_cli_tests::trace_bin())
+        let child = Command::new(tracer_cli_tests::trace_bin())
             .args(args)
             .current_dir(&f.root)
             .env("HOME", &f.root)
+            .env("TMPDIR", &f.tmp)
             .env("CLAUDE_CODE_SESSION_ID", sid.as_str())
             .env_remove("AGENT_SESSION_ID")
             .env_remove("CODEX_THREAD_ID")
             .env_remove("TRACER_AGENT_ID")
-            .stdout(Stdio::piped())
+            .stdout(tracer_cli_tests::closed_stdout())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn trace");
-        drop(child.stdout.take().expect("child stdout"));
         let output = child.wait_with_output().expect("wait for trace");
         assert!(
             !output.status.success(),
@@ -912,19 +901,19 @@ fn closed_stdout_does_not_record_docs_delivery() {
         vec!["docs", "sub/util.py"],
         vec!["docs", "sub/util.py", "--json"],
     ] {
-        let mut child = Command::new(tracer_cli_tests::trace_bin())
+        let child = Command::new(tracer_cli_tests::trace_bin())
             .args(&args)
             .current_dir(&f.root)
             .env("HOME", &f.root)
+            .env("TMPDIR", &f.tmp)
             .env("CLAUDE_CODE_SESSION_ID", sid.as_str())
             .env_remove("AGENT_SESSION_ID")
             .env_remove("CODEX_THREAD_ID")
             .env_remove("TRACER_AGENT_ID")
-            .stdout(Stdio::piped())
+            .stdout(tracer_cli_tests::closed_stdout())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn trace");
-        drop(child.stdout.take().expect("child stdout"));
         let output = child.wait_with_output().expect("wait for trace");
         assert!(
             !output.status.success(),
@@ -997,6 +986,7 @@ fn source_edit_after_output_starts_keeps_the_captured_hash() {
         .args(["read", "large.txt", "--all", "--json"])
         .current_dir(&f.root)
         .env("HOME", &f.root)
+        .env("TMPDIR", &f.tmp)
         .env("CLAUDE_CODE_SESSION_ID", sid.as_str())
         .env_remove("AGENT_SESSION_ID")
         .env_remove("CODEX_THREAD_ID")

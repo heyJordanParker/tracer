@@ -2,17 +2,13 @@
 //! The per-function table is AST-derived; `nloc` is the line span.
 //! Emits a function complexity profile plus architecture context.
 
-use super::session_log::ShownRecord;
+use crate::session::Delivery;
 use crate::summary::Facts;
 use crate::{cache, file_facts, relations, repo_context, summary, surface};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-
-fn leading_comment(path: &Path) -> Option<String> {
-    crate::digest::leading_comment(path, 25)
-}
 
 /// A file's info and the facts its front matter shows.
 fn file_info(path: &Path) -> (Value, Option<Facts>) {
@@ -45,7 +41,7 @@ fn file_info(path: &Path) -> (Value, Option<Facts>) {
         .map(|facts| facts.function_count)
         .unwrap_or(0);
 
-    let leading = leading_comment(path);
+    let leading = facts.as_ref().and_then(|facts| facts.leading_comment.clone());
     let relative = cache::relative_to_root(path, &repo_root);
     let index = relations::get(&repo_root);
     let graph = index.module_counts(&relative);
@@ -183,7 +179,7 @@ fn dir_info(path: &Path) -> Value {
 /// several paths, sharing the budget evenly.
 pub fn run(paths: &[PathBuf], as_json: bool, brief: bool) -> Result<Value> {
     if let [path] = paths {
-        crate::pathval::require_exists(path, "PATH");
+        crate::pathval::require_exists(path, "PATH")?;
         return one(path, as_json, brief, crate::output::budget());
     }
     let share = crate::output::budget().map(|budget| budget / paths.len().max(1));
@@ -214,7 +210,7 @@ fn one(path: &Path, as_json: bool, brief: bool, budget: Option<usize>) -> Result
     );
     info["repo_context"] = repo_ctx;
 
-    let mut shown = ShownRecord::default();
+    let mut shown = Delivery::default();
     if let Some(directory) = p
         .parent()
         .filter(|_| p.is_file())
@@ -223,21 +219,17 @@ fn one(path: &Path, as_json: bool, brief: bool, budget: Option<usize>) -> Result
         info["facts"]["directory"] = Value::Object(directory);
     }
     if !as_json {
-        if p.is_file() {
-            emit_file_human(&info, shown_facts.as_ref(), &p, !brief, budget, &mut shown);
-        } else {
-            emit_dir_human(&info);
+        let mut answer = match p.is_file() {
+            true => file_human(&info, shown_facts.as_ref(), &p, !brief, budget, &mut shown),
+            false => dir_human(&info, &mut shown),
+        };
+        if let Some(footer) = crate::repo_context::footer(&p, Some(&mut shown)) {
+            answer.push_str(&format!("\n{footer}\n"));
         }
-        let ctx = &info["repo_context"];
-        let facts = json!({
-            "files": ctx["total_files"].as_i64().unwrap_or(0),
-            "median_file_complexity": ctx["median_file_ccn"].as_i64().unwrap_or(0),
-            "complexity_p95": ctx["complexity_p95"].as_i64().unwrap_or(0),
-        });
-        println!();
-        println!("repo_context: {}", crate::yamlfmt::flow(&facts, false));
+        let room = budget.map(|budget| budget.saturating_sub(crate::output::width(&answer)));
+        print!("{answer}{}", super::docs::reached(std::slice::from_ref(&p), room, "trace_info", &mut shown));
         std::io::stdout().flush()?;
-        shown.save();
+        shown.commit();
     }
     Ok(enveloped(info, p.is_file()))
 }
@@ -279,42 +271,39 @@ fn enveloped(info: Value, is_file: bool) -> Value {
     )
 }
 
-/// Prints a file's info, its front matter through `record`, which the caller
-/// saves once the text is flushed.
-fn emit_file_human(
+/// A file's info as text, its front matter offered through `record`, which
+/// the caller saves once the text is flushed.
+fn file_human(
     info: &Value,
     shown_facts: Option<&Facts>,
     path: &Path,
     full: bool,
     budget: Option<usize>,
-    record: &mut ShownRecord,
-) {
+    record: &mut Delivery,
+) -> String {
     let front_matter = info["facts"]
         .as_object()
         .map(|map| summary::front_matter_once(None, path, shown_facts, map, record, true))
         .unwrap_or_default();
-    print!("{front_matter}");
     let surface: Vec<surface::Row> =
         serde_json::from_value(info["surface"].clone()).unwrap_or_default();
     // The rows take at most half the budget; the digest and function table
     // below take the rest.
     let file = info["file"].as_str().unwrap_or("");
-    let rows = surface::render_within(&surface, file, None, budget.map(|b| b / 2));
-    print!("{rows}");
+    let rows = surface::delivered(&surface, file, None, budget.map(|b| b / 2), path, record);
     // The table repeats functions the rows already name, so it is detail:
     // it keeps the most complex that fit what is left.
     let mut table_room = budget.map(|b| b.saturating_sub(front_matter.len() + rows.len() + 1_000));
+    let mut out = front_matter + &rows;
     if let Some(lc) = info["leading_comment"].as_str() {
-        println!();
-        println!("Purpose (from leading comment):");
+        out.push_str("\nPurpose (from leading comment):\n");
         for line in lc.lines() {
-            println!("  {line}");
+            out.push_str(&format!("  {line}\n"));
         }
     }
     if let Some(callers) = info["top_callers"].as_array() {
         if !callers.is_empty() {
-            println!();
-            println!("Top callers (modules depending on this file):");
+            out.push_str("\nTop callers (modules depending on this file):\n");
             for c in callers {
                 let label = c["label"].as_str().unwrap_or("");
                 let kind = c["kind"].as_str().unwrap_or("");
@@ -327,24 +316,23 @@ fn emit_file_human(
                     .as_str()
                     .map(|s| format!("  {s}"))
                     .unwrap_or_default();
-                println!("  {label} ({kind}){where_}{purpose}");
+                out.push_str(&format!("  {label} ({kind}){where_}{purpose}\n"));
             }
         }
     }
     if let Some(deps) = info["dependencies"].as_array() {
         if !deps.is_empty() {
-            println!();
-            println!("Immediate dependencies (modules this file imports):");
+            out.push_str("\nImmediate dependencies (modules this file imports):\n");
             for d in deps {
-                println!(
-                    "  {}  [{}]",
+                out.push_str(&format!(
+                    "  {}  [{}]\n",
                     d["module"].as_str().unwrap_or(""),
                     d["confidence"].as_str().unwrap_or("")
-                );
+                ));
             }
         }
     }
-    println!();
+    out.push('\n');
     let mut funcs: Vec<&Value> = info["functions"]
         .as_array()
         .map(|a| a.iter().collect())
@@ -360,11 +348,11 @@ fn emit_file_human(
     } else {
         funcs.iter().take(3).cloned().collect()
     };
-    println!(
-        "Functions ({} of {}):",
+    out.push_str(&format!(
+        "Functions ({} of {}):\n",
         if full { "all" } else { "top 3 by complexity" },
         total
-    );
+    ));
     let mut printed = 0;
     for f in &shown {
         let row = format!(
@@ -381,18 +369,21 @@ fn emit_file_human(
             }
             *room -= row.len() + 1;
         }
-        println!("{row}");
+        out.push_str(&format!("{row}\n"));
         printed += 1;
     }
     if printed < shown.len() {
-        println!("{}", crate::output::shortened_line(shown.len() - printed, shown.len(), "functions"));
+        out.push_str(&format!("{}\n", crate::output::shortened_line(shown.len() - printed, shown.len(), "functions")));
     }
     if !full && total > 3 {
-        println!("  … {} more (run without --brief to see all)", total - 3);
+        out.push_str(&format!("  … {} more (run without --brief to see all)\n", total - 3));
     }
+    out
 }
 
-fn emit_dir_human(info: &Value) {
+/// A directory's front matter, then its most complex files, each with its
+/// facts once per agent context through `delivery`, and its digest, as text.
+fn dir_human(info: &Value, delivery: &mut Delivery) -> String {
     let mut front_matter = serde_json::Map::new();
     front_matter.insert("directory".into(), info["directory"].clone());
     front_matter.insert("files".into(), info["file_count"].clone());
@@ -401,8 +392,8 @@ fn emit_dir_human(info: &Value) {
     if !info["nearest_doc"].is_null() {
         front_matter.insert("nearest_doc".into(), info["nearest_doc"].clone());
     }
-    print!("{}", summary::front_matter(&front_matter));
-    println!("Files (top 20 by complexity, with file digest):");
+    let mut out = summary::front_matter(&front_matter);
+    out.push_str("Files (top 20 by complexity, with file digest):\n");
     let mut files: Vec<&Value> = info["files"]
         .as_array()
         .map(|a| a.iter().collect())
@@ -430,27 +421,25 @@ fn emit_dir_human(info: &Value) {
             "functions": f["functions"],
             "complexity_rank": f["complexity_rank"],
         });
+        let mut lines = headline.as_object().cloned().unwrap_or_default();
+        lines.insert("git.status".into(), f["git"]["status"].clone());
         if f["git"]["status"] != "unmodified" {
             headline["git"] = f["git"]["status"].clone();
         }
-        println!(
-            "  {}  {}",
-            f["file"].as_str().unwrap_or(""),
-            crate::yamlfmt::flow(&headline, false)
-        );
+        let file = f["file"].as_str().unwrap_or("");
+        let path = f["abs_path"].as_str().map_or_else(|| repo_root.join(file), std::path::PathBuf::from);
+        match crate::summary::offer_lines(delivery, &path, lines) {
+            Some(_) => out.push_str(&format!("  {file}  {}\n", crate::yamlfmt::flow(&headline, false))),
+            None => out.push_str(&format!("  {file}\n")),
+        }
         // Per-file digest block: Purpose + Top fns (the 3 hottest
         // functions with their start lines, from the AST backend).
         if let Some(abs) = f["abs_path"].as_str() {
-            let p = Path::new(abs);
-            if let Some(purpose) = crate::digest::leading_comment(p, 25) {
-                if let Some(first) = purpose.lines().next() {
-                    let first = first.trim();
-                    if !first.is_empty() {
-                        println!("        Purpose: {first}");
-                    }
-                }
+            let relative = cache::relative_to_root(Path::new(abs), &repo_root);
+            let purpose = facts.get(&relative).and_then(|facts| facts.leading_comment.as_deref());
+            if let Some(first) = purpose.and_then(|purpose| purpose.lines().next()) {
+                out.push_str(&format!("        Purpose: {first}\n"));
             }
-            let relative = cache::relative_to_root(p, &repo_root);
             if let Some(mut fns) = facts.get(&relative).map(|facts| facts.functions.clone()) {
                 fns.sort_by(|a, b| b.cyclomatic_complexity.cmp(&a.cyclomatic_complexity));
                 let top: Vec<String> = fns
@@ -459,9 +448,10 @@ fn emit_dir_human(info: &Value) {
                     .map(|fn_| format!("{}() L{}", fn_.name, fn_.start_line))
                     .collect();
                 if !top.is_empty() {
-                    println!("        Top fns: {}", top.join("  "));
+                    out.push_str(&format!("        Top fns: {}\n", top.join("  ")));
                 }
             }
         }
     }
+    out
 }

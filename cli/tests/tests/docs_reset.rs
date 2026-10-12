@@ -8,17 +8,16 @@
 //!   - after surfacing docs then resetting, a follow-up surfacing returns the
 //!     docs as new again (not in `already_loaded`)
 //!   - the reset is a clean no-op when no session is active
-//!   - the append-only `events.jsonl` history is preserved across the reset —
-//!     only the materialized `view.json` is cleared
+//!   - the reset empties the agent's whole record: its docs, its read lines,
+//!     and the facts and listings it was shown
 //!
 //! No tracer internals are linked — the only contract is the CLI's observable
 //! surface plus the documented on-disk shape.
 
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tracer_cli_tests::{trace_bin, Fixture};
+use tracer_cli_tests::Fixture;
 
 #[allow(non_upper_case_globals)] // project naming rule bans ALL_CAPS for our own identifiers
 static reset_seq: AtomicU64 = AtomicU64::new(0);
@@ -30,33 +29,6 @@ fn fresh_session_id(tag: &str) -> String {
         .as_nanos();
     let seq = reset_seq.fetch_add(1, Ordering::SeqCst);
     format!("trace-docs-reset-{tag}-{nanos}-{seq}")
-}
-
-fn log_dir(repo_root: &Path, session_id: &str, agent_id: &str) -> PathBuf {
-    repo_root
-        .join(".tracer-cache")
-        .join("sessions")
-        .join(session_id)
-        .join(agent_id)
-}
-
-fn read_events_jsonl(repo_root: &Path, session_id: &str, agent_id: &str) -> Vec<serde_json::Value> {
-    let path = log_dir(repo_root, session_id, agent_id).join("events.jsonl");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return vec![];
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("events.jsonl line not valid JSON"))
-        .collect()
-}
-
-fn read_view(repo_root: &Path, session_id: &str, agent_id: &str) -> serde_json::Value {
-    let path = log_dir(repo_root, session_id, agent_id).join("view.json");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("view.json missing at {}: {e}", path.display()));
-    serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("view.json is not valid JSON ({e}): {text}"))
 }
 
 fn docs_repo() -> Fixture {
@@ -157,22 +129,9 @@ fn reset_is_a_clean_noop_when_no_session_is_active() {
     // structured "nothing cleared" answer rather than erroring or writing any
     // cache.
     let f = docs_repo();
-    let r = std::process::Command::new(trace_bin())
-        .args(["docs", "reset", "--json"])
-        .current_dir(&f.root)
-        .env_remove("AGENT_SESSION_ID")
-        .env_remove("CODEX_THREAD_ID")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .output()
-        .expect("spawn trace");
-    assert!(
-        r.status.success(),
-        "standalone trace docs reset must succeed:\n{}",
-        String::from_utf8_lossy(&r.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&r.stdout);
-    let v: serde_json::Value =
-        serde_json::from_str(&stdout).expect("standalone reset must still return JSON");
+    let r = f.trace(&["docs", "reset", "--json"]);
+    r.ok();
+    let v = r.json();
     assert_eq!(v["query"]["scope"].as_str().unwrap(), "reset", "{v}");
     assert_eq!(
         v["context"]["session_active"].as_bool().unwrap(),
@@ -184,17 +143,17 @@ fn reset_is_a_clean_noop_when_no_session_is_active() {
         0,
         "no session id ⇒ nothing cleared: {v}"
     );
-    // The no-op must not have created any sessions directory.
-    assert!(
-        !f.root.join(".tracer-cache").join("sessions").exists(),
-        "standalone reset must write no session log"
+    assert_eq!(
+        std::fs::read_dir(&f.tmp).unwrap().count(),
+        0,
+        "standalone reset must write no session record"
     );
 }
 
 #[test]
 fn reset_before_anything_surfaces_clears_nothing() {
-    // Active session but the log is empty (no docs surfaced yet) → reset is
-    // still a clean no-op reporting zero cleared, and writes no view.
+    // Active session but no record yet → reset is still a clean no-op
+    // reporting zero cleared, and writes no record.
     let f = docs_repo();
     let sid = fresh_session_id("empty");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
@@ -208,10 +167,7 @@ fn reset_before_anything_surfaces_clears_nothing() {
         0,
         "an empty log clears nothing: {v}"
     );
-    assert!(
-        read_events_jsonl(&f.root, &sid, "root").is_empty(),
-        "reset on an empty log must append no event"
-    );
+    assert!(f.record(&sid, "root").is_none(), "reset with no record must write none");
 }
 
 #[test]
@@ -231,10 +187,8 @@ fn reset_clears_shown_facts_and_listings_when_no_docs_view_exists() {
     repeat.ok();
     assert!(repeat.stdout.starts_with("# app/one.py  {"), "{}", repeat.stdout);
     assert!(!repeat.stdout.contains(listed), "{}", repeat.stdout);
-    assert!(
-        !log_dir(&f.root, &sid, "root").join("view.json").exists(),
-        "the Agent must hold only listings and facts"
-    );
+    let held = f.record(&sid, "root").expect("the facts and listing are recorded");
+    assert_eq!(held["files"], serde_json::json!({}), "the Agent must hold only listings and facts: {held}");
 
     f.trace_env(&["docs", "reset"], &env).ok();
     let after_reset = f.trace_env(&["context", "app/one.py", "--no-record"], &env);
@@ -246,58 +200,22 @@ fn reset_clears_shown_facts_and_listings_when_no_docs_view_exists() {
     );
 }
 
-// --- append-only history preserved ----------------------------------------
+// --- the whole record clears -----------------------------------------------
 
 #[test]
-fn reset_preserves_append_only_history_and_clears_only_the_view() {
-    // The append-only `events.jsonl` is history; reset must never rewrite it.
-    // After surface → reset → surface, the events log carries every event in
-    // append order (2 doc_injection, 1 context_reset, 2 doc_injection), while
-    // the materialized view.json holds only the re-surfaced set.
+fn reset_empties_the_whole_record() {
     let f = docs_repo();
-    let sid = fresh_session_id("history");
+    let sid = fresh_session_id("whole");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
     f.trace_env(&["docs", "sub/util.py", "--json"], &env).ok();
-    let after_first = read_events_jsonl(&f.root, &sid, "root");
-    assert_eq!(after_first.len(), 2, "first surfacing records two events");
+    f.trace_env(&["context", "sub/util.py"], &env).ok();
+    let before = f.record(&sid, "root").unwrap();
+    assert_eq!(before["files"].as_object().unwrap().len(), 3, "{before}");
+    assert!(!before["shown"].as_object().unwrap().is_empty(), "{before}");
 
     f.trace_env(&["docs", "reset", "--json"], &env).ok();
-    f.trace_env(&["docs", "sub/util.py", "--json"], &env).ok();
-
-    let events = read_events_jsonl(&f.root, &sid, "root");
-    let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
-    assert_eq!(
-        kinds,
-        vec![
-            "doc_injection",
-            "doc_injection",
-            "context_reset",
-            "doc_injection",
-            "doc_injection",
-        ],
-        "events.jsonl must preserve every event in append order across the reset: {events:?}"
-    );
-
-    // The reset event carries the source and a sha256 content hash like every
-    // other event, with an empty path (it is not about one doc).
-    let reset_event = &events[2];
-    assert_eq!(reset_event["source"].as_str().unwrap(), "trace_docs_reset");
-    assert_eq!(reset_event["path"].as_str().unwrap(), "");
-    assert!(
-        reset_event["content_hash"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"),
-        "reset event must carry a sha256 content hash: {reset_event}"
-    );
-
-    // The view holds only the two re-surfaced docs — not the pre-reset set
-    // doubled. Reset cleared it; the post-reset surfacing repopulated it.
-    let view = read_view(&f.root, &sid, "root");
-    assert_eq!(
-        view["emitted"].as_object().unwrap().len(),
-        2,
-        "view must hold only the re-surfaced set, not the accumulated total: {view}"
-    );
+    let after = f.record(&sid, "root").unwrap();
+    assert_eq!(after["files"], serde_json::json!({}), "{after}");
+    assert_eq!(after["shown"], serde_json::json!({}), "{after}");
 }

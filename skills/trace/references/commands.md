@@ -16,9 +16,11 @@ Template:
   trace context
   trace context <paths...> [--directory] [--offset N] [--limit N] [--no-record]
   trace docs prime [<files...>] [--reason session_start|post_compact]
+  trace hook <event> --harness claude|codex --deadline-ms <n> [--tracer-only]
   trace list <dirs...> [--all] [--recent] [--limit N]
   trace tree <path> [--depth N]
   trace info <paths...> [--brief]
+  trace api <paths...> [--visibility public|restricted|all] [--imported] [--depth N] [-g <glob>]...
   trace structure <paths...>
   trace defines <symbol>
   trace callers <symbol> [--limit N]
@@ -55,6 +57,10 @@ IF a path argument names a path that does not exist:
 ### Read the error, then the rest of the answer
 The missing path is named on stderr, every other path still answers, and the command exits 2, as ripgrep does.
 
+IF stderr says `ctags failed`:
+### Treat the named file's declarations as missing
+`universal-ctags` extracts every language without a tree-sitter extractor, and the answer lacks the declarations it failed to give. Every other file still answers, and the command exits 2. `trace doctor` checks the `ctags` install.
+
 ## 2. Know each command's edge cases
 
 ### `-t` takes a language name or any `rg --type-list` type
@@ -67,6 +73,9 @@ IF a search backend fails to run:
 ### Take a `trace diff` row's declaration groups from its four arrays
 `--json` carries `changed`, `removed`, `added`, and `touches` on the row. `changed` holds a `{before, after}` pair of surface rows; the other three hold surface rows. The hunk ranges come from a `--unified=0` pass, not the rendered lines.
 
+### Widen `trace api` with `--visibility`, never by reading the files
+`public`, the default, lists a file's public declarations and its re-exports. `restricted` adds what other files can reach but is not public, such as Rust's `pub(crate)`, Java's package-private, or a Python `_name`. `all` adds everything private and each file's imports. A file with nothing to list is left out. Past the budget no header is cut to its name: each file's facts go first, then its purpose, then the least-imported files collapse to one line that names the `trace api` command listing them. An import or re-export prints once per statement and whole, named by the names it binds. `--json` puts one row per declaration and per import or re-export statement in `results`, each with its `file` and `visibility`.
+
 ### Check a declaration's classification with `trace structure --json`
 `results.symbols_by_kind` groups the files' surface rows by `kind`, each row carrying its `file`, `node_id`, and `annotations`; `results.imports` and `results.exports` carry their `file` too, so one file and many share one shape.
 
@@ -77,7 +86,7 @@ IF asking who calls a property:
 ## 3. Use `trace docs` correctly
 
 ### `trace docs <paths...>` sends the docs not yet loaded, nearest first
-Text is Markdown: `## <path>` and the document below its frontmatter, nearest directory first, each from the first line the agent has not seen. The first doc longer than the room left under `--budget` arrives as `## <path> (L<from>-L<to> of <total>)`, cut at a whole line and ending in `read`'s trim marker; the docs after it are named under the `trace docs` command that sends them. A doc is loaded once every line arrived, so the next call continues it. `--skip <path>` leaves out a doc the calling command prints itself. Nothing prints when every doc is already loaded. `--json` returns every doc whole and records them all.
+Text is Markdown: `## <path>` and the document below its frontmatter, nearest directory first, each from the first line the agent has not seen. The first doc longer than the room left under `--budget` arrives as `## <path> (L<from>-L<to> of <total>)`, cut at a whole line and ending in `read`'s trim marker; the docs after it are named under the `trace docs` command that sends them. A doc is loaded once every line arrived, so the next call continues it. A doc that changed after it arrived whole comes back as `## <path> (changed since sent: <n> lines, <m> removed)` with only its added or changed lines, each as `L<n>: <text>`. `--skip <path>` leaves out a doc the calling command prints itself. Nothing prints when every doc is already loaded. `--json` returns every doc whole and records them all. `--triggering-tool` and `--triggering-command` are echoed in the query and recorded nowhere.
 
 Template:
   ```json
@@ -104,8 +113,8 @@ Template:
 ### `trace docs prime` records what the harness loaded
 With files it records exactly those files as loaded, source `instructions_loaded`. With no file it records the root-to-cwd `Claude.md` chain.
 
-### `trace docs archive` moves a stopped Subagent's log aside
-It moves the session log of `TRACER_AGENT_ID` under `archived/`, and does nothing for an Agent that never wrote one. Reads fall back to the archived log, and the Agent's first write after a resume takes it back.
+### `trace docs archive` does nothing
+Each Agent's record stays under its own agent id, so a resumed Subagent finds it where it left it, and records untouched for 7 days are removed.
 
 ### `trace docs <path> --graph` projects the docs graph
 The path is optional with `--graph`; it defaults to the repository root for the current working directory.
@@ -144,8 +153,8 @@ One line is one entry. A line carrying no timestamp attaches to the entry above 
 
 ## 5. Use `trace read` modes correctly
 
-### Project docs are opt-in for direct reads
-Pass `--docs` to load ancestor docs. There is no `--no-docs` flag because direct reads default to docs off.
+### Project docs follow the answer in a session
+In a session, `read` and every other command that takes paths print the ancestor docs after the answer, once per context. Outside a session, pass `--docs` to load them; `--json` carries them only with `--docs`.
 
 ### `--raw` skips cleaning
 Default reads strip generated banners, decorative separators, runs of blank lines, and prefix preserved lines with `L<n>:`.

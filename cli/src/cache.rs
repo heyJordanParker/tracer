@@ -12,9 +12,8 @@
 //! content-addressed per-file entries, which are immutable, and repo-wide
 //! entries, each swept by `evict_prefixed` so a superseded key leaves nothing
 //! behind. Another schema's directory stays until no build has written in it
-//! for `stale_schema_age`. The second namespace, `sessions/`, lives under the
-//! same `.tracer-cache/` at the worktree root and is owned by
-//! `commands::session_log`.
+//! for `stale_schema_age`. Session records are not cache: `crate::session`
+//! keeps them outside every repository.
 //!
 //! File cache key:
 //!   sha256("v{SCHEMA_VERSION}|ccn:{backend}\0" + contents + "\0" + relpath)
@@ -28,61 +27,101 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const CACHE_DIR_NAME: &str = ".tracer-cache";
 pub const NAMESPACE_FILE: &str = "file";
+/// `.tracer-cache/tmp/`: the files a child process reads its input from.
+pub const TEMPORARY_DIR_NAME: &str = "tmp";
 
-/// This schema's cross-process maintenance lock: `file/schema<N>/.maintain.lock`,
-/// held with an exclusive `flock` across every repo-wide index update. A
-/// process that finds its index fresh never takes it; one that finds it stale
-/// takes it, re-reads the index the holder just wrote, and does only what is
-/// left. Without it eight concurrent calls after one saved file each rebuilt
-/// the index and overwrote each other's write. A build at another schema
-/// writes none of these entries, so it holds its own lock and never waits here.
-/// The process that takes the lock sweeps the stale schemas.
+/// One index family's cross-process lock, `file/schema<N>/.<family>.lock`,
+/// held with an exclusive `flock` across that family's update. A process
+/// that finds its index fresh never takes it; one that finds it stale takes
+/// it, re-reads the index the holder just wrote, and does only what is left.
+/// Without it eight concurrent calls after one saved file each rebuilt the
+/// index and overwrote each other's write. A build at another schema writes
+/// none of these entries, so it holds its own locks and never waits here.
 ///
-/// Reentrant per process: the relations update calls `get_batch`, which
-/// stores the mtime index, which takes this lock again. `flock` on a second
-/// descriptor in the same process would block forever, so the depth counter
-/// hands a nested caller the lock the process already holds.
-struct Maintenance;
-
-#[allow(non_upper_case_globals)]
-static maintenance: std::sync::Mutex<(usize, Option<fs::File>)> = std::sync::Mutex::new((0, None));
-
-fn maintain(repo_root: &Path) -> Option<Maintenance> {
-    let mut held = maintenance.lock().unwrap();
-    if held.0 == 0 {
-        let dir = schema_directory(NAMESPACE_FILE, repo_root).ok()?;
-        let lock = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(dir.join(".maintain.lock"))
-            .ok()?;
-        crate::timing::phase("lock maintain", || {
-            rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
-        })
-        .ok()?;
-        evict_stale_schemas(&dir);
-        held.1 = Some(lock);
-    }
-    held.0 += 1;
-    Some(Maintenance)
+/// Families nest one way. The relations update takes the extraction side's
+/// locks while it holds its own: the listing, mtime, scc, and ctags maps,
+/// then directories and symbols. Every other family takes no lock while it
+/// holds its own. So a leaf updates during a long relations build, and the
+/// order can't deadlock.
+///
+/// Reentrant per process: `flock` on a second descriptor in the same process
+/// would block forever, so the depth counter hands a nested caller the lock
+/// the process already holds.
+struct Held {
+    family: String,
 }
 
-impl Drop for Maintenance {
+/// Each family whose lock this process holds: how deep, and the descriptor.
+#[allow(non_upper_case_globals)]
+static held_locks: std::sync::Mutex<Vec<(String, usize, fs::File)>> = std::sync::Mutex::new(Vec::new());
+
+/// The lock wait ran past the index's limit.
+struct TimedOut;
+
+/// `family`'s lock, waiting for it until `limit`. `Ok(None)` when there is no
+/// cache to lock, so the update runs without one.
+fn lock(repo_root: &Path, family: &str, limit: Option<std::time::Instant>) -> Result<Option<Held>, TimedOut> {
+    let held = || held_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = held().iter_mut().find(|(name, ..)| name == family) {
+        entry.1 += 1;
+        return Ok(Some(Held { family: family.to_string() }));
+    }
+    // The wait runs without `held_locks`, so this process can still release
+    // the families it holds while another process holds this one.
+    let Some(file) = schema_directory(NAMESPACE_FILE, repo_root).ok().and_then(|dir| {
+        fs::OpenOptions::new().write(true).create(true).truncate(false).open(dir.join(format!(".{family}.lock"))).ok()
+    }) else {
+        return Ok(None);
+    };
+    let taken = crate::timing::phase(&format!("lock {family}"), || match limit {
+        None => rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).is_ok(),
+        Some(limit) => loop {
+            if rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok() {
+                break true;
+            }
+            if std::time::Instant::now() >= limit {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        },
+    });
+    if !taken {
+        return match limit {
+            Some(_) => Err(TimedOut),
+            None => Ok(None),
+        };
+    }
+    held().push((family.to_string(), 1, file));
+    Ok(Some(Held { family: family.to_string() }))
+}
+
+impl Drop for Held {
     fn drop(&mut self) {
-        let mut held = maintenance.lock().unwrap();
-        held.0 -= 1;
-        if held.0 == 0 {
-            // Closing the descriptor releases the flock.
-            held.1 = None;
+        let mut held = held_locks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(at) = held.iter().position(|(name, ..)| *name == self.family) {
+            held[at].1 -= 1;
+            if held[at].1 == 0 {
+                // Closing the descriptor releases the flock.
+                held.remove(at);
+            }
         }
+    }
+}
+
+/// Remove the stale schemas and the leftovers of killed calls. The listing
+/// update runs it, since it runs whenever the tree changed, and so do
+/// `trace cache build` and `cache clear`.
+pub fn sweep(repo_root: &Path) {
+    if let Ok(dir) = schema_directory(NAMESPACE_FILE, repo_root) {
+        evict_stale_schemas(&dir);
+        sweep_leftovers(&dir, &repo_root.join(CACHE_DIR_NAME).join(TEMPORARY_DIR_NAME));
     }
 }
 
 /// Bump whenever extraction, the `FileFacts` shape, or a repo-wide index
 /// shape changes — a new schema writes into its own directory, so old
 /// entries become unreachable automatically.
-pub const SCHEMA_VERSION: u32 = 49;
+pub const SCHEMA_VERSION: u32 = 53;
 
 /// A build in use writes its schema's git-activity key at least once a day,
 /// because that key carries the date, so a week without a write means no build
@@ -90,13 +129,10 @@ pub const SCHEMA_VERSION: u32 = 49;
 #[allow(non_upper_case_globals)]
 const stale_schema_age: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Active CCN backend. There is exactly one backend — the tree-sitter
-/// AST decision-node walker — so cache identity is unconditionally
-/// `ccn:ast`. This keeps cache keys stable for `TRACER_CCN_BACKEND=ast`,
-/// so warm caches are interchangeable and key-for-key comparable.
-pub fn active_ccn_backend() -> &'static str {
-    "ast"
-}
+/// A temporary file lives for one write or one `ctags` run, well under a
+/// second, so one an hour old belongs to a trace that was killed mid-call.
+#[allow(non_upper_case_globals)]
+const leftover_age: Duration = Duration::from_secs(60 * 60);
 
 pub fn worktree_root_for(path: &Path) -> Option<PathBuf> {
     let mut current = cwd_of(path);
@@ -203,10 +239,10 @@ pub fn relative_to_root(path: &Path, repo_root: &Path) -> String {
     }
 }
 
-/// sha256("v{SCHEMA}|ccn:{backend}\0" + data + "\0" + relpath).
+/// sha256("v{SCHEMA}\0" + data + "\0" + relpath).
 pub fn file_hash_from_bytes(data: &[u8], path: &Path, repo_root: &Path) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(format!("v{}|ccn:{}\0", SCHEMA_VERSION, active_ccn_backend()).as_bytes());
+    hasher.update(format!("v{SCHEMA_VERSION}\0").as_bytes());
     hasher.update(data);
     hasher.update(b"\0");
     hasher.update(relative_to_root(path, repo_root).as_bytes());
@@ -328,37 +364,83 @@ fn evict_prefixed(namespace: &str, prefix: &str, keep: &str, repo_root: &Path) {
     }
 }
 
+/// A repo-wide index, read from its stored entry and brought up to date
+/// under its family's lock.
 pub trait Index {
     type Stored: serde::Serialize;
     type Change;
     fn key(&self) -> String;
     fn read(&self, bytes: &[u8]) -> Option<Self::Stored>;
     fn change(&self, stored: Option<&Self::Stored>) -> Option<Self::Change>;
-    fn apply(&self, stored: Option<Self::Stored>, change: Self::Change) -> Self::Stored;
+    /// The index brought up to date, `None` when `limit` passed first.
+    fn apply(&self, stored: Option<Self::Stored>, change: Self::Change) -> Option<Self::Stored>;
+    /// Whether the result may be stored: a result built from a failed git
+    /// call is used by this call and never stored.
     fn complete(&self, _stored: &Self::Stored) -> bool {
         true
     }
+    /// When a call that only adds context to its answer stops waiting on
+    /// this index, `None` for an answer, which waits until it is complete.
+    fn limit(&self) -> Option<std::time::Instant> {
+        None
+    }
 }
 
-pub fn index<I: Index>(index: &I, repo_root: &Path) -> Option<I::Stored> {
+/// What `index` found.
+pub enum Outcome<T> {
+    /// The index, up to date.
+    Ready(T),
+    /// The stored index, behind the tree, because the limit passed first.
+    Stale(T),
+    /// There is nothing to index.
+    Empty,
+    /// The limit passed before any index was stored: leave out the parts
+    /// that need it.
+    NotReady,
+}
+
+impl<T> Outcome<T> {
+    /// The index, current or stale.
+    pub fn ready(self) -> Option<T> {
+        match self {
+            Outcome::Ready(stored) | Outcome::Stale(stored) => Some(stored),
+            Outcome::Empty | Outcome::NotReady => None,
+        }
+    }
+}
+
+/// The index, up to date. When its limit passes first, whether waiting on
+/// another process's lock or during its own update, the stored index
+/// answers as `Stale`, and `NotReady` means nothing is stored yet. An update
+/// its limit cancels stores nothing but the per-file extraction it finished,
+/// which the next call picks up.
+pub fn index<I: Index>(index: &I, repo_root: &Path) -> Outcome<I::Stored> {
     let key = index.key();
+    let found = |stored: Option<I::Stored>| stored.map_or(Outcome::Empty, Outcome::Ready);
+    let behind = |stored: Option<I::Stored>| stored.map_or(Outcome::NotReady, Outcome::Stale);
     let stored = read_entry(index, &key, repo_root);
     if index.change(stored.as_ref()).is_none() {
-        return stored;
+        return found(stored);
     }
-    let _lock = maintain(repo_root);
+    let Ok(_lock) = lock(repo_root, family(&key), index.limit()) else {
+        return behind(stored);
+    };
     let stored = read_entry(index, &key, repo_root);
-    match index.change(stored.as_ref()) {
-        None => stored,
-        Some(change) => Some(store(index, &key, index.apply(stored, change), repo_root)),
+    let Some(change) = index.change(stored.as_ref()) else {
+        return found(stored);
+    };
+    match index.apply(stored, change) {
+        Some(applied) => Outcome::Ready(store(index, &key, applied, repo_root)),
+        None => behind(read_entry(index, &key, repo_root)),
     }
 }
 
-pub fn update<I: Index>(index: &I, repo_root: &Path, change: I::Change) -> I::Stored {
-    let _lock = maintain(repo_root);
+/// `change` applied to the stored index under its family's lock.
+pub fn update<I: Index>(index: &I, repo_root: &Path, change: I::Change) -> Option<I::Stored> {
     let key = index.key();
+    let _lock = lock(repo_root, family(&key), index.limit()).ok()?;
     let stored = read_entry(index, &key, repo_root);
-    store(index, &key, index.apply(stored, change), repo_root)
+    Some(store(index, &key, index.apply(stored, change)?, repo_root))
 }
 
 fn read_entry<I: Index>(index: &I, key: &str, repo_root: &Path) -> Option<I::Stored> {
@@ -409,6 +491,28 @@ fn evict_stale_schemas(current: &Path) {
     if stale(loose.0) {
         for path in loose.1 {
             let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Delete what a killed trace left behind: a `save` temp (`*.tmp`) in this
+/// schema's directory, and any file in `.tracer-cache/tmp/`. Signals and the
+/// watchdog end trace without running destructors, so these outlive it.
+fn sweep_leftovers(schema: &Path, temporary: &Path) {
+    let old = |entry: &fs::DirEntry| {
+        entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|written| written.elapsed().is_ok_and(|age| age > leftover_age))
+    };
+    for entry in fs::read_dir(schema).into_iter().flatten().flatten() {
+        if entry.path().extension().is_some_and(|extension| extension == "tmp") && old(&entry) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    for entry in fs::read_dir(temporary).into_iter().flatten().flatten() {
+        if old(&entry) {
+            let _ = fs::remove_file(entry.path());
         }
     }
 }
@@ -475,4 +579,40 @@ pub fn clear_all(repo_root: &Path) -> Result<usize> {
 /// excluded so `stats` / `clear` count only durable entries.
 fn is_cache_entry(p: &Path) -> bool {
     p.extension().and_then(|x| x.to_str()) == Some("json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{leftover_age, sweep_leftovers};
+    use std::fs;
+    use std::path::Path;
+    use std::time::SystemTime;
+
+    fn write(path: &Path, aged: bool) {
+        let file = fs::File::create(path).unwrap();
+        if aged {
+            file.set_modified(SystemTime::now() - leftover_age * 2).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_killed_calls_leftovers_are_swept_and_live_files_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let (schema, temporary) = (root.path().join("schema"), root.path().join("tmp"));
+        fs::create_dir_all(&schema).unwrap();
+        fs::create_dir_all(&temporary).unwrap();
+        write(&schema.join("key.123.0.tmp"), true);
+        write(&schema.join("key.456.0.tmp"), false);
+        write(&schema.join("key.json"), true);
+        write(&temporary.join("tmpAbc.rb"), true);
+        write(&temporary.join("tmpDef.rb"), false);
+
+        sweep_leftovers(&schema, &temporary);
+
+        assert!(!schema.join("key.123.0.tmp").exists());
+        assert!(schema.join("key.456.0.tmp").exists());
+        assert!(schema.join("key.json").exists());
+        assert!(!temporary.join("tmpAbc.rb").exists());
+        assert!(temporary.join("tmpDef.rb").exists());
+    }
 }

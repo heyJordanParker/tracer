@@ -208,7 +208,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<OsString>,
 {
-    git_command(repo_root, args, |command| command.output())
+    git_command(repo_root, args, crate::process::output)
 }
 
 /// Run git in `repo_root` and return stdout with the trailing newline stripped.
@@ -218,6 +218,21 @@ pub fn git_str(repo_root: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// git diff --name-status codes → display labels. R100/C075 collapse to the
+/// letter only (handled by the caller taking `code[0]`). `diff` and `history`
+/// both read it, so one vocabulary describes a change wherever it is reported.
+pub fn status_label(kind: char) -> String {
+    match kind {
+        'A' => "added".into(),
+        'M' => "modified".into(),
+        'D' => "deleted".into(),
+        'R' => "renamed".into(),
+        'C' => "copied".into(),
+        'T' => "type-changed".into(),
+        other => other.to_lowercase().to_string(),
+    }
 }
 
 pub fn blob(repo_root: &Path, revision: &str, path: &str) -> Option<Vec<u8>> {
@@ -271,11 +286,8 @@ pub(crate) fn piped<T>(
 ) -> std::io::Result<(T, bool)> {
     git_command(repo_root, args.iter().copied(), |command| {
         configure(command);
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
+        let mut child =
+            crate::process::spawn(command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()))?;
         let mut stdin = child.stdin.take().expect("git stdin is piped");
         let writer = std::thread::spawn(move || stdin.write_all(&request));
         let read = read(child.stdout.take().expect("git stdout is piped"));
@@ -473,16 +485,21 @@ fn cached_history_uncached(repo_root: &Path) -> HashMap<String, GitActivity> {
         repo_root,
         head,
         cutoff: cutoff_30d(),
+        commits: OnceLock::new(),
     };
     cache::index(&index, repo_root)
+        .ready()
         .map(|activity| activity.map)
         .unwrap_or_default()
 }
 
+/// The activity index builds from the commit index, which `change` loads
+/// before the activity lock is taken, so this leaf's lock takes no other.
 struct ActivityIndex<'a> {
     repo_root: &'a Path,
     head: String,
     cutoff: String,
+    commits: OnceLock<Arc<Commits>>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -506,15 +523,18 @@ impl cache::Index for ActivityIndex<'_> {
     }
 
     fn change(&self, stored: Option<&Activity>) -> Option<()> {
-        stored.is_none().then_some(())
+        stored.is_none().then(|| {
+            self.commits.get_or_init(|| commits(self.repo_root));
+        })
     }
 
-    fn apply(&self, _stored: Option<Activity>, _change: ()) -> Activity {
-        let (map, finished) = historical(&commits(self.repo_root), &self.cutoff);
-        Activity {
+    fn apply(&self, _stored: Option<Activity>, _change: ()) -> Option<Activity> {
+        let commits = self.commits.get_or_init(|| commits(self.repo_root));
+        let (map, finished) = historical(commits, &self.cutoff);
+        Some(Activity {
             map,
             incomplete: !finished,
-        }
+        })
     }
 
     fn complete(&self, stored: &Activity) -> bool {
@@ -578,7 +598,7 @@ pub struct CommitIndex<'a> {
 pub fn commits(repo_root: &Path) -> Arc<Commits> {
     static COMMITS_MEMO: memo::Memo<Commits> = OnceLock::new();
     memo::get_or_build(&COMMITS_MEMO, repo_root, || {
-        cache::index(&CommitIndex { repo_root }, repo_root).unwrap_or_default()
+        cache::index(&CommitIndex { repo_root }, repo_root).ready().unwrap_or_default()
     })
 }
 
@@ -599,13 +619,13 @@ impl cache::Index for CommitIndex<'_> {
         (stored.map(|commits| commits.head.as_str()) != Some(head.as_str())).then_some(CommitsChange::Walk)
     }
 
-    fn apply(&self, stored: Option<Commits>, change: CommitsChange) -> Commits {
+    fn apply(&self, stored: Option<Commits>, change: CommitsChange) -> Option<Commits> {
         let mut commits = stored.unwrap_or_default();
         match change {
             CommitsChange::Binary(blobs) => commits.binary.extend(blobs),
             CommitsChange::Walk => self.walk(&mut commits),
         }
-        commits
+        Some(commits)
     }
 
     fn complete(&self, stored: &Commits) -> bool {
@@ -1168,6 +1188,7 @@ fn presence_by_path(repo_root: &Path) -> HashMap<String, Vec<&'static str>> {
     }
 
     cache::index(&PresenceIndex { repo_root, present }, repo_root)
+        .ready()
         .map(|presence| {
             presence
                 .labels
@@ -1216,15 +1237,15 @@ impl cache::Index for PresenceIndex<'_> {
         stored.is_none().then_some(())
     }
 
-    fn apply(&self, _stored: Option<Presence>, _change: ()) -> Presence {
+    fn apply(&self, _stored: Option<Presence>, _change: ()) -> Option<Presence> {
         let (labels, complete) = compute_presence(self.repo_root, &self.present);
-        Presence {
+        Some(Presence {
             labels: labels
                 .into_iter()
                 .map(|(path, labels)| (path, labels.into_iter().map(str::to_string).collect()))
                 .collect(),
             incomplete: !complete,
-        }
+        })
     }
 
     fn complete(&self, stored: &Presence) -> bool {
@@ -1242,7 +1263,7 @@ fn compute_presence(
     let mut complete = true;
     for (label, _, tip) in present {
         let output = match git_command(repo_root, ["ls-tree", "-rz", "--name-only", tip], |command| {
-            command.env("GIT_NO_LAZY_FETCH", "1").output()
+            crate::process::output(command.env("GIT_NO_LAZY_FETCH", "1"))
         }) {
             Ok(output) if output.status.success() => output.stdout,
             _ => {

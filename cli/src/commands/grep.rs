@@ -9,7 +9,7 @@
 //! through `output::Sink`, so the result never exists as a `serde_json::Value`
 //! tree on the way out.
 
-use crate::commands::enrich::{self, Match};
+use crate::matches::{self, Match};
 use crate::output::Sink;
 use crate::{cache, repo_context};
 use anyhow::{anyhow, bail, Context, Result};
@@ -21,6 +21,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 
 /// ripgrep's own flags, as `trace grep` takes them.
+#[derive(Default)]
 pub struct Options {
     pub ignore_case: bool,
     /// `-l` and `-c`: each matching file once, with its facts and match count.
@@ -199,7 +200,7 @@ fn ripgrep(pattern: &str, paths: &[String], options: &Options, types: &[String])
         .args(paths)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn().context("failed to start ripgrep")?;
+    let mut child = crate::process::spawn(&mut cmd).context("failed to start ripgrep")?;
     let stderr = stderr_reader(child.stderr.take().expect("piped ripgrep stderr"));
     let mut matches = Vec::new();
     let mut lines = Lines::new();
@@ -243,6 +244,25 @@ fn ripgrep(pattern: &str, paths: &[String], options: &Options, types: &[String])
     }
 }
 
+/// Whether ripgrep's `-g` `globs` select a repository-relative `file`, matched
+/// as ripgrep matches them: a `!` glob excludes, and a glob that excludes a
+/// directory excludes every file under it.
+pub(super) fn globbed(globs: &[String]) -> Result<impl Fn(&Path) -> bool> {
+    let mut builder = ignore::overrides::OverrideBuilder::new(".");
+    for glob in globs {
+        builder.add(glob)?;
+    }
+    let globs = builder.build()?;
+    Ok(move |file: &Path| {
+        !globs.matched(file, false).is_ignore()
+            && !file
+                .ancestors()
+                .skip(1)
+                .take_while(|parent| !parent.as_os_str().is_empty())
+                .any(|parent| globs.matched(parent, true).is_ignore())
+    })
+}
+
 /// Search a commit rather than the working tree. ripgrep reads files on
 /// disk, so the tool for a past state is `git grep`, which reads the tree
 /// object directly — no checkout, no temp files. Its files then pass through
@@ -259,20 +279,10 @@ fn git_grep(
     if options.multiline {
         bail!("-U needs ripgrep, and --at searches with git grep, which has no multiline mode");
     }
-    let mut globs = ignore::overrides::OverrideBuilder::new(".");
-    for glob in &options.globs {
-        globs.add(glob)?;
-    }
-    let globs = globs.build()?;
+    let globbed = globbed(&options.globs)?;
     let selected = |file: &str| {
         let file = Path::new(file);
-        !types.matched(file, false).is_ignore()
-            && !globs.matched(file, false).is_ignore()
-            && !file
-                .ancestors()
-                .skip(1)
-                .take_while(|parent| !parent.as_os_str().is_empty())
-                .any(|parent| globs.matched(parent, true).is_ignore())
+        !types.matched(file, false).is_ignore() && globbed(file)
     };
     let mut args = vec!["grep", "-z", "--text", "-n", "--no-color", "--perl-regexp"];
     if options.ignore_case {
@@ -281,10 +291,7 @@ fn git_grep(
     args.extend(["-e", pattern, at, "--"]);
     args.extend(scope.iter().map(|(_, within)| within.as_str()));
     let mut matches = crate::git_activity::git_command(repo_root, args, |command| {
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        let mut child = crate::process::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
             .context("failed to start git grep")?;
         let stderr = stderr_reader(child.stderr.take().expect("piped git grep stderr"));
         let mut stdout = Vec::new();
@@ -462,24 +469,14 @@ fn attach_context(matches: &mut [Match], lines: &Lines, before: usize, after: us
     }
 }
 
-pub fn run(
-    pattern: &str,
-    paths: &[String],
-    at: Option<&str>,
-    options: &Options,
-    as_json: bool,
-    sink: &Sink,
-) -> Result<()> {
+/// Every match of `pattern` under `paths`, grouped by the repository each
+/// file belongs to, with `-B` and `-A` context attached.
+fn searched(pattern: &str, paths: &[String], at: Option<&str>, options: &Options) -> Result<Groups> {
     // A type is resolved before the search runs: an unknown one must fail by
     // name, never as an empty result the agent reads as "this does not
     // exist".
-    let (types, matcher) = match crate::lang::ripgrep_types(&options.types) {
-        Ok(resolved) => resolved,
-        Err(message) => {
-            eprintln!("Error: {message}");
-            std::process::exit(2);
-        }
-    };
+    let (types, matcher) = crate::lang::ripgrep_types(&options.types)
+        .map_err(|message| crate::process::fail(2, format!("Error: {message}")))?;
     let (mut groups, lines) = match at {
         Some(revision) => at_revision(pattern, revision, paths, options, &matcher)?,
         None => {
@@ -490,21 +487,61 @@ pub fn run(
     for (_, group) in &mut groups {
         attach_context(group, &lines, options.before, options.after);
     }
+    Ok(groups)
+}
+
+type Enriched<'a> = (
+    Vec<matches::EnrichedMatch<'a>>,
+    BTreeMap<String, std::sync::Arc<matches::FileEnrichment>>,
+    BTreeMap<String, Vec<crate::surface::Row>>,
+);
+
+/// Each group's matches with their files' facts and declaration rows.
+fn enriched<'a>(groups: &'a Groups, at: Option<&str>) -> Enriched<'a> {
+    let mut enriched = Vec::new();
+    let mut files = BTreeMap::new();
+    let mut surfaces = BTreeMap::new();
+    for (root, group) in groups {
+        let relations = crate::relations::ready(root);
+        let (group_enriched, group_files, group_surfaces) = matches::enrich(group, root, relations.as_deref(), at);
+        enriched.extend(group_enriched);
+        files.extend(group_files);
+        surfaces.extend(group_surfaces);
+    }
+    (enriched, files, surfaces)
+}
+
+/// The context `trace hook` adds to a native search that already printed
+/// its own result: each matching file's facts and its matches grouped under
+/// their declarations, or with `content` only the declarations, through
+/// `delivery`.
+pub fn native_context(
+    pattern: &str,
+    paths: &[String],
+    options: &Options,
+    content: bool,
+    delivery: &mut crate::session::Delivery,
+) -> Result<String> {
+    let groups = searched(pattern, paths, None, options)?;
+    let (enriched, _, surfaces) = enriched(&groups, None);
+    Ok(matches::render_native(&enriched, &surfaces, content, delivery))
+}
+
+pub fn run(
+    pattern: &str,
+    paths: &[String],
+    at: Option<&str>,
+    options: &Options,
+    as_json: bool,
+    sink: &Sink,
+) -> Result<()> {
+    let groups = searched(pattern, paths, at, options)?;
     let abs = cache::absolutize(Path::new(&paths[0]));
     let first_root = root_of(&paths[0]);
     let ((enriched, files, surfaces, signpost), repo_ctx) = rayon::join(
         || {
-            let signpost = enrich::signpost(enrich::searched_name(pattern), &first_root);
-            let mut enriched = Vec::new();
-            let mut files = BTreeMap::new();
-            let mut surfaces = BTreeMap::new();
-            for (root, group) in &groups {
-                let relations = crate::relations::get(root);
-                let (group_enriched, group_files, group_surfaces) = enrich::enrich(group, root, Some(&relations), at);
-                enriched.extend(group_enriched);
-                files.extend(group_files);
-                surfaces.extend(group_surfaces);
-            }
+            let signpost = matches::signpost(matches::searched_name(pattern), &first_root);
+            let (enriched, files, surfaces) = enriched(&groups, at);
             (enriched, files, surfaces, signpost)
         },
         || if as_json { repo_context::repo_context(&abs) } else { Value::Null },
@@ -522,14 +559,19 @@ pub fn run(
     };
 
     if !as_json {
-        enrich::render_human(&enriched, &files, &surfaces, signpost.as_deref(), options.files_only);
+        let mut delivery = crate::session::Delivery::default();
+        let shown = matches::offer_signpost(signpost.as_deref(), matches::searched_name(pattern), &first_root, &mut delivery);
+        let mut answer = matches::render_human(&enriched, &files, &surfaces, shown, options.files_only, &mut delivery);
         for r in &nested {
-            println!("nested repository (its own search scope): {r}");
+            answer.push_str(&format!("nested repository (its own search scope): {r}\n"));
         }
+        // Docs belong to the worktree, so a search at a revision sends none.
+        let reached: Vec<PathBuf> = if at.is_none() { paths.iter().map(PathBuf::from).collect() } else { Vec::new() };
+        super::docs::print_with_docs(&answer, &reached, "trace_grep", delivery)?;
     }
     drop(surfaces);
 
-    sink.emit(&enrich::SearchDocument {
+    sink.emit(&matches::SearchDocument {
         query: json!({
             "pattern": pattern,
             "paths": paths,
@@ -541,7 +583,7 @@ pub fn run(
             "before_context": options.before,
             "after_context": options.after,
         }),
-        context: enrich::SearchContext {
+        context: matches::SearchContext {
             files: &files,
             repo: &repo_ctx,
             signpost,

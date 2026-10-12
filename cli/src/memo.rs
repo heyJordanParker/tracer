@@ -36,6 +36,19 @@ pub fn get_or_build<T>(memo: &Memo<T>, repo_root: &Path, build: impl FnOnce() ->
     built
 }
 
+/// `get_or_build` for a build that may not finish: `None` keeps nothing, so
+/// the next call builds again.
+pub fn get_or_try_build<T>(memo: &Memo<T>, repo_root: &Path, build: impl FnOnce() -> Option<T>) -> Option<Arc<T>> {
+    let cell = memo.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cell.lock().unwrap();
+    if let Some(hit) = guard.get(repo_root) {
+        return Some(Arc::clone(hit));
+    }
+    let built = Arc::new(build()?);
+    guard.insert(repo_root.to_path_buf(), Arc::clone(&built));
+    Some(built)
+}
+
 /// Replace the memoized value for `repo_root`, under the same lock.
 ///
 /// The mtime index is the one map that is written during a run as well as

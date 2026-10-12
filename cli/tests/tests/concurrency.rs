@@ -5,14 +5,30 @@
 use std::fs;
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tracer_cli_tests::{
-    schema_directory, standard_repo, trace, trace_env, Fixture, PUBLISHED_SCHEMA_VERSION,
+    hold_index_lock, schema_directory, standard_repo, trace, trace_env, Fixture, PUBLISHED_SCHEMA_VERSION,
 };
+
+/// An answer never leaves a relation out: `callers` waits while another
+/// call builds the relations index and answers in full once it lands.
+#[test]
+fn an_answer_waits_for_the_index_another_call_builds() {
+    let f = standard_repo();
+    let building = hold_index_lock(&f.root, "relations_edges");
+    let root = f.root.clone();
+    let callers = thread::spawn(move || trace(&root, ["callers", "helper"]));
+    thread::sleep(Duration::from_millis(1500));
+    assert!(!callers.is_finished(), "callers answered without the index");
+    drop(building);
+    let run = callers.join().unwrap();
+    run.ok();
+    assert!(run.stdout.contains("src/app.py") && !run.stdout.contains("still building"), "{}", run.stdout);
+}
 
 fn mtime_index(fixture: &Fixture) -> String {
     fs::read_to_string(
-        schema_directory(&fixture.root, PUBLISHED_SCHEMA_VERSION).join("mtime_index_v2__ast.json"),
+        schema_directory(&fixture.root, PUBLISHED_SCHEMA_VERSION).join("mtime_index_v2.json"),
     )
     .expect("the mtime index exists after a call")
 }
@@ -29,28 +45,17 @@ fn concurrent_doc_deliveries_never_send_the_same_lines_twice() {
     fixture.write("Claude.md", &format!("# Rules\n{rules}"));
     fixture.write("x.py", "x = 1\n");
     fixture.commit("long doc");
-    let session = format!(
-        "concurrent-docs-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    );
+    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-docs")];
 
     let mut sent: Vec<usize> = Vec::new();
     for _ in 0..4 {
-        let calls: Vec<_> = (0..6)
-            .map(|_| {
-                let root = fixture.root.clone();
-                let session = session.clone();
-                thread::spawn(move || {
-                    trace_env(
-                        &root,
-                        ["docs", "x.py", "--budget", "2000"],
-                        &[("CLAUDE_CODE_SESSION_ID", session.as_str())],
-                    )
-                })
-            })
-            .collect();
-        for call in calls {
-            let run = call.join().unwrap();
+        let runs = thread::scope(|scope| {
+            let calls: Vec<_> = (0..6)
+                .map(|_| scope.spawn(|| fixture.trace_env(&["docs", "x.py", "--budget", "2000"], &env)))
+                .collect();
+            calls.into_iter().map(|call| call.join().unwrap()).collect::<Vec<_>>()
+        });
+        for run in runs {
             run.ok();
             sent.extend(
                 run.stdout
@@ -67,9 +72,48 @@ fn concurrent_doc_deliveries_never_send_the_same_lines_twice() {
     assert_eq!(unique, (1..=unique.len()).collect::<Vec<_>>(), "the doc arrives in order, with no gap");
 }
 
+/// The same for the docs a command sends after its answer, through
+/// `history`, which offers nothing else that would take the lock first.
+#[test]
+fn concurrent_commands_never_send_the_same_doc_lines_twice() {
+    let fixture = Fixture::new();
+    let rules: String = (1..=600)
+        .map(|n| format!("- Rule {n}: one line of a doc too long for one message.\n"))
+        .collect();
+    fixture.write("Claude.md", &format!("# Rules\n{rules}"));
+    fixture.write("x.py", "x = 1\n");
+    fixture.commit("long doc");
+    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-command-docs")];
+
+    let mut sent: Vec<usize> = Vec::new();
+    for _ in 0..4 {
+        let runs = thread::scope(|scope| {
+            let calls: Vec<_> = (0..6)
+                .map(|_| scope.spawn(|| fixture.trace_env(&["history", "x.py", "--budget", "2000"], &env)))
+                .collect();
+            calls.into_iter().map(|call| call.join().unwrap()).collect::<Vec<_>>()
+        });
+        for run in runs {
+            run.ok();
+            sent.extend(
+                run.stdout
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("- Rule "))
+                    .filter_map(|rest| rest.split(':').next()?.parse::<usize>().ok()),
+            );
+        }
+    }
+    let mut unique = sent.clone();
+    unique.sort();
+    unique.dedup();
+    assert!(!unique.is_empty(), "the doc is sent");
+    assert_eq!(sent.len(), unique.len(), "a rule was sent to two calls");
+    assert_eq!(unique, (1..=unique.len()).collect::<Vec<_>>(), "the doc arrives in order, with no gap");
+}
+
 /// Two processes that each learn a file at the same moment both land in the
-/// mtime index: the update merges onto what is on disk under the maintenance
-/// lock, so neither write erases the other's.
+/// mtime index: the update merges onto what is on disk under the mtime
+/// index's lock, so neither write erases the other's.
 #[test]
 fn two_concurrent_calls_both_land_in_the_mtime_index() {
     let f = standard_repo();
@@ -92,19 +136,25 @@ fn two_concurrent_calls_both_land_in_the_mtime_index() {
 }
 
 /// Two installed builds at different schemas update their own indexes side by
-/// side: an update holds only the lock in its own schema's directory, so a
-/// build of a neighbor schema, or one from before schema directories at any
-/// schema, holding its lock mid-update never stalls it.
+/// side: an update holds only the locks in its own schema's directory, so a
+/// build of a neighbor schema, or one from before per-index locks, holding
+/// its lock mid-update never stalls it.
 #[test]
 fn an_index_update_never_waits_on_another_schemas_lock() {
     let f = standard_repo();
     f.trace(&["cache", "build", "."]).ok();
     let file_namespace = f.root.join(".tracer-cache/file");
+    let below = schema_directory(&f.root, PUBLISHED_SCHEMA_VERSION - 1);
+    let above = schema_directory(&f.root, PUBLISHED_SCHEMA_VERSION + 1);
     let held: Vec<fs::File> = [
         file_namespace.join(".maintain.lock"),
         file_namespace.join(format!(".maintain__schema{PUBLISHED_SCHEMA_VERSION}.lock")),
-        schema_directory(&f.root, PUBLISHED_SCHEMA_VERSION - 1).join(".maintain.lock"),
-        schema_directory(&f.root, PUBLISHED_SCHEMA_VERSION + 1).join(".maintain.lock"),
+        below.join(".maintain.lock"),
+        above.join(".maintain.lock"),
+        below.join(".relations_edges.lock"),
+        above.join(".relations_edges.lock"),
+        below.join(".mtime_index.lock"),
+        above.join(".mtime_index.lock"),
     ]
     .iter()
     .map(|path| {
@@ -144,7 +194,7 @@ fn an_index_update_never_waits_on_another_schemas_lock() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(run.status.success(), "the call failed: {stderr}");
     assert!(
-        stderr.contains("timing lock maintain "),
+        stderr.contains("timing lock relations_edges "),
         "the call took no index lock, so it proved nothing about waiting:\n{stderr}"
     );
 }
@@ -212,39 +262,25 @@ fn eight_concurrent_history_searches_walk_the_commits_once() {
 #[test]
 fn concurrent_agents_share_one_parseable_directory_baseline() {
     let f = standard_repo();
-    let session_id = format!(
-        "directory-baseline-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    let handles: Vec<_> = (0..8)
-        .map(|agent| {
-            let root = f.root.clone();
-            let session_id = session_id.clone();
-            thread::spawn(move || {
-                let agent_id = format!("agent-{agent}");
-                trace_env(
-                    &root,
-                    ["context", "src/app.py"],
-                    &[
-                        ("AGENT_SESSION_ID", session_id.as_str()),
-                        ("TRACER_AGENT_ID", agent_id.as_str()),
-                    ],
-                )
+    let f = &f;
+    thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|agent| {
+                scope.spawn(move || {
+                    let agent_id = format!("agent-{agent}");
+                    f.trace_env(
+                        &["context", "src/app.py"],
+                        &[("AGENT_SESSION_ID", "directory-baseline"), ("TRACER_AGENT_ID", agent_id.as_str())],
+                    )
+                })
             })
-        })
-        .collect();
-    for handle in handles {
-        handle.join().unwrap().ok();
-    }
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().ok();
+        }
+    });
 
-    let path = f
-        .root
-        .join(".tracer-cache/sessions")
-        .join(&session_id)
-        .join("directories.json");
+    let path = f.session_dir("directory-baseline").join("directories.json");
     let text = fs::read_to_string(&path).expect("directories.json exists");
     let directories: serde_json::Value =
         serde_json::from_str(&text).expect("directories.json parses");
@@ -264,27 +300,13 @@ fn concurrent_agents_share_one_parseable_directory_baseline() {
 fn concurrent_calls_show_a_directory_listing_once() {
     let f = standard_repo();
     f.trace(&["cache", "build", "."]).ok();
-    let session_id = format!(
-        "listing-once-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    let handles: Vec<_> = (0..8)
-        .map(|_| {
-            let root = f.root.clone();
-            let session_id = session_id.clone();
-            thread::spawn(move || {
-                trace_env(
-                    &root,
-                    ["context", "src/app.py"],
-                    &[("AGENT_SESSION_ID", session_id.as_str())],
-                )
-            })
-        })
-        .collect();
-    let runs: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let env = [("AGENT_SESSION_ID", "listing-once")];
+    let runs: Vec<_> = thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| f.trace_env(&["context", "src/app.py"], &env)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
     for run in &runs {
         run.ok();
     }
@@ -339,34 +361,28 @@ fn one_agents_parallel_windowed_calls_never_wait_on_each_others_calls() {
     }
     f.commit("many callers");
     f.trace(&["cache", "build", "."]).ok();
-    let session_id = format!(
-        "parallel-windows-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-    );
+    let env = [("AGENT_SESSION_ID", "parallel-windows"), ("TRACE_TIMING", "1")];
 
-    let handles: Vec<_> = (0..6)
-        .map(|n| {
-            let root = f.root.clone();
-            let session_id = session_id.clone();
-            let file = format!("checkout{n}.php");
-            thread::spawn(move || {
-                trace_env(
-                    &root,
-                    ["context", file.as_str(), "--offset", "6", "--limit", "16", "--no-record"],
-                    &[("AGENT_SESSION_ID", session_id.as_str()), ("TRACE_TIMING", "1")],
-                )
+    let f = &f;
+    let runs: Vec<_> = thread::scope(|scope| {
+        let handles: Vec<_> = (0..6)
+            .map(|n| {
+                scope.spawn(move || {
+                    let file = format!("checkout{n}.php");
+                    f.trace_env(&["context", file.as_str(), "--offset", "6", "--limit", "16", "--no-record"], &env)
+                })
             })
-        })
-        .collect();
-    let runs: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
     for run in &runs {
         run.ok();
         assert!(run.stdout.contains("Ledger::record15"), "the window resolves its calls:\n{}", run.stdout);
-        assert!(run.stderr.contains("timing lock session shown "), "each new file takes the lock:\n{}", run.stderr);
+        assert!(run.stderr.contains("timing lock session "), "each new file takes the lock:\n{}", run.stderr);
     }
     let waits: Vec<(u128, u128)> = runs
         .iter()
-        .map(|run| (phase_micros(&run.stderr, "lock session shown"), phase_micros(&run.stderr, "render")))
+        .map(|run| (phase_micros(&run.stderr, "lock session"), phase_micros(&run.stderr, "render")))
         .collect();
     assert!(
         waits.iter().all(|(lock, render)| lock * 10 < *render),

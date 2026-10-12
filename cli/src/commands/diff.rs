@@ -4,7 +4,7 @@
 //! module-level exports against the base blob via the tree-sitter
 //! extractor. CCN is AST-derived.
 
-use super::session_log;
+use crate::session;
 use crate::summary::Facts;
 use crate::{cache, file_facts, relations, surface};
 use anyhow::Result;
@@ -13,20 +13,6 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// git diff --name-status codes → display labels. R100/C075 collapse to the
-/// letter only (handled by the caller taking `code[0]`).
-pub fn status_label(kind: char) -> String {
-    match kind {
-        'A' => "added".into(),
-        'M' => "modified".into(),
-        'D' => "deleted".into(),
-        'R' => "renamed".into(),
-        'C' => "copied".into(),
-        'T' => "type-changed".into(),
-        other => other.to_lowercase().to_string(),
-    }
-}
-
 #[derive(Clone)]
 struct Change {
     status: String,
@@ -34,8 +20,8 @@ struct Change {
     rename_from: Option<String>,
 }
 
-/// Verify the base ref resolves; hard-fail + exit 2 if it doesn't.
-fn verify_base_ref(repo_root: &Path, base: &str) {
+/// Verify the base ref resolves; a failure exits 2.
+fn verify_base_ref(repo_root: &Path, base: &str) -> Result<()> {
     let ok = crate::git_activity::git_output(
         repo_root,
         [
@@ -48,24 +34,24 @@ fn verify_base_ref(repo_root: &Path, base: &str) {
     .map(|o| o.status.success())
     .unwrap_or(false);
     if !ok {
-        eprintln!(
-            "Error: base ref '{base}' not found in this repository. \
-             Pass --base <ref> with a ref that exists \
-             (e.g. main, origin/main, a SHA)."
-        );
-        std::process::exit(2);
+        return Err(crate::process::fail(
+            2,
+            format!(
+                "Error: base ref '{base}' not found in this repository. \
+                 Pass --base <ref> with a ref that exists \
+                 (e.g. main, origin/main, a SHA)."
+            ),
+        ));
     }
+    Ok(())
 }
 
-/// Merge base of HEAD and `base`; exit 2 when histories are disjoint.
-fn merge_base(repo_root: &Path, base: &str) -> String {
+/// Merge base of HEAD and `base`; disjoint histories exit 2.
+fn merge_base(repo_root: &Path, base: &str) -> Result<String> {
     let out = crate::git_activity::git_output(repo_root, ["merge-base", base, "HEAD"]);
     match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => {
-            eprintln!("Error: no common ancestor between HEAD and '{base}'.");
-            std::process::exit(2);
-        }
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+        _ => Err(crate::process::fail(2, format!("Error: no common ancestor between HEAD and '{base}'."))),
     }
 }
 
@@ -123,7 +109,7 @@ fn untracked(repo_root: &Path, pathspecs: &[String]) -> Vec<Change> {
 }
 
 /// Changed files in `scope` via `git diff --name-status`.
-fn name_status(repo_root: &Path, scope: &Scope, pathspecs: &[String]) -> Vec<Change> {
+fn name_status(repo_root: &Path, scope: &Scope, pathspecs: &[String]) -> Result<Vec<Change>> {
     let mut args = vec![
         "diff".to_string(),
         "--name-status".to_string(),
@@ -136,16 +122,10 @@ fn name_status(repo_root: &Path, scope: &Scope, pathspecs: &[String]) -> Vec<Cha
     let stdout = match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         Ok(o) => {
-            eprintln!(
-                "Error: git diff failed: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            );
-            std::process::exit(2);
+            let reason = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            return Err(crate::process::fail(2, format!("Error: git diff failed: {reason}")));
         }
-        Err(error) => {
-            eprintln!("Error: git diff failed: {error}");
-            std::process::exit(2);
-        }
+        Err(error) => return Err(crate::process::fail(2, format!("Error: git diff failed: {error}"))),
     };
 
     let mut changes = Vec::new();
@@ -156,7 +136,7 @@ fn name_status(repo_root: &Path, scope: &Scope, pathspecs: &[String]) -> Vec<Cha
         let tokens: Vec<&str> = line.split('\t').collect();
         let raw_status = tokens[0];
         let kind = raw_status.chars().next().unwrap_or('?');
-        let label = status_label(kind);
+        let label = crate::git_activity::status_label(kind);
         if (kind == 'R' || kind == 'C') && tokens.len() >= 3 {
             changes.push(Change {
                 status: label,
@@ -171,7 +151,7 @@ fn name_status(repo_root: &Path, scope: &Scope, pathspecs: &[String]) -> Vec<Cha
             });
         }
     }
-    changes
+    Ok(changes)
 }
 
 /// Direct module-level dependents of `relative_path`, straight off the import
@@ -405,7 +385,7 @@ pub(crate) fn directory_context(index: &relations::Relations, repo_root: &Path, 
         entry.insert("files".into(), metrics.files.into());
         entry.insert("imported_by".into(), metrics.imported_by.into());
         entry.insert("imports".into(), metrics.imports.into());
-        if let Some(since) = session_log::at_session_start(repo_root, &key, &metrics) {
+        if let Some(since) = session::at_session_start(repo_root, &key, &metrics) {
             entry.insert("at_session_start".into(), Value::Object(since));
         }
         directories.insert(key, Value::Object(entry));
@@ -465,6 +445,7 @@ fn emit_file_mode(
     repo_root: &Path,
     scope: &Scope,
     changes: &[Change],
+    anchors: &[PathBuf],
     as_json: bool,
 ) -> Result<Value> {
     let index = relations::get(repo_root);
@@ -474,7 +455,7 @@ fn emit_file_mode(
     let ranges = changed_ranges(repo_root, scope, changes);
     let mut rows: Vec<Value> = Vec::with_capacity(changes.len());
     let mut files = serde_json::Map::new();
-    let mut headlines: HashMap<String, String> = HashMap::new();
+    let mut shown_facts: HashMap<String, Facts> = HashMap::new();
     for chunk in changes.chunks(file_facts::RESOLVE_CHUNK) {
         let paths: Vec<PathBuf> = chunk.iter().map(|c| repo_root.join(&c.path)).collect();
         let facts = file_facts::get_batch(&paths, repo_root);
@@ -502,8 +483,8 @@ fn emit_file_mode(
         {
             if let Some(facts) = facts.get(&change.path) {
                 let facts = Facts::of(facts, index.module_counts(&change.path).as_ref());
-                headlines.insert(change.path.clone(), facts.headline());
                 files.insert(change.path.clone(), Value::Object(facts.to_map()));
+                shown_facts.insert(change.path.clone(), facts);
             }
             rows.push(file_row(&index, change, lines, changed, removed, added, touches));
         }
@@ -555,12 +536,12 @@ fn emit_file_mode(
             format!("Diff base={name}  merge_base={mb_short}  files={}", files.len())
         }
     };
+    let mut delivery = crate::session::Delivery::default();
     if files.is_empty() {
-        println!("{title}\n(nothing differs)");
+        super::docs::print_with_docs(&format!("{title}\n(nothing differs)\n"), anchors, "trace_diff", delivery)?;
         return Ok(payload);
     }
     let head = format!("{title}\n\n{}", render_directory_context(&directories));
-    print!("{head}");
     // Each file whole, then without its hunks, then its line alone; the
     // budget cuts the files the fewest others import first.
     let inline = |declaration: &Value, path: &str| {
@@ -570,12 +551,17 @@ fn emit_file_mode(
             .unwrap_or_default()
     };
     let mut entries: Vec<crate::output::Entry> = Vec::with_capacity(files.len());
+    let mut offered: Vec<Option<String>> = Vec::with_capacity(files.len());
     for row in &files {
         let path = row["path"].as_str().unwrap_or("");
-        let mut header = match headlines.get(path) {
-            Some(headline) => format!("  {} {path}  {headline}", row["status"].as_str().unwrap_or("")),
+        let offer = shown_facts
+            .get(path)
+            .and_then(|facts| crate::summary::offer_headline(&mut delivery, &repo_root.join(path), facts).map(|key| (key, facts)));
+        let mut header = match &offer {
+            Some((_, facts)) => format!("  {} {path}  {}", row["status"].as_str().unwrap_or(""), facts.headline()),
             None => format!("  {} {path}", row["status"].as_str().unwrap_or("")),
         };
+        offered.push(offer.map(|(key, _)| key));
         if let Some(rf) = row["rename_from"].as_str() {
             header.push_str(&format!("\n      renamed from: {rf}"));
         }
@@ -617,13 +603,17 @@ fn emit_file_mode(
     }
     let changed: Vec<&str> = files.iter().map(|row| row["path"].as_str().unwrap_or("")).collect();
     let fixed = head.len() + crate::output::closing_room(entries.len(), "files");
-    let (texts, shortened) = crate::output::fit_listing(&entries, &changed, fixed);
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&entries, &changed, fixed);
+    // Every level keeps the header line and its headline.
+    crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 3);
+    let mut answer = head;
     for text in texts {
-        println!("{text}");
+        answer.push_str(&format!("{text}\n"));
     }
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, entries.len(), "files"));
+        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
     }
+    super::docs::print_with_docs(&answer, anchors, "trace_diff", delivery)?;
     Ok(payload)
 }
 
@@ -647,10 +637,7 @@ fn head_exports(repo_root: &Path, changes: &[Change]) -> HashMap<String, Exports
             let Some(e) = &f.extraction else { continue };
             out.insert(
                 change.path.clone(),
-                e.exports
-                    .iter()
-                    .map(|x| (x.name.clone(), x.kind.clone(), x.line))
-                    .collect(),
+                e.exports().map(|x| (x.name.clone(), x.kind.clone(), x.line)).collect(),
             );
         }
     }
@@ -666,11 +653,7 @@ fn base_exports(
         return vec![];
     };
     match crate::file_facts::extraction_of(&source, relative_path, repo_root) {
-        Some(e) => e
-            .exports
-            .iter()
-            .map(|x| (x.name.clone(), x.kind.clone(), x.line))
-            .collect(),
+        Some(e) => e.exports().map(|x| (x.name.clone(), x.kind.clone(), x.line)).collect(),
         None => vec![],
     }
 }
@@ -796,6 +779,7 @@ fn emit_symbol_mode(
     base: &str,
     merge_base: &str,
     changes: &[Change],
+    anchors: &[PathBuf],
     as_json: bool,
 ) -> Result<Value> {
     let index = relations::get(repo_root);
@@ -836,35 +820,28 @@ fn emit_symbol_mode(
         return Ok(payload);
     }
 
-    let symbols = rows.clone();
     let mb_short: String = merge_base.chars().take(12).collect();
-    println!(
-        "Diff base={base}  merge_base={mb_short}  symbols={}",
-        symbols.len()
-    );
-    if symbols.is_empty() {
-        println!("(no symbol-level changes detected in supported languages)");
-        return Ok(payload);
+    let mut answer = format!("Diff base={base}  merge_base={mb_short}  symbols={}\n", rows.len());
+    if rows.is_empty() {
+        answer.push_str("(no symbol-level changes detected in supported languages)\n");
+    } else {
+        answer.push_str(&format!("\n  {:<8} {:>6}  {:<10}  symbol @ source\n", "state", "direct", "kind"));
     }
-    println!();
-    println!(
-        "  {:<8} {:>6}  {:<10}  symbol @ source",
-        "state", "direct", "kind"
-    );
-    for row in &symbols {
+    for row in &rows {
         let location = match row["line"].as_i64() {
             Some(l) => format!("{}:{}", row["source_file"].as_str().unwrap_or(""), l),
             None => row["source_file"].as_str().unwrap_or("").to_string(),
         };
-        println!(
-            "  {:<8} {:>6}  {:<10}  {} @ {}",
+        answer.push_str(&format!(
+            "  {:<8} {:>6}  {:<10}  {} @ {}\n",
             row["state"].as_str().unwrap_or(""),
             row["direct_dependents"].as_i64().unwrap_or(0),
             row["kind"].as_str().unwrap_or(""),
             row["name"].as_str().unwrap_or(""),
             location,
-        );
+        ));
     }
+    super::docs::print_with_docs(&answer, anchors, "trace_diff", crate::session::Delivery::default())?;
     Ok(payload)
 }
 
@@ -878,8 +855,10 @@ pub fn run(
     let anchors: Vec<PathBuf> = paths.iter().map(|path| cache::absolutize(Path::new(path))).collect();
     let repo_root = root_of(anchors.first().map_or(Path::new("."), PathBuf::as_path));
     if anchors.iter().any(|anchor| root_of(anchor) != repo_root) {
-        eprintln!("Error: the paths belong to more than one repository. Run one diff per repository.");
-        std::process::exit(2);
+        return Err(crate::process::fail(
+            2,
+            "Error: the paths belong to more than one repository. Run one diff per repository.",
+        ));
     }
     let paths: Vec<String> = anchors
         .iter()
@@ -899,15 +878,15 @@ pub fn run(
                 .unwrap_or_else(|| "HEAD".to_string()),
         },
         Some(name) => {
-            verify_base_ref(&repo_root, name);
+            verify_base_ref(&repo_root, name)?;
             Scope::Base {
                 name: name.to_string(),
-                merge_base: merge_base(&repo_root, name),
+                merge_base: merge_base(&repo_root, name)?,
             }
         }
     };
 
-    let mut changes = name_status(&repo_root, &scope, paths);
+    let mut changes = name_status(&repo_root, &scope, paths)?;
     if matches!(scope, Scope::Worktree { .. }) {
         changes.extend(untracked(&repo_root, paths));
     }
@@ -919,8 +898,8 @@ pub fn run(
             // for the working tree that blob is HEAD's.
             Scope::Worktree { head } => head.clone(),
         };
-        emit_symbol_mode(&repo_root, scope.label(), &mb, &changes, as_json)
+        emit_symbol_mode(&repo_root, scope.label(), &mb, &changes, &anchors, as_json)
     } else {
-        emit_file_mode(&repo_root, &scope, &changes, as_json)
+        emit_file_mode(&repo_root, &scope, &changes, &anchors, as_json)
     }
 }

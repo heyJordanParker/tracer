@@ -895,6 +895,7 @@ dependencies = [
  "jaq-core",
  "jaq-json",
  "jaq-std",
+ "libc",
  "rayon",
  "regex",
  "rustix",

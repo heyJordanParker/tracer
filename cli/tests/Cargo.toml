@@ -19,7 +19,7 @@ hex = "0.4"
 [dev-dependencies]
 serde_json = "1"
 # The on-disk cache key is a published contract (tracer Claude.md + the
-# cache.rs module header): sha256("v{SCHEMA}|ccn:ast\0" + bytes + "\0" + rel).
+# cache.rs module header): sha256("v{SCHEMA}\0" + bytes + "\0" + rel).
 # The schema-version-invalidation test reconstructs that key from the
 # documented formula to prove an entry under a different schema version is
 # unreachable. This is testing against a documented contract, not linking

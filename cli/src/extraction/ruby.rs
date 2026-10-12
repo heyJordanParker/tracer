@@ -9,14 +9,14 @@
 //! named at the site). Ruby constructs via `Foo.new`, a member call on the
 //! constant, so construction is not a separate reference shape here.
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "ruby".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
@@ -35,28 +35,57 @@ pub fn extract(source: &[u8]) -> ExtractionResult {
     extract_from_tree(&tree, source)
 }
 
-/// Imports/exports/declarations/references from an already-parsed Ruby tree.
+/// Imports/declarations/references from an already-parsed Ruby tree.
 /// Caller guarantees `tree` came from the Ruby grammar.
 pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
     let root = tree.root_node();
     let imports = walk_imports(root, source);
-    let declarations = walk_declarations(root, source);
-    let exports = declarations
-        .iter()
-        .filter(|d| d.container.is_none())
-        .map(|d| Export {
-            name: d.name.clone(),
-            kind: d.kind.clone(),
-            line: d.line,
-        })
-        .collect();
+    let mut declarations = walk_declarations(root, source);
+    set_visibility(&mut declarations);
     let references = walk_references(root, source);
     ExtractionResult {
         language: "ruby".into(),
         imports,
-        exports,
         declarations,
         references,
+    }
+}
+
+/// A method after a bare `private` or `protected` in its class, or one a
+/// `private :name`, `protected :name`, or `private def` names, is reachable
+/// but not public: a subclass in another file calls it. A `private` line
+/// itself declares nothing, so it stays in its file. Everything else is
+/// public. `declarations` are in line order with their parents set.
+fn set_visibility(declarations: &mut [Declaration]) {
+    let mut named: HashSet<(Option<u32>, String)> = HashSet::new();
+    let mut inline: HashSet<i64> = HashSet::new();
+    for statement in declarations.iter().filter(|row| row.kind == "statement" && row.name != "public") {
+        for word in statement.header.split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')')).skip(1) {
+            match word.strip_prefix(':') {
+                Some(name) => {
+                    named.insert((statement.parent, name.to_string()));
+                }
+                None if word == "def" => {
+                    inline.insert(statement.line);
+                }
+                None => {}
+            }
+        }
+    }
+    let mut section: HashMap<Option<u32>, bool> = HashMap::new();
+    for row in declarations.iter_mut() {
+        if row.kind == "statement" && row.header.trim() == row.name {
+            section.insert(row.parent, row.name != "public");
+        }
+        let restricted = row.kind == "function"
+            && (section.get(&row.parent).copied().unwrap_or(false)
+                || inline.contains(&row.line)
+                || named.contains(&(row.parent, row.name.clone())));
+        row.visibility = match (row.kind.as_str(), restricted) {
+            ("statement", _) => Visibility::FileLocal,
+            (_, true) => Visibility::Restricted,
+            (_, false) => Visibility::Public,
+        };
     }
 }
 
@@ -83,7 +112,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                                 symbol: None,
                                 locals: Vec::new(),
                                 line: n.start_position().row as i64 + 1,
+                                end_line: n.end_position().row as i64 + 1,
                                 block: None,
+                                visibility: None,
                             });
                         }
                     }
@@ -101,9 +132,11 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
 /// Methods (container = enclosing class/module), classes, and modules.
 fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
     let mut out = Vec::new();
+    let mut ranges = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut stack: Vec<(Node, Option<String>)> = vec![(root, None)];
     while let Some((n, container)) = stack.pop() {
+        let declared = out.len();
         let kind: Option<&str> = match n.kind() {
             "method" => Some("function"),
             "singleton_method" => Some("function"),
@@ -138,9 +171,12 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                     },
                 )
             }
+            // A bare `private` in a class or module body opens a section.
             "identifier"
-                if n.parent().is_some_and(|parent| parent.kind() == "call")
-                    && matches!(
+                if n.parent().is_some_and(|body| {
+                    body.kind() == "body_statement"
+                        && body.parent().is_some_and(|holder| matches!(holder.kind(), "class" | "module" | "singleton_class"))
+                }) && matches!(
                         n.utf8_text(source).ok(),
                         Some("private" | "protected" | "public")
                     ) =>
@@ -191,76 +227,38 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                         header: {
                             let mut builder = crate::extraction::header::Builder::new(source);
                             let mut cursor = n.walk();
-                            if n.kind() == "method"
-                                && source[n.start_byte()..n.end_byte()].contains(&b'=')
-                            {
-                                let equals = source[n.start_byte()..n.end_byte()]
-                                    .iter()
-                                    .position(|byte| *byte == b'=')
-                                    .map(|offset| n.start_byte() + offset)
-                                    .unwrap_or(n.end_byte());
-                                builder.slice(n.start_byte(), equals + 1).expression(n);
-                            } else if let Some(body) = n.child_by_field_name("body").or_else(|| {
-                                n.named_children(&mut cursor)
-                                    .find(|child| child.kind() == "body_statement")
-                            }) {
-                                builder.slice(n.start_byte(), body.start_byte()).block(body);
-                            } else {
-                                builder.node(n);
-                            }
+                            let body = n.child_by_field_name("body").or_else(|| {
+                                n.named_children(&mut cursor).find(|child| child.kind() == "body_statement")
+                            });
+                            match body {
+                                // `def size = @data.size` has an expression
+                                // for its body.
+                                Some(body) if n.kind() == "method" && body.kind() != "body_statement" => {
+                                    builder.slice(n.start_byte(), body.start_byte()).expression(body)
+                                }
+                                Some(body) => builder.slice(n.start_byte(), body.start_byte()).block(body),
+                                None => builder.node(n),
+                            };
                             builder.finish()
                         },
                         annotations: Vec::new(),
                         self_type: None,
                         module_file: None,
                         supertypes: Vec::new(),
+                        visibility: Visibility::Unknown,
                     });
                 }
             }
+        }
+        if out.len() > declared {
+            ranges.push(n.start_byte()..n.end_byte());
         }
         let mut c = n.walk();
         for child in n.children(&mut c) {
             stack.push((child, child_container.clone()));
         }
     }
-    for (index, line) in String::from_utf8_lossy(source).lines().enumerate() {
-        let visibility = line.trim();
-        if matches!(visibility, "private" | "protected" | "public") {
-            let line = index as i64 + 1;
-            if seen.insert((visibility.to_string(), line)) {
-                out.push(Declaration {
-                    name: visibility.to_string(),
-                    kind: "statement".into(),
-                    header_line: line,
-                    line,
-                    end_line: line,
-                    container: None,
-                    parent: None,
-                    header: visibility.to_string(),
-                    annotations: Vec::new(),
-                    self_type: None,
-                    module_file: None,
-                    supertypes: Vec::new(),
-                });
-            }
-        }
-    }
-    out.sort_by_key(|d| d.line);
-    for index in 0..out.len() {
-        if let Some((parent, _)) = out[..index]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, candidate)| {
-                matches!(candidate.kind.as_str(), "class" | "interface")
-                    && candidate.line < out[index].line
-                    && candidate.end_line >= out[index].line
-            })
-        {
-            out[index].parent = Some(parent as u32);
-        }
-    }
-    out
+    crate::extraction::nest(out, ranges, |candidate| matches!(candidate.kind.as_str(), "class" | "interface"))
 }
 
 /// The constant name of a `class` / `module` node — its `name` field, last

@@ -104,6 +104,8 @@ impl Matchers {
 /// A match, its facts, and the commit date `--sort recent` orders by.
 struct E {
     path: String,
+    /// The absolute path, which a session's record keys the facts by.
+    full: PathBuf,
     kind: &'static str,
     facts: Option<Facts>,
     last_modified: Option<String>,
@@ -122,7 +124,7 @@ fn matches_under(base_abs: &Path, matchers: &Matchers, include_dirs: bool, entri
     let root_resolved = repo_root
         .canonicalize()
         .unwrap_or_else(|_| repo_root.clone());
-    let index = (!include_dirs).then(|| crate::relations::get(&repo_root));
+    let index = (!include_dirs).then(|| crate::relations::ready(&repo_root)).flatten();
     for chunk in matched.chunks(file_facts::RESOLVE_CHUNK) {
         let facts = if include_dirs {
             std::collections::HashMap::new()
@@ -139,6 +141,7 @@ fn matches_under(base_abs: &Path, matchers: &Matchers, include_dirs: bool, entri
             if include_dirs {
                 entries.push(E {
                     path: relative,
+                    full: path.clone(),
                     kind: "directory",
                     facts: None,
                     last_modified: None,
@@ -149,6 +152,7 @@ fn matches_under(base_abs: &Path, matchers: &Matchers, include_dirs: bool, entri
             let fact = facts.get(&fkey);
             entries.push(E {
                 path: relative,
+                full: path.clone(),
                 kind: "file",
                 facts: fact.map(|f| {
                     let graph = index.as_ref().and_then(|index| index.module_counts(&fkey));
@@ -274,32 +278,107 @@ pub fn run(
     } else {
         format!("{} matches under {under}:", total)
     };
-    println!("{header}");
     let more = truncated.then(|| format!("... {} more (see all: --limit {total})", total - entries.len()));
     // Every row stays; the budget cuts the files the fewest others import
-    // back to their path first.
+    // back to their path first. A file's facts print once per agent context,
+    // and the value it is sorted by is the answer, so it always prints.
+    let mut delivery = crate::session::Delivery::default();
+    let mut offered: Vec<Option<String>> = Vec::with_capacity(entries.len());
     let rows: Vec<crate::output::Entry> = entries
         .iter()
-        .map(|e| match (&e.facts, e.kind == "directory") {
-            (_, true) => crate::output::Entry { rank: i64::MAX, levels: vec![format!("  📁 {}/", e.path)] },
-            (Some(facts), false) => crate::output::Entry {
-                rank: facts.imported_by.unwrap_or(0) as i64,
-                levels: vec![format!("  {}  {}", e.path, facts.headline()), format!("  {}", e.path)],
-            },
-            (None, false) => crate::output::Entry { rank: 0, levels: vec![format!("  {}", e.path)] },
+        .map(|e| {
+            let offer = e.facts.as_ref().and_then(|facts| crate::summary::offer_headline(&mut delivery, &e.full, facts));
+            let sorted = e.facts.as_ref().and_then(|facts| sorted_by(&sort, facts));
+            let bare = match sorted {
+                Some(value) => format!("  {}  {value}", e.path),
+                None => format!("  {}", e.path),
+            };
+            let entry = match (&e.facts, e.kind == "directory", &offer) {
+                (_, true, _) => crate::output::Entry { rank: i64::MAX, levels: vec![format!("  📁 {}/", e.path)] },
+                (Some(facts), false, Some(_)) => crate::output::Entry {
+                    rank: facts.imported_by.unwrap_or(0) as i64,
+                    levels: vec![format!("  {}  {}", e.path, facts.headline()), bare],
+                },
+                (facts, false, _) => crate::output::Entry {
+                    rank: facts.as_ref().and_then(|facts| facts.imported_by).unwrap_or(0) as i64,
+                    levels: vec![bare],
+                },
+            };
+            offered.push(offer);
+            entry
         })
         .collect();
     let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
     let fixed = header.len() + 1 + more.as_ref().map_or(0, |line| line.len() + 1) + crate::output::closing_room(rows.len(), "files");
-    let (texts, shortened) = crate::output::fit_listing(&rows, &paths, fixed);
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
+    let mut answer = format!("{header}\n");
     for text in texts {
-        println!("{text}");
+        answer.push_str(&format!("{text}\n"));
     }
     if let Some(line) = more {
-        println!("{line}");
+        answer.push_str(&format!("{line}\n"));
     }
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, rows.len(), "files"));
+        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
     }
+    super::docs::print_with_docs(&answer, &searched, "trace_find", delivery)?;
     Ok(value)
+}
+
+/// The context `trace hook` adds to a native Glob, which printed its own
+/// paths: each file's headline facts, offered as its `Facts`. A file the
+/// agent was shown as it is prints nothing.
+pub fn native_context(files: &[PathBuf], delivery: &mut crate::session::Delivery) -> String {
+    let mut by_root: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> = std::collections::BTreeMap::new();
+    for file in files.iter().filter_map(|file| file.canonicalize().ok()).filter(|file| file.is_file()) {
+        if let Some(root) = cache::worktree_root_for(&file) {
+            by_root.entry(root).or_default().push(file);
+        }
+    }
+    let mut rows = Vec::new();
+    let mut offered = Vec::new();
+    let mut paths = Vec::new();
+    for (root, group) in &by_root {
+        let facts = file_facts::get_batch(group, root);
+        let index = crate::relations::ready(root);
+        for path in group {
+            let relative = cache::relative_to_root(path, root);
+            let graph = index.as_ref().and_then(|index| index.module_counts(&relative));
+            let Some(shown) = facts.get(&relative).map(|f| Facts::of(f, graph.as_ref())) else {
+                continue;
+            };
+            let Some(key) = crate::summary::offer_headline(delivery, path, &shown) else {
+                continue;
+            };
+            rows.push(crate::output::Entry {
+                rank: shown.imported_by.unwrap_or(0) as i64,
+                levels: vec![format!("{relative}  {}", shown.headline()), relative.clone()],
+            });
+            offered.push(Some(key));
+            paths.push(relative);
+        }
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let fixed = crate::output::closing_room(rows.len(), "files");
+    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    crate::summary::withdraw_cut(delivery, &offered, &levels, 1);
+    let mut out: String = texts.iter().map(|text| format!("{text}\n")).collect();
+    if shortened > 0 {
+        out.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
+    }
+    out
+}
+
+/// The fact `find --sort` orders by, as the flow mapping a row shows.
+fn sorted_by(sort: &str, facts: &Facts) -> Option<String> {
+    let (key, value) = match sort {
+        "complexity" => ("cyclomatic_complexity", Value::from(facts.cyclomatic_complexity)),
+        "recent" => ("last_commit", Value::from(facts.git.last_commit.clone()?)),
+        _ => return None,
+    };
+    Some(crate::yamlfmt::flow(&json!({ key: value }), false))
 }

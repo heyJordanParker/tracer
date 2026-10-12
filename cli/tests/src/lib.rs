@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,13 +26,31 @@ pub fn trace_bin() -> String {
     std::env::var("TRACE_BIN").unwrap_or_else(|_| "trace".to_string())
 }
 
+/// A stdout no one reads: the write end of a pipe whose read end is already
+/// closed, so the child's first write fails with a broken pipe every time.
+pub fn closed_stdout() -> Stdio {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    Stdio::from(writer)
+}
+
 /// SCHEMA_VERSION as published in the tracer Claude.md and `cache.rs`.
-pub const PUBLISHED_SCHEMA_VERSION: u32 = 49;
+pub const PUBLISHED_SCHEMA_VERSION: u32 = 53;
 
 /// The directory under `.tracer-cache/file/` holding every entry `schema`
 /// writes in the worktree at `root`.
 pub fn schema_directory(root: &Path, schema: u32) -> PathBuf {
     root.join(format!(".tracer-cache/file/schema{schema}"))
+}
+
+/// Holds the current schema's lock on the index `family` in the worktree at
+/// `root` until dropped, the way another call building that index holds it.
+pub fn hold_index_lock(root: &Path, family: &str) -> fs::File {
+    let path = schema_directory(root, PUBLISHED_SCHEMA_VERSION).join(format!(".{family}.lock"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let lock = fs::File::options().create(true).truncate(false).write(true).open(path).unwrap();
+    lock.lock().unwrap();
+    lock
 }
 
 /// Outcome of one CLI invocation.
@@ -72,6 +90,14 @@ impl Run {
     }
 
     /// Assert stdout parses as JSON; return the value.
+    /// A hook answer's extra context, empty when it has none.
+    pub fn context(&self) -> String {
+        if self.stdout.trim().is_empty() {
+            return String::new();
+        }
+        self.json()["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or_default().to_string()
+    }
+
     pub fn json(&self) -> serde_json::Value {
         serde_json::from_str(&self.stdout).unwrap_or_else(|e| {
             panic!(
@@ -150,6 +176,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    trace_with_input(cwd, args, env, None)
+}
+
+/// [`trace_env`] with `input` written to the binary's stdin.
+pub fn trace_with_input<I, S>(cwd: &Path, args: I, env: &[(&str, &str)], input: Option<&str>) -> Run
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let mut cmd = Command::new(trace_bin());
     cmd.current_dir(cwd);
     for a in args {
@@ -162,6 +197,8 @@ where
         "CODEX_THREAD_ID",
         "CLAUDE_CODE_SESSION_ID",
         "TRACER_AGENT_ID",
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
     ] {
         cmd.env_remove(key);
     }
@@ -173,9 +210,14 @@ where
         cmd.env("HOME", cwd);
     }
     let start = Instant::now();
-    let out = cmd
-        .output()
-        .unwrap_or_else(|e| panic!("failed to spawn `{}`: {e}", trace_bin()));
+    let out = match input {
+        None => cmd.output(),
+        Some(input) => cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().and_then(|mut child| {
+            std::io::Write::write_all(&mut child.stdin.take().expect("stdin is piped"), input.as_bytes())?;
+            child.wait_with_output()
+        }),
+    }
+    .unwrap_or_else(|e| panic!("failed to spawn `{}`: {e}", trace_bin()));
     let elapsed = start.elapsed();
     Run {
         code: out.status.code().unwrap_or(-1),
@@ -197,6 +239,10 @@ static fixture_seq: AtomicU64 = AtomicU64::new(0);
 /// also what keeps the suite independent of any commit-gating shell hooks.
 pub struct Fixture {
     pub root: PathBuf,
+    /// The `TMPDIR` every `trace` run from this fixture sees, beside the
+    /// repository rather than in it, so each fixture's session records start
+    /// empty and stay out of the worktree.
+    pub tmp: PathBuf,
 }
 
 impl Fixture {
@@ -208,8 +254,10 @@ impl Fixture {
             .as_nanos();
         let seq = fixture_seq.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!("trace-fixture-{}-{}", nanos, seq));
+        let tmp = std::env::temp_dir().join(format!("trace-fixture-{}-{}-tmp", nanos, seq));
         fs::create_dir_all(&root).unwrap();
-        let f = Fixture { root };
+        fs::create_dir_all(&tmp).unwrap();
+        let f = Fixture { root, tmp };
         f.git(&["init", "--quiet"]);
         f.git(&["config", "user.email", "test@example.com"]);
         f.git(&["config", "user.name", "Tracer Test"]);
@@ -288,18 +336,57 @@ impl Fixture {
 
     /// Run `trace` with the fixture root as the working directory.
     pub fn trace(&self, args: &[&str]) -> Run {
-        trace(&self.root, args)
+        self.trace_env(args, &[])
     }
 
-    /// Run `trace` with extra env (backend toggle).
+    /// Run `trace` with extra env, and the fixture's own `TMPDIR` unless the
+    /// env names one.
     pub fn trace_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
-        trace_env(&self.root, args, env)
+        self.trace_in(&self.root, args, env)
+    }
+
+    /// Run `trace` from `cwd` with extra env and the fixture's `TMPDIR`.
+    pub fn trace_in<I, S>(&self, cwd: &Path, args: I, env: &[(&str, &str)]) -> Run
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let tmp = self.tmp.to_string_lossy();
+        let mut env = env.to_vec();
+        if !env.iter().any(|(k, _)| *k == "TMPDIR") {
+            env.push(("TMPDIR", &tmp));
+        }
+        trace_env(cwd, args, &env)
+    }
+
+    /// The folder holding `session`'s records.
+    pub fn session_dir(&self, session: &str) -> PathBuf {
+        let uid = String::from_utf8(Command::new("id").arg("-u").output().unwrap().stdout).unwrap();
+        self.tmp.join(format!("tracer-{}", uid.trim())).join("sessions").join(session)
+    }
+
+    /// `trace hook <event> --harness <harness> <flags>` from the fixture
+    /// root, `input` on stdin, with the fixture's `TMPDIR`.
+    pub fn hook(&self, event: &str, harness: &str, input: &serde_json::Value, flags: &[&str], env: &[(&str, &str)]) -> Run {
+        let tmp = self.tmp.to_string_lossy();
+        let mut env = env.to_vec();
+        env.push(("TMPDIR", &tmp));
+        let mut args = vec!["hook", event, "--harness", harness, "--deadline-ms", "20000"];
+        args.extend(flags);
+        trace_with_input(&self.root, args, &env, Some(&input.to_string()))
+    }
+
+    /// `agent`'s record in `session`, `None` while nothing was recorded.
+    pub fn record(&self, session: &str, agent: &str) -> Option<serde_json::Value> {
+        let bytes = fs::read(self.session_dir(session).join(agent).join("record.json")).ok()?;
+        Some(serde_json::from_slice(&bytes).expect("record.json is JSON"))
     }
 }
 
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.tmp);
     }
 }
 

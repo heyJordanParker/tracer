@@ -8,7 +8,7 @@
 //! Cost is the answer: `callers Model` on laravel-framework reaches 82 files
 //! out of 3,198, and reads only those.
 
-use crate::commands::enrich;
+use crate::sections;
 use crate::{cache, file_facts, relations, surface};
 use anyhow::Result;
 use serde::Serialize;
@@ -149,7 +149,8 @@ impl Edge<'_> {
 pub fn run(symbol: &str, limit: usize, as_json: bool) -> Result<Value> {
     let here = Path::new(".");
     let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
-    let candidates = relations::candidates(&[symbol], &repo_root);
+    let index = relations::get(&repo_root);
+    let candidates = relations::candidates(&index, &[symbol]);
     let declarations: Vec<&relations::Candidate> =
         candidates.iter().flat_map(relations::Candidates::declarations).collect();
     let modules = if declarations.is_empty() {
@@ -159,24 +160,21 @@ pub fn run(symbol: &str, limit: usize, as_json: bool) -> Result<Value> {
     };
 
     if declarations.is_empty() && modules.is_empty() {
-        eprintln!("{}", crate::output::not_declared(symbol, &repo_root));
-        std::process::exit(2);
+        return Err(crate::process::fail(2, crate::output::not_declared(symbol, &repo_root)));
     }
     if !declarations.is_empty()
         && declarations
             .iter()
             .all(|declaration| declaration.declaration.kind == "property")
     {
-        eprintln!("a property has readers, not callers; tracer does not extract reads");
-        std::process::exit(2);
+        return Err(crate::process::fail(2, "a property has readers, not callers; tracer does not extract reads"));
     }
 
     let sites = if declarations.is_empty() {
         Vec::new()
     } else {
-        crate::timing::phase("use_sites", || relations::use_sites(&candidates, None, &repo_root)).concat()
+        crate::timing::phase("use_sites", || relations::use_sites(&index, &candidates, None)).concat()
     };
-    let index = relations::get(&repo_root);
     let declared: HashMap<(&str, &str, i64), usize> = declarations
         .iter()
         .enumerate()
@@ -211,7 +209,7 @@ pub fn run(symbol: &str, limit: usize, as_json: bool) -> Result<Value> {
     row_files.dedup();
     let fact_paths: Vec<PathBuf> = row_files.iter().map(|file| repo_root.join(file)).collect();
     let facts = file_facts::get_batch(&fact_paths, &repo_root);
-    let file_facts_by_path = enrich::facts_of(&facts, &repo_root);
+    let file_facts_by_path = sections::facts_of(&facts, &repo_root);
     let rows: HashMap<&str, Vec<surface::Row>> = edges
         .iter()
         .filter_map(|(_, edge)| match edge {
@@ -255,15 +253,15 @@ pub fn run(symbol: &str, limit: usize, as_json: bool) -> Result<Value> {
     }));
 
     if !as_json {
-        let sections: Vec<enrich::Section> = symbols.iter().map(section).collect();
-        enrich::render_sections(&sections, &file_facts_by_path, "call site", "call sites");
+        let sections: Vec<sections::Section> = symbols.iter().map(section).collect();
+        sections::render_sections(&sections, &file_facts_by_path, &repo_root, "call site", "call sites");
         if truncated {
             println!("\n... {} more (see all: --limit {total})", total - edges.len());
         }
     }
     Ok(crate::output::document(
         json!({"symbol": symbol, "limit": limit}),
-        json!({"files": enrich::facts_context(&file_facts_by_path)}),
+        json!({"files": sections::facts_context(&file_facts_by_path)}),
         Value::Array(symbols.iter().map(Symbol::to_value).collect()),
         json!({
             "symbols": symbols.len(),
@@ -274,7 +272,7 @@ pub fn run(symbol: &str, limit: usize, as_json: bool) -> Result<Value> {
     ))
 }
 
-fn section(symbol: &Symbol) -> enrich::Section {
+fn section(symbol: &Symbol) -> sections::Section {
     let mut heading = format!("\n{} [{}] @ {}:{}", symbol.label, symbol.kind, symbol.source_file, symbol.source_line);
     if symbol.callers.is_empty() {
         heading.push_str("\n  (no callers found)");
@@ -310,7 +308,7 @@ fn section(symbol: &Symbol) -> enrich::Section {
             _ => rows.push((text, vec![line])),
         }
     }
-    enrich::Section {
+    sections::Section {
         heading,
         files: files
             .into_iter()

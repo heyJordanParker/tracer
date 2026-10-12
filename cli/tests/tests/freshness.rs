@@ -237,7 +237,7 @@ fn module_callers(run: &Run) -> Vec<String> {
 fn file_fact_entry(fixture: &Fixture, relative_path: &str) -> std::path::PathBuf {
     let directory = schema_directory(&fixture.root, PUBLISHED_SCHEMA_VERSION);
     let document: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(directory.join("mtime_index_v2__ast.json")).expect("mtime index is readable"),
+        &std::fs::read(directory.join("mtime_index_v2.json")).expect("mtime index is readable"),
     )
     .expect("mtime index is JSON");
     let key = document[relative_path]["key"]
@@ -382,9 +382,9 @@ fn a_relations_update_rewrites_both_entries() {
 }
 
 /// A binary from before schema directories left its index loose in `file/`,
-/// where this one never reads. The sweep runs when an index update takes
-/// the maintenance lock, and removes the loose entries once none of them was
-/// written for the idle bound, here a year.
+/// where this one never reads. The sweep runs when the tracked-files listing
+/// updates, and removes the loose entries once none of them was written for
+/// the idle bound, here a year.
 #[test]
 fn a_legacy_relations_entry_is_swept_without_being_read() {
     let f = standard_repo();

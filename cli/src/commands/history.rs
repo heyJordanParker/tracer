@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use regex::bytes::{Regex, RegexBuilder};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::Path;
 
 const RECENT_COMMITS: i64 = 10;
@@ -153,13 +154,15 @@ fn whole_file_payload(file: &Path, repo_root: &Path) -> Value {
     })
 }
 
-fn render_whole_file(p: &Value) {
-    println!("File: {}", p["file"].as_str().unwrap_or(""));
+fn render_whole_file(p: &Value) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "File: {}", p["file"].as_str().unwrap_or(""));
     let state = p["working_state"].as_str();
     let state_part = state
         .map(|s| format!(", working_state={s}"))
         .unwrap_or_default();
-    println!(
+    let _ = writeln!(
+        out,
         "Commits: {} total, {} in last 30 days{}",
         p["commit_count"].as_i64().unwrap_or(0),
         p["commits_30d"].as_i64().unwrap_or(0),
@@ -168,7 +171,8 @@ fn render_whole_file(p: &Value) {
     let first = p["first_seen"].as_str();
     let last = p["last_modified"].as_str();
     if first.is_some() || last.is_some() {
-        println!(
+        let _ = writeln!(
+            out,
             "First seen: {}  Last modified: {} ({})",
             first.unwrap_or(""),
             last.unwrap_or(""),
@@ -176,38 +180,39 @@ fn render_whole_file(p: &Value) {
         );
     }
     if let Some(s) = p["last_subject"].as_str() {
-        println!("Last subject: {s}");
+        let _ = writeln!(out, "Last subject: {s}");
     }
     if let Some(s) = p["top_author"].as_str() {
-        println!("Top author (by commits): {s}");
+        let _ = writeln!(out, "Top author (by commits): {s}");
     }
     let present: Vec<&str> = p["present_in"]
         .as_array()
         .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
         .unwrap_or_default();
     if !present.is_empty() {
-        println!("Present on: {}", present.join(", "));
+        let _ = writeln!(out, "Present on: {}", present.join(", "));
     }
-    println!();
+    out.push('\n');
 
     let chain: Vec<&str> = p["rename_chain"]
         .as_array()
         .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
         .unwrap_or_default();
     if !chain.is_empty() {
-        println!("Rename chain (newest -> oldest):");
-        println!("  {}", p["file"].as_str().unwrap_or(""));
+        out.push_str("Rename chain (newest -> oldest):\n");
+        let _ = writeln!(out, "  {}", p["file"].as_str().unwrap_or(""));
         for old in &chain {
-            println!("  <- {old}");
+            let _ = writeln!(out, "  <- {old}");
         }
-        println!();
+        out.push('\n');
     }
 
     if let Some(commits) = p["recent_commits"].as_array() {
         if !commits.is_empty() {
-            println!("Recent commits:");
+            out.push_str("Recent commits:\n");
             for c in commits {
-                println!(
+                let _ = writeln!(
+                    out,
                     "  {} {} {}: {}",
                     c["sha"].as_str().unwrap_or(""),
                     c["date"].as_str().unwrap_or(""),
@@ -215,29 +220,31 @@ fn render_whole_file(p: &Value) {
                     c["subject"].as_str().unwrap_or("")
                 );
             }
-            println!();
+            out.push('\n');
         }
     }
 
     if let Some(authors) = p["top_blame_authors"].as_array() {
         if !authors.is_empty() {
-            println!("Top blame authors (lines in current file):");
+            out.push_str("Top blame authors (lines in current file):\n");
             for e in authors {
-                println!(
+                let _ = writeln!(
+                    out,
                     "  {:>5}  {}",
                     e["lines"].as_i64().unwrap_or(0),
                     e["author"].as_str().unwrap_or("")
                 );
             }
-            println!();
+            out.push('\n');
         }
     }
 
     if let Some(co) = p["co_changed"].as_array() {
         if !co.is_empty() {
-            println!("Files that change together:");
+            out.push_str("Files that change together:\n");
             for e in co {
-                println!(
+                let _ = writeln!(
+                    out,
                     "  {:>4}  {}",
                     e["commits"].as_i64().unwrap_or(0),
                     e["path"].as_str().unwrap_or("")
@@ -245,6 +252,7 @@ fn render_whole_file(p: &Value) {
             }
         }
     }
+    out
 }
 
 // ---------- mode 2: function-level ----------
@@ -306,15 +314,14 @@ fn function_history(repo_root: &Path, relative: &str, symbol: &str, n: i64) -> R
     Ok(commits)
 }
 
-fn render_function(p: &Value) {
+fn render_function(p: &Value) -> String {
     let commits = p["commits"].as_array().cloned().unwrap_or_default();
-    let head = format!(
+    let mut out = format!(
         "File: {}\nSymbol: {}\nCommits touching symbol: {}\n\n",
         p["file"].as_str().unwrap_or(""),
         p["symbol"].as_str().unwrap_or(""),
         commits.len()
     );
-    print!("{head}");
     let mut entries: Vec<crate::output::Entry> = Vec::with_capacity(commits.len());
     for (index, c) in commits.iter().enumerate() {
         let header = format!(
@@ -330,13 +337,14 @@ fn render_function(p: &Value) {
         }
         entries.push(crate::output::Entry { rank: -(index as i64), levels: vec![format!("{whole}\n"), header] });
     }
-    let (chosen, shortened) = crate::output::fit(&entries, head.len() + crate::output::closing_room(entries.len(), "commits"));
+    let (chosen, shortened) = crate::output::fit(&entries, out.len() + crate::output::closing_room(entries.len(), "commits"));
     for (_, text) in chosen {
-        println!("{text}");
+        let _ = writeln!(out, "{text}");
     }
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, entries.len(), "commits"));
+        let _ = writeln!(out, "{}", crate::output::shortened_line(shortened, entries.len(), "commits"));
     }
+    out
 }
 
 // ---------- mode 3: pickaxe ----------
@@ -604,7 +612,7 @@ fn row(change: &str, path: &str, lines: &[i64], bytes: Option<&[u8]>, repo_root:
     let symbol = bytes.zip(line).and_then(|(bytes, line)| {
         let extraction = crate::file_facts::extraction_of(bytes, path, repo_root)?;
         let declarations = &extraction.declarations;
-        crate::surface::innermost(declarations.iter().map(|d| (d.header_line, d.end_line)), line)
+        crate::extraction::innermost(declarations.iter().map(|d| (d.header_line, d.end_line)), line)
             .map(|index| declarations[index].name.clone())
     });
     json!({
@@ -828,7 +836,7 @@ fn commit_payload(reference: &str, repo_root: &Path) -> Result<Value> {
             let tokens: Vec<&str> = l.split('\t').collect();
             let kind = tokens.first()?.chars().next()?;
             let path = tokens.last()?.to_string();
-            Some(json!({"status": status_label(kind), "path": path}))
+            Some(json!({"status": crate::git_activity::status_label(kind), "path": path}))
         })
         .collect();
 
@@ -857,12 +865,6 @@ fn commit_payload(reference: &str, repo_root: &Path) -> Result<Value> {
         "files": changed,
         "lines": lines,
     }))
-}
-
-/// `git diff --name-status` codes → the words `diff` already uses, so one
-/// vocabulary describes a change wherever it is reported.
-fn status_label(kind: char) -> String {
-    crate::commands::diff::status_label(kind)
 }
 
 /// Each file of the patch under the path its `diff --git` line names last.
@@ -920,7 +922,7 @@ fn render_commit(p: &Value) {
         })
         .collect();
     let fixed = head.len() + crate::output::closing_room(entries.len(), "files");
-    let (texts, shortened) = crate::output::fit_listing(&entries, &paths, fixed);
+    let crate::output::Fitted { texts, shortened, .. } = crate::output::fit_listing(&entries, &paths, fixed);
     for text in texts {
         println!("{text}");
     }
@@ -1014,7 +1016,7 @@ pub fn run(
             "commits": function_history(&repo_root, &relative, sym, FUNCTION_COMMITS)?,
         });
         if !as_json {
-            render_function(&payload);
+            print_with_docs(render_function(&payload), &file_path)?;
         }
         return Ok(crate::output::document(
             json!({"mode": "function", "file": relative, "symbol": sym}),
@@ -1026,7 +1028,7 @@ pub fn run(
 
     let payload = whole_file_payload(&file_path, &repo_root);
     if !as_json {
-        render_whole_file(&payload);
+        print_with_docs(render_whole_file(&payload), &file_path)?;
     }
     let mut lifecycle = payload.clone();
     if let Some(map) = lifecycle.as_object_mut() {
@@ -1041,4 +1043,9 @@ pub fn run(
         payload["recent_commits"].clone(),
         json!({"commits": payload["commit_count"], "commits_30d": payload["commits_30d"]}),
     ))
+}
+
+/// Prints a file's history, then the docs the file reaches.
+fn print_with_docs(answer: String, file: &Path) -> Result<()> {
+    super::docs::print_with_docs(&answer, &[file.to_path_buf()], "trace_history", crate::session::Delivery::default())
 }

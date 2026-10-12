@@ -416,16 +416,22 @@ fn dash_c_answers_for_the_repository_it_names() {
 }
 
 #[test]
-fn dash_c_keeps_the_session_record_in_the_sessions_own_repository() {
+fn a_session_keeps_one_record_across_the_repositories_it_reads() {
     let (target, home) = two_repositories();
-    let sid = format!("dash-c-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+    let env = [("CLAUDE_CODE_SESSION_ID", "dash-c")];
 
     let dir = target.root.to_string_lossy().into_owned();
-    home.trace_env(&["-C", &dir, "read", "use.py"], &[("CLAUDE_CODE_SESSION_ID", sid.as_str())])
-        .ok();
+    home.trace_env(&["-C", &dir, "read", "use.py"], &env).ok();
+    home.trace_env(&["read", "own.py"], &env).ok();
 
-    assert!(home.root.join(".tracer-cache/sessions").join(&sid).join("root").is_dir());
-    assert!(!target.root.join(".tracer-cache/sessions").join(&sid).exists());
+    let record = home.record("dash-c", "root").expect("the session record");
+    let files: Vec<&String> = record["files"].as_object().unwrap().keys().collect();
+    let target_file = target.root.canonicalize().unwrap().join("use.py");
+    let home_file = home.root.canonicalize().unwrap().join("own.py");
+    assert!(files.contains(&&target_file.to_string_lossy().into_owned()), "{record}");
+    assert!(files.contains(&&home_file.to_string_lossy().into_owned()), "{record}");
+    assert!(!home.root.join(".tracer-cache/sessions").exists());
+    assert!(!target.root.join(".tracer-cache/sessions").exists());
 }
 
 #[test]

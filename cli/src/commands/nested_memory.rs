@@ -6,9 +6,7 @@
 //! path, visited-dir tracking in rules recursion, nested traversal bounded
 //! to file dir..repo_root, external @include blocked, 40k-char large warning.
 //!
-//! Session-scoped dedupe across invocations lives in `session_log`;
-//! `session_id()` is exposed here as the single resolution point both
-//! modules share.
+//! Session-scoped dedupe across invocations lives in `crate::session`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -159,8 +157,7 @@ pub fn load_for_file(
     // mode — a file touch — only conditional rules load, matched against the
     // touched file; each file's unconditional rules already surfaced at session
     // start (session dedupe keeps them from surfacing twice).
-    if let Some(home) = home_dir() {
-        let user_rules = home.join(".claude").join("rules");
+    if let Some(user_rules) = user_rules_dir() {
         if user_rules.is_dir() {
             let (conditional_only, unconditional_only) = if directory_mode {
                 (false, true)
@@ -195,6 +192,20 @@ pub fn load_for_file(
 
 pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// `~/.claude/rules`, the user-global rule files.
+pub fn user_rules_dir() -> Option<PathBuf> {
+    Some(home_dir()?.join(".claude").join("rules"))
+}
+
+/// Whether `path` is a user-global rule file Claude Code loads only when a
+/// file its `paths:` matches is read, so never again after a compaction.
+pub fn conditional_user_rule(path: &Path) -> bool {
+    let under = user_rules_dir()
+        .and_then(|dir| dir.canonicalize().ok())
+        .is_some_and(|dir| path.starts_with(dir));
+    under && std::fs::read_to_string(path).is_ok_and(|content| extract_paths_frontmatter(&content).is_some())
 }
 
 pub fn try_load(
@@ -386,9 +397,12 @@ pub(crate) fn extract_paths_frontmatter(content: &str) -> Option<Vec<String>> {
         if let Some(rest) = parse_paths_key(lstripped) {
             let rest = rest.trim();
             if !rest.is_empty() {
-                return Some(vec![rest
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_string()]);
+                let unquoted = |item: &str| item.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+                let globs: Vec<String> = match rest.strip_prefix('[').and_then(|list| list.strip_suffix(']')) {
+                    Some(list) => list.split(',').map(unquoted).filter(|glob| !glob.is_empty()).collect(),
+                    None => vec![unquoted(rest)],
+                };
+                return (!globs.is_empty()).then_some(globs);
             }
             capturing_list = true;
             continue;
@@ -530,18 +544,4 @@ fn find_includes(line: &str) -> Vec<String> {
         i += 1;
     }
     out
-}
-
-/// Session id resolved from the standard env chain. The single resolution
-/// point shared by `nested_memory` and `session_log`.
-///
-/// Order: `AGENT_SESSION_ID` (the harness-neutral carrier our hooks set) →
-/// `CODEX_THREAD_ID` → `CLAUDE_CODE_SESSION_ID` — neutral first, then the
-/// innermost harness session before the outer, so a codex run nested under a
-/// Claude launcher keys on its own thread.
-pub fn session_id() -> Option<String> {
-    std::env::var("AGENT_SESSION_ID")
-        .ok()
-        .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
-        .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
 }

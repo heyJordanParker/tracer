@@ -9,14 +9,13 @@
 //! edge is the package-qualified function call and the site names no type)
 //! and composite literals (`Type{..}` — `Static`).
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use tree_sitter::{Node, Parser};
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "go".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
@@ -35,30 +34,36 @@ pub fn extract(source: &[u8]) -> ExtractionResult {
     extract_from_tree(&tree, source)
 }
 
-/// Imports/exports/declarations/references from an already-parsed Go tree.
+/// Imports/declarations/references from an already-parsed Go tree.
 /// Caller guarantees `tree` came from the Go grammar.
 pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
     let root = tree.root_node();
     let imports = walk_imports(root, source);
-    let declarations = walk_declarations(root, source);
-    // Go exports anything starting with an uppercase letter; the structure
-    // view wants the module-level (non-method) named items.
-    let exports = declarations
-        .iter()
-        .filter(|d| d.container.is_none())
-        .map(|d| Export {
-            name: d.name.clone(),
-            kind: d.kind.clone(),
-            line: d.line,
-        })
-        .collect();
+    let mut declarations = walk_declarations(root, source);
+    for declaration in &mut declarations {
+        declaration.visibility = match (declaration.kind.as_str(), &declaration.container) {
+            // The package clause names what every importer writes.
+            ("module", _) => Visibility::Public,
+            ("function", Some(receiver)) => visibility(&declaration.name).min(visibility(receiver)),
+            _ => visibility(&declaration.name),
+        };
+    }
     let references = walk_references(root, source);
     ExtractionResult {
         language: "go".into(),
         imports,
-        exports,
         declarations,
         references,
+    }
+}
+
+/// A capital first letter exports a name from its package; any other name
+/// is reachable from the package's other files. A method is never more
+/// visible than its receiver type.
+fn visibility(name: &str) -> Visibility {
+    match name.starts_with(char::is_uppercase) {
+        true => Visibility::Public,
+        false => Visibility::Restricted,
     }
 }
 
@@ -78,7 +83,9 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
                         symbol,
                         locals: Vec::new(),
                         line: n.start_position().row as i64 + 1,
+                        end_line: n.end_position().row as i64 + 1,
                         block: None,
+                        visibility: None,
                     });
                 }
             }
@@ -94,6 +101,7 @@ fn walk_imports(root: Node, source: &[u8]) -> Vec<Import> {
 /// Functions, methods (receiver type as `container`), and named types.
 fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
     let mut out = Vec::new();
+    let mut ranges = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
@@ -111,11 +119,12 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                                 end_line: n.end_position().row as i64 + 1,
                                 container: None,
                                 parent: None,
-                                header: crate::extraction::line_text(source, line),
+                                header: crate::extraction::header::Builder::new(source).node(n).finish(),
                                 annotations: Vec::new(),
                                 self_type: None,
                                 module_file: None,
                                 supertypes: Vec::new(),
+                                visibility: Visibility::Unknown,
                             });
                         }
                     }
@@ -188,35 +197,39 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                                 self_type: None,
                                 module_file: None,
                                 supertypes: Vec::new(),
+                                visibility: Visibility::Unknown,
                             });
                         }
                     }
                 }
             }
-            "field_declaration" => {
-                if let Some(name_node) = n.child_by_field_name("name").or_else(|| n.named_child(0))
-                {
-                    if let Ok(name) = name_node.utf8_text(source) {
-                        let line = name_node.start_position().row as i64 + 1;
-                        if seen.insert((name.to_string(), line)) {
-                            out.push(Declaration {
-                                name: name.to_string(),
-                                kind: "property".into(),
-                                header_line: n.start_position().row as i64 + 1,
-                                line,
-                                end_line: n.end_position().row as i64 + 1,
-                                container: None,
-                                parent: None,
-                                header: crate::extraction::line_text(
-                                    source,
-                                    n.start_position().row as i64 + 1,
-                                ),
-                                annotations: Vec::new(),
-                                self_type: None,
-                                module_file: None,
-                                supertypes: Vec::new(),
-                            });
-                        }
+            // A function body declares nothing other code reaches.
+            "block" => continue,
+            "field_declaration" | "const_spec" | "var_spec" => {
+                let mut cursor = n.walk();
+                // A `const_spec`'s `name` field holds its commas too.
+                let names: Vec<Node> = n.children_by_field_name("name", &mut cursor).filter(Node::is_named).collect();
+                // An embedded field is named by its type.
+                let names = if names.is_empty() { n.named_child(0).into_iter().collect() } else { names };
+                for (index, name_node) in names.iter().enumerate() {
+                    let Ok(name) = name_node.utf8_text(source) else { continue };
+                    let line = name_node.start_position().row as i64 + 1;
+                    if seen.insert((name.to_string(), line)) {
+                        out.push(Declaration {
+                            name: name.to_string(),
+                            kind: if n.kind() == "field_declaration" { "property" } else { "constant" }.into(),
+                            header_line: n.start_position().row as i64 + 1,
+                            line,
+                            end_line: n.end_position().row as i64 + 1,
+                            container: None,
+                            parent: None,
+                            header: spec_header(n, &names, index, source),
+                            annotations: Vec::new(),
+                            self_type: None,
+                            module_file: None,
+                            supertypes: Vec::new(),
+                            visibility: Visibility::Unknown,
+                        });
                     }
                 }
             }
@@ -233,46 +246,12 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                                 end_line: n.end_position().row as i64 + 1,
                                 container: None,
                                 parent: None,
-                                header: crate::extraction::line_text(
-                                    source,
-                                    n.start_position().row as i64 + 1,
-                                ),
+                                header: crate::extraction::header::Builder::new(source).node(n).finish(),
                                 annotations: Vec::new(),
                                 self_type: None,
                                 module_file: None,
                                 supertypes: Vec::new(),
-                            });
-                        }
-                    }
-                }
-            }
-            "const_spec" | "var_spec" => {
-                if let Some(name_node) = n.child_by_field_name("name").or_else(|| n.named_child(0))
-                {
-                    if let Ok(name) = name_node.utf8_text(source) {
-                        let line = name_node.start_position().row as i64 + 1;
-                        if seen.insert((name.to_string(), line)) {
-                            let keyword = if n.kind() == "const_spec" {
-                                "const"
-                            } else {
-                                "var"
-                            };
-                            out.push(Declaration {
-                                name: name.to_string(),
-                                kind: "constant".into(),
-                                header_line: n.start_position().row as i64 + 1,
-                                line,
-                                end_line: n.end_position().row as i64 + 1,
-                                container: None,
-                                parent: None,
-                                header: format!(
-                                    "{keyword} {}",
-                                    String::from_utf8_lossy(&source[n.start_byte()..n.end_byte()])
-                                ),
-                                annotations: Vec::new(),
-                                self_type: None,
-                                module_file: None,
-                                supertypes: Vec::new(),
+                                visibility: Visibility::Unknown,
                             });
                         }
                     }
@@ -280,27 +259,43 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
             }
             _ => {}
         }
+        ranges.resize(out.len(), n.start_byte()..n.end_byte());
         let mut c = n.walk();
         for child in n.children(&mut c) {
             stack.push(child);
         }
     }
-    out.sort_by_key(|d| d.line);
-    for index in 0..out.len() {
-        if let Some((parent, _)) = out[..index]
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, candidate)| {
-                matches!(candidate.kind.as_str(), "class" | "interface")
-                    && candidate.line < out[index].line
-                    && candidate.end_line >= out[index].line
-            })
-        {
-            out[index].parent = Some(parent as u32);
+    crate::extraction::nest(out, ranges, |candidate| matches!(candidate.kind.as_str(), "class" | "interface"))
+}
+
+/// The header of `names[index]` of a field, `const`, or `var` spec, as if it
+/// were declared alone: `X, Y int` gives `Y int`, and `const A, B = 1, 2`
+/// gives `const B = 2`. A spec whose values do not pair with its names, such
+/// as `a, b = f()`, reads whole.
+fn spec_header(spec: Node, names: &[Node], index: usize, source: &[u8]) -> String {
+    let values: Vec<Node> = spec.child_by_field_name("value").map_or_else(Vec::new, |list| {
+        let mut cursor = list.walk();
+        list.named_children(&mut cursor).filter(|value| value.kind() != "comment").collect()
+    });
+    let mut header = crate::extraction::header::Builder::new(source);
+    if names.len() == 1 || (!values.is_empty() && values.len() != names.len()) {
+        header.node(spec);
+    } else {
+        header.node(names[index]);
+        if let Some(kind) = spec.child_by_field_name("type") {
+            header.slice(kind.start_byte(), spec.child_by_field_name("tag").map_or(kind.end_byte(), |tag| tag.end_byte()));
+        }
+        let mut cursor = spec.walk();
+        let equals = spec.children(&mut cursor).find(|token| token.kind() == "=");
+        if let (Some(value), Some(equals)) = (values.get(index), equals) {
+            header.node(equals).node(*value);
         }
     }
-    out
+    match spec.kind() {
+        "const_spec" => format!("const {}", header.finish()),
+        "var_spec" => format!("var {}", header.finish()),
+        _ => header.finish(),
+    }
 }
 
 fn push_named(
@@ -336,6 +331,7 @@ fn push_named(
                     self_type: None,
                     module_file: None,
                     supertypes: Vec::new(),
+                    visibility: Visibility::Unknown,
                 });
             }
         }

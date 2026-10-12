@@ -3,7 +3,7 @@
 //! The symbol index names the files that declare it; those files carry the
 //! kind, line and container. Nothing else is read, so the cost is the answer.
 
-use crate::commands::enrich;
+use crate::sections;
 use crate::{cache, file_facts, relations, surface};
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -12,11 +12,10 @@ use std::path::{Path, PathBuf};
 pub fn run(symbol: &str, as_json: bool) -> Result<Value> {
     let here = Path::new(".");
     let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
-    let matches = relations::declarations(symbol, &repo_root);
+    let matches = relations::declarations(&relations::get(&repo_root), symbol);
 
     if matches.is_empty() {
-        eprintln!("{}", crate::output::not_declared(symbol, &repo_root));
-        std::process::exit(2);
+        return Err(crate::process::fail(2, crate::output::not_declared(symbol, &repo_root)));
     }
 
     let mut source_files: Vec<String> = matches.iter().map(|m| m.file.clone()).collect();
@@ -24,7 +23,7 @@ pub fn run(symbol: &str, as_json: bool) -> Result<Value> {
     source_files.dedup();
     let paths: Vec<PathBuf> = source_files.iter().map(|file| repo_root.join(file)).collect();
     let facts = file_facts::get_batch(&paths, &repo_root);
-    let file_facts_by_path = enrich::facts_of(&facts, &repo_root);
+    let file_facts_by_path = sections::facts_of(&facts, &repo_root);
     let rows: std::collections::HashMap<&str, Vec<surface::Row>> = facts
         .iter()
         .map(|(file, facts)| (file.as_str(), surface::rows(facts, None)))
@@ -53,7 +52,7 @@ pub fn run(symbol: &str, as_json: bool) -> Result<Value> {
         .collect();
     let out = crate::output::document(
         json!({"symbol": symbol}),
-        json!({"files": enrich::facts_context(&file_facts_by_path)}),
+        json!({"files": sections::facts_context(&file_facts_by_path)}),
         json!(definitions),
         json!({"definitions": matches.len()}),
     );
@@ -71,11 +70,11 @@ pub fn run(symbol: &str, as_json: bool) -> Result<Value> {
             rows.push(format!("      L{:<5}{rendered}", m.declaration.line));
             *count += 1;
         }
-        let section = enrich::Section {
+        let section = sections::Section {
             heading: format!("Definitions of '{symbol}' ({}):", matches.len()),
             files,
         };
-        enrich::render_sections(&[section], &file_facts_by_path, "definition", "definitions");
+        sections::render_sections(&[section], &file_facts_by_path, &repo_root, "definition", "definitions");
     }
     Ok(out)
 }

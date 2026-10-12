@@ -220,6 +220,33 @@ fn grep_lang_filter_restricts_results() {
     }
 }
 
+/// The signpost is extra context: under a session it prints once per agent
+/// context, across `grep` and `pattern`, and again after a reset.
+#[test]
+fn a_signpost_prints_once_per_context() {
+    let f = Fixture::new();
+    f.write("lib.py", "def dispatch(job):\n    return job\n");
+    f.write("app.py", "from lib import dispatch\n\ndef run(j):\n    return dispatch(j)\n");
+    f.commit("one call site");
+    f.trace(&["cache", "build", "."]).ok();
+    let env = [("AGENT_SESSION_ID", "signpost-once")];
+    let signpost = "→ trace callers dispatch";
+
+    let first = f.trace_env(&["grep", "dispatch", "."], &env);
+    first.ok();
+    assert!(first.stdout.contains(signpost), "{}", first.stdout);
+    let pattern = f.trace_env(&["pattern", "dispatch($$$A)", "-t", "python", "."], &env);
+    pattern.ok();
+    assert!(!pattern.stdout.contains(signpost), "{}", pattern.stdout);
+    let json = f.trace_env(&["grep", "dispatch", ".", "--json"], &env);
+    assert!(json.view()["signpost"].as_str().is_some_and(|line| line.contains(signpost)), "{}", json.stdout);
+
+    f.trace_env(&["docs", "reset"], &env).ok();
+    let after_reset = f.trace_env(&["grep", "dispatch", "."], &env);
+    after_reset.ok();
+    assert!(after_reset.stdout.contains(signpost), "{}", after_reset.stdout);
+}
+
 /// A search whose word is a name the graph knows ends with the command that
 /// answers the question whole. A structural pattern matches one call shape,
 /// so its result is partial in silence; the signpost is what turns that into

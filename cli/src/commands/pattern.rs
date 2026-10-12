@@ -7,7 +7,7 @@
 //! pretty array, which had to be buffered whole and parsed into a `Value`
 //! before a single match could be read.
 
-use crate::commands::enrich::{self, Match};
+use crate::matches::{self, Match};
 use crate::output::Sink;
 use crate::{cache, repo_context};
 use anyhow::{anyhow, bail, Context, Result};
@@ -149,7 +149,7 @@ fn run_prefilter(literal: &str, rg_type: &str, paths: &[String]) -> Result<Vec<S
         cmd.args(["--type", rg_type]);
     }
     cmd.arg("--").arg(literal).args(paths);
-    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match crate::process::spawn(cmd.stdout(Stdio::piped()).stderr(Stdio::piped())) {
         Ok(child) => child,
         Err(source) if source.kind() == std::io::ErrorKind::ArgumentListTooLong => {
             if paths.len() == 1 {
@@ -233,10 +233,7 @@ fn ast_grep(
     } else {
         cmd.arg("--").args(paths);
     }
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut child = crate::process::spawn(cmd.stdout(Stdio::piped()).stderr(Stdio::piped()))
         .context("failed to start ast-grep")?;
     let stderr = stderr_reader(child.stderr.take().expect("piped ast-grep stderr"));
     let mut matches = Vec::new();
@@ -304,18 +301,16 @@ pub fn run(pattern: &str, language: &str, paths: &[String], as_json: bool, sink:
     let row = match crate::lang::resolve(language) {
         Some(row) if !row.sg.is_empty() => row,
         Some(row) => {
-            eprintln!(
-                "Error: {:?} has no code-shape grammar. Use `trace grep` for it.",
-                row.name
-            );
-            std::process::exit(2);
+            return Err(crate::process::fail(
+                2,
+                format!("Error: {:?} has no code-shape grammar. Use `trace grep` for it.", row.name),
+            ));
         }
         None => {
-            eprintln!(
-                "Error: unknown type {language:?}. Accepted: {}",
-                crate::lang::accepted()
-            );
-            std::process::exit(2);
+            return Err(crate::process::fail(
+                2,
+                format!("Error: unknown type {language:?}. Accepted: {}", crate::lang::accepted()),
+            ));
         }
     };
     let words = literals(pattern);
@@ -331,21 +326,25 @@ pub fn run(pattern: &str, language: &str, paths: &[String], as_json: bool, sink:
     let search_root = cache::worktree_root_for(&abs).unwrap_or_else(|| cache::display_root(&abs));
     let ((enriched, files, surfaces, signpost), repo_ctx) = rayon::join(
         || {
-            let signpost = enrich::signpost(anchor.as_deref(), &search_root);
-            let (enriched, files, surfaces) = enrich::enrich(&matches, &search_root, None, None);
+            let signpost = matches::signpost(anchor.as_deref(), &search_root);
+            let (enriched, files, surfaces) = matches::enrich(&matches, &search_root, None, None);
             (enriched, files, surfaces, signpost)
         },
         || if as_json { repo_context::repo_context(&abs) } else { Value::Null },
     );
 
     if !as_json {
-        enrich::render_human(&enriched, &files, &surfaces, signpost.as_deref(), false);
+        let mut delivery = crate::session::Delivery::default();
+        let shown = matches::offer_signpost(signpost.as_deref(), anchor.as_deref(), &search_root, &mut delivery);
+        let answer = matches::render_human(&enriched, &files, &surfaces, shown, false, &mut delivery);
+        let reached: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+        super::docs::print_with_docs(&answer, &reached, "trace_pattern", delivery)?;
     }
     drop(surfaces);
 
-    sink.emit(&enrich::SearchDocument {
+    sink.emit(&matches::SearchDocument {
         query: json!({"pattern": pattern, "type": language, "paths": paths}),
-        context: enrich::SearchContext {
+        context: matches::SearchContext {
             files: &files,
             repo: &repo_ctx,
             signpost,

@@ -1,23 +1,12 @@
 //! PHP tree-sitter extraction: `use` statements and class/interface/function defs.
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
-use std::collections::HashMap;
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
-
-const QUERY_SRC: &str = r#"
-        ; class / interface / trait / enum / function declarations
-        (class_declaration name: (name) @export.class)
-        (interface_declaration name: (name) @export.interface)
-        (trait_declaration name: (name) @export.class)
-        (enum_declaration name: (name) @export.class)
-        (function_definition name: (name) @export.function)
-"#;
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
+use tree_sitter::{Node, Parser};
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "php".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
@@ -36,81 +25,40 @@ pub fn extract(source: &[u8]) -> ExtractionResult {
     extract_from_tree(&tree, source)
 }
 
-/// Imports/exports from an already-parsed PHP tree. Decoupled from the
-/// parse for single-parse. Caller guarantees `tree` came from the PHP
-/// grammar.
+/// Imports/declarations/references from an already-parsed PHP tree.
+/// Decoupled from the parse for single-parse. Caller guarantees `tree` came
+/// from the PHP grammar.
 pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_php::LANGUAGE_PHP.into();
-    let query = match Query::new(&lang, QUERY_SRC) {
-        Ok(q) => q,
-        Err(_) => return empty(),
-    };
-    let capture_names = query.capture_names();
-
-    #[derive(Clone)]
-    struct Cap {
-        name: String,
-        text: String,
-        line: i64,
-    }
-    let mut caps: Vec<Cap> = Vec::new();
-    let mut cursor = QueryCursor::new();
-    let mut it = cursor.matches(&query, tree.root_node(), source);
-    while let Some(m) = it.next() {
-        for cap in m.captures {
-            let node = cap.node;
-            caps.push(Cap {
-                name: capture_names[cap.index as usize].to_string(),
-                text: node.utf8_text(source).unwrap_or("").to_string(),
-                line: node.start_position().row as i64 + 1,
-            });
-        }
-    }
-
-    let mut order: Vec<String> = Vec::new();
-    let mut groups: HashMap<String, Vec<Cap>> = HashMap::new();
-    for c in caps {
-        if !groups.contains_key(&c.name) {
-            order.push(c.name.clone());
-        }
-        groups.entry(c.name.clone()).or_default().push(c);
-    }
-
-    let imports = use_imports(tree.root_node(), source);
-    let mut exports: Vec<Export> = Vec::new();
-
-    for name in &order {
-        for c in &groups[name] {
-            match c.name.as_str() {
-                "export.function" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "function".into(),
-                    line: c.line,
-                }),
-                "export.class" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "class".into(),
-                    line: c.line,
-                }),
-                "export.interface" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "interface".into(),
-                    line: c.line,
-                }),
-                _ => {}
-            }
-        }
-    }
-
-    let declarations = walk_declarations(tree.root_node(), source);
-    let references = walk_references(tree.root_node(), source);
-
     ExtractionResult {
         language: "php".into(),
-        imports,
-        exports,
-        declarations,
-        references,
+        imports: use_imports(tree.root_node(), source),
+        declarations: walk_declarations(tree.root_node(), source),
+        references: walk_references(tree.root_node(), source),
+    }
+}
+
+/// A member's `private` keeps it in its class, `protected` opens it to
+/// subclasses, and `public` or no modifier opens it to every file. Classes,
+/// functions, and enum cases are public.
+fn visibility(mut node: Node, source: &[u8]) -> Visibility {
+    if matches!(node.kind(), "property_element" | "const_element") {
+        while !matches!(node.kind(), "property_declaration" | "const_declaration") {
+            let Some(parent) = node.parent() else {
+                break;
+            };
+            node = parent;
+        }
+    }
+    let mut cursor = node.walk();
+    let modifier = node
+        .children(&mut cursor)
+        .find(|child| child.kind() == "visibility_modifier")
+        .and_then(|modifier| modifier.utf8_text(source).ok())
+        .map(str::to_ascii_lowercase);
+    match modifier.as_deref() {
+        Some("private") => Visibility::FileLocal,
+        Some("protected") => Visibility::Restricted,
+        _ => Visibility::Public,
     }
 }
 
@@ -126,15 +74,15 @@ fn use_imports(root: Node, source: &[u8]) -> Vec<Import> {
                 .trim_end_matches(';')
                 .trim();
             if !(text.starts_with("function ") || text.starts_with("const ")) {
-                let line = node.start_position().row as i64 + 1;
+                let lines = (node.start_position().row as i64 + 1, node.end_position().row as i64 + 1);
                 if let Some((prefix, names)) = text.split_once('{') {
                     let prefix = prefix.trim().trim_end_matches('\\');
                     for clause in names.trim_end_matches('}').split(',') {
-                        push_use_import(&mut out, &format!("{prefix}\\{}", clause.trim()), line);
+                        push_use_import(&mut out, &format!("{prefix}\\{}", clause.trim()), lines);
                     }
                 } else {
                     for clause in text.split(',') {
-                        push_use_import(&mut out, clause, line);
+                        push_use_import(&mut out, clause, lines);
                     }
                 }
             }
@@ -149,7 +97,8 @@ fn use_imports(root: Node, source: &[u8]) -> Vec<Import> {
     out
 }
 
-fn push_use_import(out: &mut Vec<Import>, clause: &str, line: i64) {
+/// The import one clause of a `use` statement spanning `lines` makes.
+fn push_use_import(out: &mut Vec<Import>, clause: &str, (line, end_line): (i64, i64)) {
     let mut words = clause.split_whitespace();
     let name = words.next().unwrap_or("").replace("\\\\", "\\");
     let alias = words
@@ -168,7 +117,9 @@ fn push_use_import(out: &mut Vec<Import>, clause: &str, line: i64) {
         symbol,
         locals: alias.map(str::to_string).into_iter().collect(),
         line,
+        end_line,
         block: None,
+        visibility: None,
     });
 }
 
@@ -179,6 +130,7 @@ fn push_use_import(out: &mut Vec<Import>, clause: &str, line: i64) {
 /// a `function_definition` and the type declarations themselves have none.
 fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
     let mut out = Vec::new();
+    let mut ranges = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut stack: Vec<(Node, Option<String>)> = vec![(root, None)];
     while let Some((n, container)) = stack.pop() {
@@ -225,6 +177,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                         child_container = Some(name.to_string());
                     }
                     if seen.insert((name.to_string(), line)) {
+                        ranges.push(n.byte_range());
                         out.push(Declaration {
                             name: name.to_string(),
                             kind: k.to_string(),
@@ -238,6 +191,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                             self_type: None,
                             module_file: None,
                             supertypes: php_supertypes(n, source),
+                            visibility: visibility(n, source),
                         });
                     }
                 }
@@ -248,22 +202,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
             stack.push((child, child_container.clone()));
         }
     }
-    out.sort_by_key(|d| d.line);
-    let parents: std::collections::HashMap<String, u32> = out
-        .iter()
-        .enumerate()
-        .filter(|(_, declaration)| {
-            matches!(declaration.kind.as_str(), "class" | "enum" | "interface")
-        })
-        .map(|(index, declaration)| (declaration.name.clone(), index as u32))
-        .collect();
-    for declaration in &mut out {
-        declaration.parent = declaration
-            .container
-            .as_ref()
-            .and_then(|container| parents.get(container).copied());
-    }
-    out
+    crate::extraction::nest(out, ranges, |candidate| matches!(candidate.kind.as_str(), "class" | "enum" | "interface"))
 }
 
 fn php_supertypes(node: Node, source: &[u8]) -> Vec<String> {
@@ -316,12 +255,6 @@ fn php_end_line(mut node: Node) -> i64 {
 }
 
 fn php_header(node: Node, source: &[u8]) -> String {
-    if node.kind() == "enum_case" {
-        let start = node.start_byte().saturating_sub(4);
-        let mut builder = crate::extraction::header::Builder::new(source);
-        builder.slice(start, node.end_byte());
-        return builder.finish();
-    }
     if node.kind() == "property_element" || node.kind() == "const_element" {
         let mut declaration = node;
         while declaration.kind() != "property_declaration"

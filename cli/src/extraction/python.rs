@@ -1,7 +1,7 @@
 //! Python tree-sitter extraction: module-level imports and definitions.
 
-use crate::extraction::{Declaration, Export, ExtractionResult, Import, RefShape, Reference};
-use std::collections::HashMap;
+use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 const QUERY_SRC: &str = r#"
@@ -12,39 +12,27 @@ const QUERY_SRC: &str = r#"
           name: (aliased_import
                   name: (dotted_name) @import.module))
 
-        ; import_from_statement covers `from x import y`, `from x import y as z`
+        ; import_from_statement covers `from x import y`, `from x import y as z`,
+        ; and the relative `from .x import y` and `from . import y`
         (import_from_statement
-          module_name: (dotted_name) @import_from.module
+          module_name: [(dotted_name) (relative_import)] @import_from.module
           name: (dotted_name) @import_from.symbol)
         (import_from_statement
-          module_name: (dotted_name) @import_from.module
+          module_name: [(dotted_name) (relative_import)] @import_from.module
           name: (aliased_import
                   name: (dotted_name) @import_from.symbol))
-
-        ; module-level definitions only — nested defs are filtered below
-        (module
-          (function_definition name: (identifier) @export.function))
-        (module
-          (class_definition name: (identifier) @export.class))
-        (module
-          (decorated_definition
-            definition: (function_definition name: (identifier) @export.function)))
-        (module
-          (decorated_definition
-            definition: (class_definition name: (identifier) @export.class)))
 "#;
 
 fn empty() -> ExtractionResult {
     ExtractionResult {
         language: "python".into(),
         imports: vec![],
-        exports: vec![],
         declarations: vec![],
         references: vec![],
     }
 }
 
-pub fn extract(source: &[u8]) -> ExtractionResult {
+pub fn extract(source: &[u8], path: &str) -> ExtractionResult {
     let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
     let mut parser = Parser::new();
     if parser.set_language(&lang).is_err() {
@@ -54,13 +42,14 @@ pub fn extract(source: &[u8]) -> ExtractionResult {
         Some(t) => t,
         None => return empty(),
     };
-    extract_from_tree(&tree, source)
+    extract_from_tree(&tree, source, path)
 }
 
-/// Imports/exports from an already-parsed Python tree. Decoupled from the
-/// parse so `file_facts` shares one tree with `ccn` (single-parse). Caller
-/// guarantees `tree` came from the Python grammar.
-pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
+/// Imports/declarations/references from an already-parsed Python tree at
+/// `path`. Decoupled from the parse so `file_facts` shares one tree with
+/// `ccn` (single-parse). Caller guarantees `tree` came from the Python
+/// grammar.
+pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8], path: &str) -> ExtractionResult {
     let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
     let query = match Query::new(&lang, QUERY_SRC) {
         Ok(q) => q,
@@ -72,7 +61,8 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
     struct Cap {
         name: String,
         text: String,
-        line: i64,
+        /// The first and last lines of the statement that holds the capture.
+        lines: (i64, i64),
         start_byte: usize,
     }
     let mut caps: Vec<Cap> = Vec::new();
@@ -81,10 +71,13 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
     while let Some(m) = it.next() {
         for cap in m.captures {
             let node = cap.node;
+            let statement = std::iter::successors(Some(node), Node::parent)
+                .find(|holder| matches!(holder.kind(), "import_statement" | "import_from_statement"))
+                .unwrap_or(node);
             caps.push(Cap {
                 name: capture_names[cap.index as usize].to_string(),
                 text: node.utf8_text(source).unwrap_or("").to_string(),
-                line: node.start_position().row as i64 + 1,
+                lines: (statement.start_position().row as i64 + 1, statement.end_position().row as i64 + 1),
                 start_byte: node.start_byte(),
             });
         }
@@ -102,7 +95,6 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
     }
 
     let mut imports: Vec<Import> = Vec::new();
-    let mut exports: Vec<Export> = Vec::new();
 
     // Symbol resolution depends only on byte position, not on the order
     // captures are emitted. Collect every pending module first so a
@@ -122,8 +114,10 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
                     module: c.text.clone(),
                     symbol: None,
                     locals: Vec::new(),
-                    line: c.line,
+                    line: c.lines.0,
+                    end_line: c.lines.1,
                     block: None,
+                    visibility: None,
                 }),
                 "import_from.module" => {}
                 "import_from.symbol" => {
@@ -132,35 +126,79 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
                         module,
                         symbol: Some(c.text.clone()),
                         locals: Vec::new(),
-                        line: c.line,
+                        line: c.lines.0,
+                        end_line: c.lines.1,
                         block: None,
+                        visibility: None,
                     });
                 }
-                "export.function" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "function".into(),
-                    line: c.line,
-                }),
-                "export.class" => exports.push(Export {
-                    name: c.text.clone(),
-                    kind: "class".into(),
-                    line: c.line,
-                }),
                 _ => {}
             }
         }
     }
 
-    let declarations = walk_declarations(tree.root_node(), source);
+    let all = dunder_all(tree.root_node(), source);
+    let mut declarations = walk_declarations(tree.root_node(), source);
+    for declaration in &mut declarations {
+        declaration.visibility = visibility(&declaration.name, declaration.parent.is_none(), all.as_ref());
+    }
+    // A package's `__init__.py` re-exports what it imports from inside the
+    // package, and the imported names its `__all__` lists.
+    if path.ends_with("__init__.py") {
+        let listed = |name: &str| all.as_ref().is_some_and(|all| all.contains(name));
+        for import in imports
+            .iter_mut()
+            .filter(|import| import.module.starts_with('.') || import.binding().is_some_and(listed))
+        {
+            import.visibility = Some(Visibility::Public);
+        }
+    }
     let references = walk_references(tree.root_node(), source);
 
     ExtractionResult {
         language: "python".into(),
         imports,
-        exports,
         declarations,
         references,
     }
+}
+
+/// With `__all__`, the top-level names it lists are the module's API and the
+/// rest are reachable but not public. Without it, a leading `_` marks a name
+/// reachable but not public, except a dunder, which Python itself calls.
+fn visibility(name: &str, top_level: bool, all: Option<&HashSet<String>>) -> Visibility {
+    if let (true, Some(all)) = (top_level, all) {
+        return match all.contains(name) {
+            true => Visibility::Public,
+            false => Visibility::Restricted,
+        };
+    }
+    match name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__")) {
+        true => Visibility::Restricted,
+        false => Visibility::Public,
+    }
+}
+
+/// The names a top-level `__all__ = [...]` lists, `None` when there is none.
+fn dunder_all(root: Node, source: &[u8]) -> Option<HashSet<String>> {
+    let mut cursor = root.walk();
+    let assignment = root
+        .named_children(&mut cursor)
+        .filter(|statement| statement.kind() == "expression_statement")
+        .filter_map(|statement| statement.named_child(0))
+        .find(|assignment| {
+            assignment.kind() == "assignment"
+                && assignment.child_by_field_name("left").and_then(|left| left.utf8_text(source).ok()) == Some("__all__")
+        })?;
+    let names = assignment.child_by_field_name("right")?;
+    let mut cursor = names.walk();
+    let listed = names
+        .named_children(&mut cursor)
+        .filter(|item| item.kind() == "string")
+        .filter_map(|item| item.utf8_text(source).ok())
+        .map(|text| text.trim_matches(['"', '\'']).to_string())
+        .collect();
+    Some(listed)
 }
 
 /// Every `function_definition` and `class_definition` in the tree —
@@ -226,6 +264,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                             self_type: None,
                             module_file: None,
                             supertypes: Vec::new(),
+                            visibility: Visibility::Unknown,
                         });
                     }
                 }

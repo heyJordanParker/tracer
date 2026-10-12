@@ -52,7 +52,7 @@ A cut output ends with `[N of M files shortened to fit --budget B — whole: <co
 ## 3. Orient before deep reads
 
 ### Start broad, then narrow
-Run `trace context` first. Then use `trace stats`, `trace list`, `trace tree`, `trace info`, or `trace structure` before reading code deeply.
+Run `trace context` first. Then use `trace stats`, `trace list`, `trace tree`, `trace info`, or `trace api` before reading code deeply. `trace api` prints a folder's public API with every header whole, so it answers what a module offers without reading its files.
 
 Template:
   ```bash
@@ -60,7 +60,7 @@ Template:
   trace stats
   trace list src
   trace info src/Entity/Loan.php --brief
-  trace structure src/Entity/Loan.php src/Service/Notifier.php
+  trace api src/Service
   ```
 
 ## 4. Choose the smallest matching command
@@ -164,7 +164,7 @@ Template:
 - A list of many files prints each file's facts on one line: `path  {imported_by: 63, cyclomatic_complexity: 66, lines: 318, git: modified}`.
 
 ### Read the front matter as the file's facts
-Keys use git and GitHub words; dates are ages. `docs_not_loaded` names the project docs this session has not read, and `directory` names the file's directory, its importers and imports, and its entries the first time you see that directory or after its entries change. Entries leave out what git ignores.
+Keys use git and GitHub words; dates are ages. `directory` names the file's directory, its importers and imports, and its entries the first time you see that directory or after its entries change. Entries leave out what git ignores.
 
 Template:
   ```yaml
@@ -184,7 +184,6 @@ Template:
     on_deploy_branches: [main, production]
     usually_changed_with: [src/Service/Notifier.php]
     main_author: Jordan Parker
-  docs_not_loaded: [src/Entity/Claude.md]
   directory:
     path: src/Entity/
     imported_by: 54
@@ -195,8 +194,11 @@ Template:
   ```
 
 ### Read a heading's headline as facts you already hold
-A file's facts print once per context, whichever command showed them, and whole again after a compaction or `/clear`. A repeat carries the headline on its heading line. After an edit or another Agent's commit, a repeat shows only the lines that changed, and a fact that went away shows as `null`. Its block keeps the command's own answer, such as `info`'s `language` and `functions` or `structure`'s `declarations`, plus `docs_not_loaded`. A `directory` you already hold prints only the lines that changed, such as a new `imported_by`, and none when nothing changed.
+A file's facts print once per context, whichever command showed them, and whole again after a compaction or `/clear`. A repeat carries the headline on its heading line. After an edit or another Agent's commit, a repeat shows only the lines that changed, and a fact that went away shows as `null`. Its block keeps the command's own answer, such as `info`'s `language` and `functions` or `structure`'s `declarations`. A `directory` you already hold prints only the lines that changed, such as a new `imported_by`, and none when nothing changed.
 Example: `# src/Entity/Loan.php :: L24-L40  {imported_by: 21, cyclomatic_complexity: 18, lines: 164, git: modified}`
+
+### Read the docs after an answer as the rules for those paths
+In a session, every command that takes paths prints the project docs those paths reach after its answer, nearest first, each once per context. The docs past the budget are named under the `trace docs` command that sends them.
 
 ### Read the row as the source's own text
 A row is `L<line>` and the declaration's header as written — attributes, modifiers, name, parameters, return type, heritage — with every body elided as `{ … }` and a data initializer as `= …`. A row indents two spaces under the declaration that holds it, and a function's complexity follows as a comment in the file's own syntax.
@@ -259,5 +261,5 @@ Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md`
 ## References
 
 - Full command selection, flags, JSON payload shapes, `trace docs`, and `trace read` modes → [commands.md](references/commands.md)
-- The tracer mod's Hooks, identity propagation, and session-log environment variables → [hooks.md](references/hooks.md)
+- `trace hook`, the Hooks it serves for every Harness, identity propagation, and session environment variables → [hooks.md](references/hooks.md)
 - Disk cache namespaces, invalidation, `trace doctor`, and install checks → [cache.md](references/cache.md)

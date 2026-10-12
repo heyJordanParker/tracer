@@ -2,23 +2,24 @@
 
 The tracer mod puts `trace` to work inside Claude Code. It adds three things:
 
-- **Hooks** that run `trace` on Claude Code's own events, so the facts arrive with the tools Claude already uses.
+- **Hooks** that run `trace hook` on Claude Code's own events, so the facts arrive with the tools Claude already uses.
 - **The `trace` Skill**, which teaches Claude every command, how to read its output, and when to reach for it instead of `grep` or a raw read.
 - **The `trace` program**, installed for your machine.
 
 ## What each event adds
 
-| Event | `trace` runs | Claude gets |
-|---|---|---|
-| Session start, resume, `/clear`, compaction | `trace context` | The repository primer: languages, layout, test and script folders, git state, and the most-depended-on code |
-| Read | `trace context <file>` | The file's facts and the declarations of the lines it reads, with the source of each function those lines call |
-| Edit | `trace context <file> --no-record` | The declarations around the lines it replaces |
-| Write | `trace context <file> --no-record` | The facts of the file it overwrites |
-| Grep | `trace grep` | Each match under the declarations that hold it |
-| Glob | `trace find` | Each matched file with its facts |
-| Bash running `trace` | `trace docs <paths>` | The project docs the command reaches that this context has not read |
+Every event runs `trace hook <event>`, which adds its context after the tool answers:
 
-A file's facts arrive once per context. A later read of the same file carries one heading line, and after an edit only the facts that changed.
+| Event | Claude gets |
+|---|---|
+| Session start, `/clear`, compaction | The repository primer: languages, layout, test and script folders, git state, and the most-depended-on code. A resume that holds it gets nothing, and a repository that changed since gets only the sections that changed. |
+| Read | The file's facts and declarations, and the source of each function the lines it read call |
+| Edit, Write | The facts the edit changed and the callers of each function it changed, never the lines it wrote |
+| Grep | Each matching file's facts and its matches under the declarations that hold them. A Grep that printed its lines gets only the declarations. |
+| Glob | Each matched file's facts |
+| Bash running `trace` | The command's own answer carries the project docs it reaches that this context has not read |
+
+A file's facts arrive once per context. A later read of the same file carries one heading line, and after an edit only the facts that changed. A listing that already showed a file's facts names the file alone the next time, and a read after it prints only the facts the listing did not show. When another agent changes a file, the next read shows the declarations it added or changed and one `moved:` line for the rest.
 
 ## Project docs, once
 
@@ -26,11 +27,12 @@ Claude Code loads `CLAUDE.md` files itself. tracer records every doc Claude Code
 
 - A `trace` command sends the docs of each directory it reaches, nearest first, the first time it reaches them.
 - A doc too long for the message arrives in parts, each part continuing where the last one stopped.
-- A compaction drops the docs from Claude's context, so tracer forgets them on `PreCompact` and sends them again when Claude's work reaches them.
+- A doc that changes after it arrived comes back as only its changed lines.
+- A compaction drops the docs from Claude's context, so tracer forgets them on `PreCompact` and sends them again when Claude's work reaches them. Claude Code never reloads a user rule with `paths:` after a compaction, so tracer sends each one Claude had loaded again when the session restarts.
 
 ## Subagents
 
-Every Subagent keeps its own record, so a Subagent gets the facts and docs its own context lacks, whatever the main session has seen. The mod writes `--agent <id>` into each `trace` command a Subagent runs, because a Subagent's shell carries no agent id, and archives the Subagent's record when it stops. A resumed Subagent picks up its record where it left off.
+Every Subagent keeps its own record, so a Subagent gets the facts and docs its own context lacks, whatever the main session has seen. The mod writes `--agent <id>` into each `trace` command a Subagent runs, because a Subagent's shell carries no agent id. Each record is keyed by its agent id, so a resumed Subagent picks up its record where it left off.
 
 ## Settings
 
@@ -74,14 +76,13 @@ cmod asks for these when it installs tracer, and `/mods` turns each one off:
 
 | Permission | What tracer does with it |
 |---|---|
-| Run `trace` | Every Hook runs `trace`. |
-| Run `git` | The session start checks it is in a git repository before it builds the primer. |
+| Run `trace` | Every Hook runs `trace hook`. |
 | Add text Claude reads | Every fact, primer, and project doc tracer sends. |
 | Change Claude's tool calls | Writes `--agent <id>` into a Subagent's `trace` commands. |
 
 ## When `trace` cannot run
 
-A Hook that cannot run `trace` adds nothing, and Claude's tool call goes ahead unchanged. A Read of a file whose facts fail adds one line naming the reason, so Claude knows the facts are missing rather than empty.
+A Hook that cannot run `trace` adds nothing, and Claude's tool call goes ahead unchanged. On every other event cmod logs `tracer: the <event> hook failed: trace hook <event> exited <code>: <reason>`. A Hook that runs past its 9-second deadline ends there and records nothing, so its context arrives on a later call.
 
 ## Develop the mod
 

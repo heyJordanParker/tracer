@@ -1,10 +1,9 @@
 //! `trace context prime --reason …` — the context-primer command.
 //!
 //! Black-box: spawn `trace` with an isolated `HOME` so the user-global
-//! CLAUDE.md lands inside the fixture; the session log
-//! directory lives at the fixture root, which IS the repo root
-//! (`Fixture::new` runs `git init`). Assertions go through the documented
-//! on-disk shape (`events.jsonl` + `view.json`) and the command's `--json`
+//! CLAUDE.md lands inside the fixture, and the fixture's own `TMPDIR` so
+//! each test's session record starts empty. Assertions go through the
+//! documented on-disk shape of `record.json` and the command's `--json`
 //! output.
 //!
 //! The primer models repo docs only: user-global CLAUDE.md + project-root
@@ -13,15 +12,14 @@
 //! state managed by Claude Code itself and is out of tracer's scope.
 //!
 //! Cases pinned (per the context-primer feature's definition of done):
-//!   * empty case               — no docs at all, no events appended, success
-//!   * single CLAUDE.md         — project-root CLAUDE.md only, one event
+//!   * empty case               — no docs at all, nothing recorded, success
+//!   * single CLAUDE.md         — project-root CLAUDE.md only, one doc recorded
 //!   * nested @-imports         — recursive include graph fully captured
 //!   * recursion depth cap      — runaway @include cycle is bounded
 //!   * memory file ignored      — a populated MEMORY.md never enters the primer
 //!
-//! All five run against the same hermetic fixture pattern; each owns a
-//! unique session id so the log directory is isolated even
-//! when tests share the same `HOME`.
+//! All five run against the same hermetic fixture pattern, each with its
+//! own `HOME` and `TMPDIR`.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -44,22 +42,11 @@ fn fresh_session_id(tag: &str) -> String {
     format!("trace-context-prime-test-{tag}-{nanos}-{seq}")
 }
 
-fn log_dir(home: &PathBuf, session_id: &str) -> PathBuf {
-    home.join(".tracer-cache")
-        .join("sessions")
-        .join(session_id)
-        .join("root")
-}
-
-fn read_events(home: &PathBuf, session_id: &str) -> Vec<serde_json::Value> {
-    let path = log_dir(home, session_id).join("events.jsonl");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return vec![];
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("events.jsonl line is valid JSON"))
-        .collect()
+/// Every doc the root agent's record holds.
+fn recorded(f: &Fixture, session_id: &str) -> Vec<serde_json::Value> {
+    f.record(session_id, "root")
+        .and_then(|record| record["files"].as_object().map(|files| files.values().cloned().collect()))
+        .unwrap_or_default()
 }
 
 /// Build a fresh isolated fixture + the env every test needs:
@@ -82,7 +69,7 @@ fn env_pairs<'a>(home: &'a str, sid: &'a str) -> Vec<(&'a str, &'a str)> {
 // --- empty case ------------------------------------------------------------
 
 #[test]
-fn empty_repo_records_no_events_and_succeeds() {
+fn empty_repo_records_nothing_and_succeeds() {
     let (f, home, sid) = isolated("empty");
     // No files in the fixture beyond the fixture-init scaffold — nothing
     // for the context primer to find (no CLAUDE.md, no MEMORY.md, no
@@ -102,17 +89,17 @@ fn empty_repo_records_no_events_and_succeeds() {
         v["mirrored"], 0,
         "no docs exist, mirrored_count must be 0: {v}"
     );
-    let events = read_events(&home, &sid);
+    let events = recorded(&f, &sid);
     assert!(
         events.is_empty(),
-        "no docs surfaced means no events appended, got {events:?}"
+        "no docs surfaced means nothing recorded, got {events:?}"
     );
 }
 
 // --- single CLAUDE.md ------------------------------------------------------
 
 #[test]
-fn single_project_claude_md_records_one_event() {
+fn single_project_claude_md_records_one_doc() {
     let (f, home, sid) = isolated("single");
     f.write("CLAUDE.md", "# Project rules\n\nSingle root file.\n");
     f.commit("add root claude.md");
@@ -133,18 +120,18 @@ fn single_project_claude_md_records_one_event() {
     assert_eq!(mirrored[0]["kind"], "claude_md");
     assert_eq!(mirrored[0]["path"], "CLAUDE.md");
 
-    let events = read_events(&home, &sid);
+    let events = recorded(&f, &sid);
     assert_eq!(
         events.len(),
         1,
-        "one event per mirrored doc, got {events:?}"
+        "one entry per mirrored doc, got {events:?}"
     );
     let ev = &events[0];
     assert_eq!(ev["kind"], "doc_injection");
     assert_eq!(ev["source"], "context_prime_session_start");
     assert!(
-        ev["content_hash"].as_str().unwrap().starts_with("sha256:"),
-        "content_hash must be sha256-prefixed: {ev}"
+        ev["hash"].as_str().unwrap().starts_with("sha256:"),
+        "hash must be sha256-prefixed: {ev}"
     );
 }
 
@@ -187,8 +174,8 @@ fn nested_at_imports_are_walked_recursively() {
         "expected root + both included files, got {surfaced:?}"
     );
 
-    let events = read_events(&home, &sid);
-    assert_eq!(events.len(), 3, "one event per surfaced doc: {events:?}");
+    let events = recorded(&f, &sid);
+    assert_eq!(events.len(), 3, "one entry per surfaced doc: {events:?}");
     for ev in &events {
         assert_eq!(ev["source"], "context_prime_session_start");
     }
@@ -236,9 +223,9 @@ fn cyclic_includes_terminate_at_depth_cap() {
         );
     }
 
-    // Each path appears exactly once in the log — no duplicate events
-    // from re-traversal.
-    let events = read_events(&home, &sid);
+    // Each path is recorded exactly once — re-traversal adds nothing.
+    let events = recorded(&f, &sid);
+    assert_eq!(events.len(), 4, "{events:?}");
     let event_paths: Vec<String> = events
         .iter()
         .map(|e| e["visible_as"].as_str().unwrap().to_string())
@@ -313,7 +300,7 @@ fn project_memory_file_is_not_mirrored() {
         "no MEMORY.md path may appear in mirrored set: {mirrored_paths:?}"
     );
 
-    let events = read_events(&home, &sid);
+    let events = recorded(&f, &sid);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["source"], "context_prime_post_compact");
     let event_paths: Vec<String> = events
@@ -322,7 +309,7 @@ fn project_memory_file_is_not_mirrored() {
         .collect();
     assert!(
         !event_paths.iter().any(|p| p.contains("MEMORY.md")),
-        "no MEMORY.md path may be recorded in the session log: {event_paths:?}"
+        "no MEMORY.md path may be recorded in the session record: {event_paths:?}"
     );
 }
 
@@ -357,8 +344,8 @@ fn agents_md_in_project_root_is_mirrored_with_agents_kind() {
         "AGENTS.md must carry its own kind, not be collapsed into claude_md: {v}"
     );
 
-    let events = read_events(&home, &sid);
-    assert_eq!(events.len(), 1, "one event per surfaced doc: {events:?}");
+    let events = recorded(&f, &sid);
+    assert_eq!(events.len(), 1, "one entry per surfaced doc: {events:?}");
     assert_eq!(events[0]["source"], "context_prime_session_start");
 }
 
@@ -546,8 +533,8 @@ fn unreadable_context_file_keeps_its_facts() {
     f.trace(&["info", "locked.py", "--json"]).ok();
 
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    let recorded = f.trace(&["context", "locked.py"]);
-    let unrecorded = f.trace(&["context", "locked.py", "--no-record"]);
+    let recorded = f.trace_env(&["context", "locked.py"], &[("AGENT_SESSION_ID", "unreadable-recorded")]);
+    let unrecorded = f.trace_env(&["context", "locked.py", "--no-record"], &[("AGENT_SESSION_ID", "unreadable-unrecorded")]);
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
 
     for run in [recorded, unrecorded] {
@@ -558,8 +545,8 @@ fn unreadable_context_file_keeps_its_facts() {
             run.stdout
         );
         assert!(
-            run.stdout.contains("docs_not_loaded: [Claude.md]"),
-            "unreadable files still name their unloaded docs: {}",
+            run.stdout.contains("\n## Claude.md\n"),
+            "unreadable files still bring the docs they reach: {}",
             run.stdout
         );
         assert!(

@@ -1,56 +1,58 @@
 # trace Hooks
 
-Use this Reference when diagnosing the tracer mod's Hooks, docs injection, identity propagation, or session logs.
+Use this Reference when diagnosing tracer's Hooks, docs injection, identity propagation, or session records.
 
 ## 1. Identify the Hook surface
 
-### The Hooks are the tracer mod
-The tracer mod registers its Hooks through cmod in `hooks/register.ts`, and `src/mod.ts` wires each event to its handler. Every handler runs `trace` and adds its output to the Agent's context.
+### Every Hook is `trace hook <event>`
+`trace hook <event> --harness claude|codex --deadline-ms <n>` reads the Hook's input as JSON on stdin and prints its answer as JSON on stdout. Everything tracer does on a Hook event lives in it, for every Harness.
 
-- Each handler passes `--budget 10000`, because Claude Code saves a longer hook message to a file and shows the Agent its path and a 2,000-character preview.
-- A handler that cannot run `trace` adds nothing, so the session goes on without tracer's context.
+- The tracer mod is a pass-through: `src/mod.ts` runs `trace hook` for each event and returns its answer. `--tracer-only` turns on the refusal.
+- Codex wires one line per event to the same command, with `--harness codex`.
+- An answer fits 10,000 characters, because Claude Code saves a longer hook message to a file and shows the Agent its path and a 2,000-character preview.
+- Past `--deadline-ms` the Harness throws the answer away, so `trace hook` ends itself there and records nothing as shown.
+- A Hook that cannot run `trace` adds nothing on a tool call, so the call goes on. On every other event cmod logs the failure.
 
 ## 2. Match the Hook to the event
 
-### SessionStart loads the repository primer
-- Inside a git work tree it runs `trace context` and adds the primer.- `clear` resets the record first with `trace docs reset`.
-- Every SessionStart records the docs Claude Code loads at session start, which it puts back after a compaction without reporting them: `trace docs prime` for the `Claude.md` chain, and `trace docs <cwd> --json` for the working directory's docs.
+### SessionStart records the start docs and offers the primer
+- It records the docs the Harness loaded at start. Claude Code loads its user-global doc, the doc chain from the repository root to the working folder, and every rule file with no `paths:`. Codex loads its own discovery: `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`, then per folder the first of `AGENTS.override.md`, `AGENTS.md`, and the config's `project_doc_fallback_filenames`, within `project_doc_max_bytes`.
+- It offers the primer once per context: a resume that holds it gets nothing, and a repository that changed gets only the sections that changed.
+- `clear` forgets the record first. `compact` sends again the user rules the compaction dropped.
+- On Codex it also sends the working folder's docs and rules Codex never loads itself.
 
-### InstructionsLoaded and PreCompact mirror Claude Code's own doc loads
-- `InstructionsLoaded` runs `trace docs prime <file>`, so every doc Claude Code loads while the session runs is recorded as loaded.
-- `PreCompact` resets the record with `trace docs reset`, because a compaction drops the docs from context.
+### PreCompact forgets the record
+A compaction drops what the Agent held. The user-global rule files with `paths:` it had loaded are kept to send again at the next SessionStart `compact`, because Claude Code never reloads them.
 
-### PreToolUse on Read, Edit, Write, Grep, and Glob attaches facts
-One `trace` call per tool call.
+### SubagentStart and InstructionsLoaded record what the Harness loaded
+- `SubagentStart` records the start docs under the Subagent's agent id.
+- `InstructionsLoaded` records each doc Claude Code loads, under the agent id in the input.
 
-- Read runs `trace context <file>` with the Read's offset and limit.
-- Edit and Write add `--no-record`, and Edit reads only the lines its `old_string` replaces.
-- Grep runs `trace grep` with the native Grep's pattern, `-i`, `glob`, `type`, and `multiline`, so it names the same files.
-- Glob runs `trace find` with the same pattern and path.
-- A failed call on an existing file adds `[trace context unavailable: <reason>]` under its path.
+### PreToolUse on a shell command names the Subagent and refuses raw reads
+- Inside a Subagent it writes `--agent <agent_id>` after each `trace` program word through `updatedInput`, because the Subagent's shell carries no agent id. `cli/src/shell.rs` reads the command's structure, so a `trace` inside a quoted argument stays text.
+- With `--tracer-only`, a command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused, and so is a `trace` command piped into a filter such as `head`, `grep`, `wc`, or `jq`. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
 
-### PreToolUse on Bash sends the docs a trace command reaches
-- Before a `trace` subcommand that takes paths, it runs `trace docs <paths> --source tracer_project_docs --triggering-tool Bash --triggering-command <cmd>`.
-- The paths are every argument of the command that exists as a path, else the working directory; a `trace read` passes its files as `--skip`, because the read prints them. A `trace -C <dir>` call resolves its paths from `<dir>`.
-- It adds the docs not yet loaded as Markdown, a doc too long for the message cut at a whole line and continued on the next trace command.
-- Inside a Subagent it writes `--agent <agent_id>` into each `trace` call through `updatedInput`, because the Subagent's shell carries no agent id.
+### PostToolUse adds the context around what a tool returned or wrote
+- Read: the file's facts, its declaration rows, and the calls in the lines read, once per context. The lines read are recorded as seen. A Read refused for its size still gets the context, with nothing seen.
+- Grep: each matching file's facts and its matches under their declarations. In `content` mode, whose lines the Grep printed, only the declarations.
+- Glob: each returned file's facts.
+- Edit, MultiEdit, Write, NotebookEdit, and Codex's `apply_patch`: the Agent's own edit. Its lines are seen and its rows recorded as shown, so nothing it wrote comes back. Facts the edit changed print, and so do the callers of each function it changed.
+- Codex loads no docs of its own, so a file its `apply_patch`, Read, or `cat`-style shell read reaches also gets its docs.
+- Claude Code loads a file's docs itself when it reads it, so `trace hook` never sends docs on a Claude Code Read.
 
-### PreToolUse on Bash refuses raw reads when the person turned tracerOnly on
-With the `tracerOnly` setting on, a Bash command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused, and so is a `trace` command piped into a filter such as `head`, `grep`, `wc`, or `jq`. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
-
-### SubagentStop archives the stopped Subagent's log
-It runs `trace docs archive`, which moves `<repo>/.tracer-cache/sessions/<sid>/<aid>/` into `<repo>/.tracer-cache/sessions/<sid>/archived/<aid>/`. Trace reads fall back to the archived directory, and a resumed Subagent's first write takes it back.
+### SubagentStop has no handler
+Each Agent's record is keyed by its own agent id, so a resumed Subagent finds it where it left it.
 
 ## 3. Preserve identity propagation
 
-### Hooks pass identity on the subprocess environment
-- Every handler runs `trace` with `AGENT_SESSION_ID` set to the session id and, inside a Subagent, `TRACER_AGENT_ID` set to its agent id.
-- Every handler runs `trace` from the event's `cwd`, so the session log lands in the event's repository. An Agent's `trace -C <dir>` call writes the same log, because `-C` keeps the session log in the directory the call started in.
+### `trace hook` takes identity from the Hook input
+- The input's `session_id` names the session, and its `agent_id` names the Subagent.
+- A session's records live at `$TMPDIR/tracer-<uid>/sessions/<session>/`, outside every repository, so every call in the session writes the same record whatever its `cwd` or `-C`.
 
 ### `AGENT_SESSION_ID` is the Harness-neutral carrier
-Trace resolves `AGENT_SESSION_ID` first for the session log, so the same binary serves Claude Code, Codex, and any other Harness that sets it.
+Outside a Hook, `trace` resolves `AGENT_SESSION_ID` first for the session record, so the same binary serves Claude Code, Codex, and any other Harness that sets it.
 
-### Missing session id makes the log a no-op
+### Missing session id records nothing
 Without a session id, docs dedupe and read coverage cannot work.
 
 ## 4. Read the environment variables
@@ -59,10 +61,4 @@ Without a session id, docs dedupe and read coverage cannot work.
 `trace` resolves `AGENT_SESSION_ID`, then `CODEX_THREAD_ID`, then `CLAUDE_CODE_SESSION_ID`.
 
 ### Agent identity defaults to root
-`TRACER_AGENT_ID` identifies the Agent within the session and defaults to `root`.
-
-### Trigger variables stamp log events
-`TRACER_TRIGGERING_TOOL` and `TRACER_TRIGGERING_COMMAND` are written on log events. `trace docs` sets them from `--triggering-tool` and `--triggering-command`.
-
-### The complexity backend variable is explicit
-`TRACER_CCN_BACKEND` selects the complexity backend; the AST tree-sitter walker is the only supported backend.
+`--agent`, else `TRACER_AGENT_ID`, identifies the Agent within the session, and it defaults to `root`.

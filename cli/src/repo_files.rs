@@ -215,7 +215,7 @@ pub(crate) fn stamped_files_uncached(repo_root: &Path) -> Option<TrackedFiles> {
         discovered: RefCell::new(None),
         failed: Cell::new(false),
     };
-    let stored = crate::cache::index(&index, repo_root).filter(|_| !index.failed.get())?;
+    let stored = crate::cache::index(&index, repo_root).ready().filter(|_| !index.failed.get())?;
     Some(
         index
             .discovered
@@ -246,10 +246,13 @@ impl crate::cache::Index for ListingIndex<'_> {
         (!stored.is_some_and(|stored| listing_is_fresh(stored, self.repo_root))).then_some(())
     }
 
-    fn apply(&self, _stored: Option<StoredTrackedFiles>, _change: ()) -> StoredTrackedFiles {
+    /// The tree changed, so this is also when the stale schemas and the
+    /// leftovers of killed calls are swept.
+    fn apply(&self, _stored: Option<StoredTrackedFiles>, _change: ()) -> Option<StoredTrackedFiles> {
+        crate::cache::sweep(self.repo_root);
         let Some(listed) = discover_files(self.repo_root) else {
             self.failed.set(true);
-            return StoredTrackedFiles::default();
+            return Some(StoredTrackedFiles::default());
         };
         let (directories, ignored) = watched_paths(self.repo_root, &listed.paths);
         let stored = StoredTrackedFiles {
@@ -260,7 +263,7 @@ impl crate::cache::Index for ListingIndex<'_> {
             index: crate::cache::git_dir(self.repo_root).and_then(|git_dir| stamp(&git_dir.join("index"))),
         };
         self.discovered.replace(Some(listed));
-        stored
+        Some(stored)
     }
 
     fn complete(&self, _stored: &StoredTrackedFiles) -> bool {

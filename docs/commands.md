@@ -24,6 +24,7 @@ Every path argument takes several paths, and a directory names the files under i
 | `trace list <dir> [--recent] [--limit N]` | One directory level from the disk, ignored files included, with size, code, and git columns. |
 | `trace tree <path>` | The file tree with each file's complexity rank. |
 | `trace info <paths> [--brief]` | A file's or directory's structure, complexity, importers, and imports. |
+| `trace api <paths> [--visibility public\|restricted\|all] [--imported] [--depth N] [-g <glob>]` | The API of files and folders: each file's purpose, then every declaration and re-export the visibility reaches, each header whole. |
 | `trace structure <paths>` | Every declaration of each file: classes, functions, properties, imports, exports. |
 
 ## Search
@@ -74,7 +75,7 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 
 ## Project docs
 
-`trace docs` serves the `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/` files that govern a path, and records what it sent, so a doc reaches an agent's context once.
+`trace docs` serves the `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/` files that govern a path, and records what it sent, so a doc reaches an agent's context once. In a session, every command that takes paths also prints those docs after its answer, in what the answer leaves of `--budget`, at most 10,000 characters, and names the rest under the `trace docs` command that sends them. `--json` carries no docs.
 
 | Command | Answers |
 |---|---|
@@ -83,14 +84,20 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 | `trace docs status [<path>]` | What this context has loaded, and from where. |
 | `trace docs prime [<files>]` | Records docs the harness loaded itself, so tracer never sends them. |
 | `trace docs reset` | Forgets what this context loaded, after a compaction or `/clear`. |
-| `trace docs archive` | Moves a stopped subagent's record under `archived/`. A resumed subagent takes it back. |
+| `trace docs archive` | Does nothing: each subagent's record stays under its own id, where a resume finds it. |
+
+## Hooks
+
+| Command | Answers |
+|---|---|
+| `trace hook <event> --harness claude\|codex --deadline-ms <n> [--tracer-only]` | Everything tracer does on a harness's hook event. It reads the hook's input as JSON on stdin and prints the hook's answer as JSON on stdout: extra context, a rewritten tool input, or a refusal. [Claude Code](claude-code.md) runs it through the tracer mod, and Codex runs it from one hook line per event. |
 
 ## Install and cache
 
 | Command | Answers |
 |---|---|
 | `trace doctor` | Checks `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`, and prints the install command for each one missing. |
-| `trace cache build [<path>]` | Builds the per-file facts and the relations index ahead of the first query. |
+| `trace cache build [<path>]` | Builds the per-file facts, the relations index, and git activity ahead of the first query. |
 | `trace cache stats` | The cache's entries and size. |
 | `trace cache clear [--all]` | Empties the per-file cache, or with `--all` the whole `.tracer-cache/`. |
 

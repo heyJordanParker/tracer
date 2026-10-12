@@ -107,7 +107,7 @@ fn is_universal_ctags() -> bool {
     if which("ctags").is_none() {
         return false;
     }
-    match Command::new("ctags").arg("--version").output() {
+    match crate::process::output(Command::new("ctags").arg("--version")) {
         Ok(out) => String::from_utf8_lossy(&out.stdout).contains("Universal Ctags"),
         Err(_) => false,
     }
@@ -155,7 +155,7 @@ pub fn run() -> Result<()> {
             println!("  \u{2717} {name}");
             println!("    install: {}", instruction_for(entry, platform));
         }
-        std::process::exit(1);
+        return Err(crate::process::fail(1, ""));
     }
     println!("All required binaries installed.");
     Ok(())

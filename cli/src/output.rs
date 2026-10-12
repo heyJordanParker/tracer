@@ -72,7 +72,7 @@ pub fn set_directory(dir: String) {
 /// every follow-up command an output names.
 pub fn trace_command() -> String {
     match DIRECTORY.get() {
-        Some(dir) => format!("trace -C {}", shell_word(dir)),
+        Some(dir) => format!("trace -C {}", crate::shell::quote(dir)),
         None => "trace".to_string(),
     }
 }
@@ -135,19 +135,30 @@ pub fn fit(entries: &[Entry], fixed: usize) -> (Vec<(usize, &str)>, usize) {
     (chosen, shortened)
 }
 
+/// A fitted listing: its lines, how many entries were shortened, and the
+/// level each entry printed at, in input order. An entry folded into its
+/// directory's line printed below every level it has.
+pub struct Fitted {
+    pub texts: Vec<String>,
+    pub shortened: usize,
+    pub levels: Vec<usize>,
+}
+
 /// `fit` for a listing with one entry per path, in the same order; a path
 /// ending in `/` is a directory. When even every bare path overruns the
 /// budget, the names go one line per directory, `dir/: a.php, b.php`, past
 /// that each directory with its counts, so the listing still says where every
 /// entry is, and past that the first directories with their counts while the
 /// budget holds, then how many directories are left.
-pub fn fit_listing(entries: &[Entry], paths: &[&str], fixed: usize) -> (Vec<String>, usize) {
+pub fn fit_listing(entries: &[Entry], paths: &[&str], fixed: usize) -> Fitted {
     let (chosen, shortened) = fit(entries, fixed);
+    let levels: Vec<usize> = chosen.iter().map(|(level, _)| *level).collect();
     let size = |lines: &[String]| fixed + lines.iter().map(|line| width(line) + 1).sum::<usize>();
     let texts: Vec<String> = chosen.into_iter().map(|(_, text)| text.to_string()).collect();
     let Some(budget) = budget().filter(|&budget| size(&texts) > budget) else {
-        return (texts, shortened);
+        return Fitted { texts, shortened, levels };
     };
+    let folded = |texts: Vec<String>| Fitted { texts, shortened: entries.len(), levels: vec![usize::MAX; entries.len()] };
     let mut directories: Vec<(&str, Vec<&str>)> = Vec::new();
     let mut at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for path in paths {
@@ -166,7 +177,7 @@ pub fn fit_listing(entries: &[Entry], paths: &[&str], fixed: usize) -> (Vec<Stri
         .map(|(directory, names)| format!("{directory}/: {}", names.join(", ")))
         .collect();
     if size(&names) <= budget {
-        return (names, entries.len());
+        return folded(names);
     }
     let counts: Vec<String> = directories
         .iter()
@@ -181,7 +192,7 @@ pub fn fit_listing(entries: &[Entry], paths: &[&str], fixed: usize) -> (Vec<Stri
         })
         .collect();
     if size(&counts) <= budget {
-        return (counts, entries.len());
+        return folded(counts);
     }
     let more = |left: usize| format!("… {left} more {}", if left == 1 { "directory" } else { "directories" });
     let mut used = fixed + width(&more(counts.len())) + 1;
@@ -194,7 +205,7 @@ pub fn fit_listing(entries: &[Entry], paths: &[&str], fixed: usize) -> (Vec<Stri
         .cloned()
         .collect();
     kept.push(more(counts.len() - kept.len()));
-    (kept, entries.len())
+    folded(kept)
 }
 
 /// `n` and its noun, singular for one.
@@ -223,8 +234,20 @@ pub fn not_declared(symbol: &str, repo_root: &std::path::Path) -> String {
     )
 }
 
+static COMMAND: OnceLock<String> = OnceLock::new();
+
+/// Name the `trace` command that answers this call whole, for a call the
+/// agent did not type: `trace hook` names the command for the tool it
+/// enriches.
+pub fn set_command(command: String) {
+    let _ = COMMAND.set(command);
+}
+
 /// This invocation as a shell command, without its own `--budget`.
 pub fn this_command() -> String {
+    if let Some(command) = COMMAND.get() {
+        return command.clone();
+    }
     let mut words = vec!["trace".to_string()];
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -235,23 +258,9 @@ pub fn this_command() -> String {
         if argument.starts_with("--budget=") {
             continue;
         }
-        words.push(shell_word(&argument));
+        words.push(crate::shell::quote(&argument));
     }
     words.join(" ")
-}
-
-/// `word` as one shell word: bare when it holds only safe characters, else
-/// single-quoted.
-fn shell_word(word: &str) -> String {
-    let plain = !word.is_empty()
-        && word
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@,+%".contains(c));
-    if plain {
-        word.to_string()
-    } else {
-        format!("'{}'", word.replace('\'', r"'\''"))
-    }
 }
 
 /// The one document shape. Every `--json` result carries the same four
@@ -284,14 +293,25 @@ pub fn guard(as_json: bool, filter: Option<&str>) -> Result<()> {
 /// Top-level lifecycle for a command that emits its own document: validate
 /// the `--filter`/`--json` combination, then run the command with the sink
 /// it emits through. The guard runs first, so a misuse fails fast with no
-/// stray output.
+/// stray output. A JSON document is whole, so it waits for every index;
+/// text output ends with the notice of an index part the command left out.
 pub fn run_streamed(
     as_json: bool,
     filter: Option<&str>,
     command: impl FnOnce(&Sink) -> Result<()>,
 ) -> Result<()> {
     guard(as_json, filter)?;
-    command(&Sink { as_json, filter })
+    if as_json {
+        crate::process::whole();
+    }
+    command(&Sink { as_json, filter })?;
+    if !as_json {
+        let mut delivery = crate::session::Delivery::default();
+        print!("{}", crate::relations::index_state(&mut delivery));
+        std::io::stdout().flush()?;
+        delivery.commit();
+    }
+    Ok(())
 }
 
 /// The lifecycle for a command whose result is one `Value`. `Value` is

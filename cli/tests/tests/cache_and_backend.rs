@@ -16,13 +16,13 @@ use tracer_cli_tests::{
 };
 
 /// The published on-disk cache key (tracer Claude.md + cache.rs module
-/// header): sha256("v{SCHEMA}|ccn:ast\0" + file_bytes + "\0" + relpath),
+/// header): sha256("v{SCHEMA}\0" + file_bytes + "\0" + relpath),
 /// hex-encoded. Reconstructed here from the documented formula — not from
 /// tracer internals — so the schema-version-invalidation test can plant an
 /// entry under one schema's key and prove it is unreachable under another.
 fn file_cache_key(schema_version: u32, file_bytes: &[u8], relpath: &str) -> String {
     let mut h = Sha256::new();
-    h.update(format!("v{schema_version}|ccn:ast\0").as_bytes());
+    h.update(format!("v{schema_version}\0").as_bytes());
     h.update(file_bytes);
     h.update(b"\0");
     h.update(relpath.as_bytes());
@@ -520,7 +520,7 @@ fn replacing_the_backend_outside_the_repository_invalidates_its_snapshot() {
     let output = |count: i64| {
         format!(
             r#"#!/bin/sh
-printf '%s' '[{{"Name":"Python","Count":1,"Code":1,"Complexity":{count},"Files":[{{"Location":"{}","Language":"Python","Code":1,"Complexity":{count}}}]}}]'
+printf '%s' '[{{"Name":"Python","Count":1,"Code":1,"Complexity":{count},"Files":[{{"Location":"{}","Language":"Python","Code":1,"Lines":1,"Complexity":{count}}}]}}]'
 "#,
             f.root.join("u.py").display()
         )
@@ -1067,7 +1067,7 @@ fn cache_invalidates_on_content_change() {
 /// share one `.tracer-cache/`, so clearing derived facts must never take an
 /// agent's session log with it — only `--all` does that.
 #[test]
-fn cache_clear_leaves_the_session_log() {
+fn cache_clear_leaves_the_session_record() {
     // The outer process gives this test hostile session identity just as an
     // Agent harness does. Re-exec keeps that mutation out of this parallel
     // Rust test process; the inner run must isolate it before fixture values
@@ -1076,7 +1076,7 @@ fn cache_clear_leaves_the_session_log() {
         let mut child = Command::new(std::env::current_exe().expect("test executable path"));
         child
             .arg("--exact")
-            .arg("cache_clear_leaves_the_session_log")
+            .arg("cache_clear_leaves_the_session_record")
             .env("TRACER_CACHE_CLEAR_ISOLATION_CHILD", "1");
         for key in [
             "AGENT_SESSION_ID",
@@ -1110,24 +1110,24 @@ fn cache_clear_leaves_the_session_log() {
         ],
     );
     session.ok();
-    let sessions_dir = f.root.join(".tracer-cache/sessions/cache-clear-scope/root");
-    assert!(
-        sessions_dir.is_dir(),
-        "the fixture wrote no session log to protect"
-    );
+    let before = f
+        .record("cache-clear-scope", "root")
+        .expect("the fixture wrote no session record to protect");
 
-    let r = f.trace(&["cache", "clear"]);
-    r.ok();
-    let v = f.trace(&["cache", "stats", "--json"]).json();
-    assert_eq!(
-        v["results"]["file"]["entries"].as_i64().unwrap(),
-        0,
-        "file namespace not cleared: {v}"
-    );
-    assert!(
-        sessions_dir.is_dir(),
-        "a scoped clear of file/ removed the session log too"
-    );
+    for clear in [&["cache", "clear"][..], &["cache", "clear", "--all"][..]] {
+        f.trace(clear).ok();
+        let v = f.trace(&["cache", "stats", "--json"]).json();
+        assert_eq!(
+            v["results"]["file"]["entries"].as_i64().unwrap(),
+            0,
+            "file namespace not cleared: {v}"
+        );
+        assert_eq!(
+            f.record("cache-clear-scope", "root"),
+            Some(before.clone()),
+            "{clear:?} removed the session record, which is not cache"
+        );
+    }
 }
 
 #[test]
@@ -1144,7 +1144,7 @@ fn cache_clear_all_removes_everything() {
     assert!(r.stdout.contains("Removed"), "{}", r.stdout);
     assert!(
         !f.root.join(".tracer-cache").exists(),
-        "--all must remove the whole cache tree, sessions included"
+        "--all must remove the whole cache tree"
     );
     let v = f.trace(&["cache", "stats", "--json"]).view();
     assert_eq!(v["file"]["entries"].as_i64().unwrap(), 0);
@@ -1377,7 +1377,7 @@ fn schema_version_bump_makes_prior_entries_unreachable() {
     // Poison the current-schema entry and defeat the mtime fast-path so the
     // content-hash (schema-versioned) key path is what answers.
     fs::write(&cur_path, serde_json::to_string(&poison_entry).unwrap()).unwrap();
-    fs::remove_file(entry_dir.join("mtime_index_v2__ast.json")).unwrap();
+    fs::remove_file(entry_dir.join("mtime_index_v2.json")).unwrap();
     assert_eq!(
         grep_ccn(&f),
         999,
@@ -1416,7 +1416,7 @@ fn schema_version_bump_makes_prior_entries_unreachable() {
     // Remove the legitimate current-schema entry and the mtime index, then
     // plant the SAME poison under the *previous* schema version's key.
     fs::remove_file(g_entry_dir.join(format!("{cur_key}.json"))).unwrap();
-    fs::remove_file(g_entry_dir.join("mtime_index_v2__ast.json")).unwrap();
+    fs::remove_file(g_entry_dir.join("mtime_index_v2.json")).unwrap();
     let old_key = file_cache_key(PUBLISHED_SCHEMA_VERSION - 1, bytes, "u.py");
     fs::write(
         g_entry_dir.join(format!("{old_key}.json")),
@@ -1531,7 +1531,7 @@ fn a_file_spelled_differently_on_disk_settles_in_the_index() {
 
     let warm = f.trace_env(&["grep", "zzqq_nomatch", "."], &[("TRACE_TIMING", "1")]);
     warm.ok();
-    assert!(!warm.stderr.contains("timing lock maintain"), "a settled call took the lock:\n{}", warm.stderr);
+    assert!(!warm.stderr.contains("timing lock relations_edges"), "a settled call took the lock:\n{}", warm.stderr);
 }
 
 /// The current schema's cache entries whose key starts with `prefix`.

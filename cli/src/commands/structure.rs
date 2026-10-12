@@ -1,12 +1,11 @@
 //! `trace structure` — the cached declaration record as source rows, for
 //! every file the path arguments name (a directory names the files under it).
 
-use super::session_log::ShownRecord;
+use crate::session::Delivery;
 use crate::summary::Facts;
 use crate::{cache, file_facts, relations, surface};
 use anyhow::Result;
 use serde_json::{json, Map, Value};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 /// One file's structure: its facts, its rows, and its imports and exports.
@@ -28,14 +27,14 @@ fn file_structure(path: &Path) -> FileStructure {
     let facts = file_facts::get(&path, &repo_root);
     let shown_facts = facts
         .as_ref()
-        .map(|facts| Facts::of(facts, relations::get(&repo_root).module_counts(&relative).as_ref()));
+        .map(|facts| Facts::of(facts, relations::ready(&repo_root).and_then(|index| index.module_counts(&relative)).as_ref()));
     let (language, imports, exports, rows) = facts
         .as_ref()
         .and_then(|facts| facts.extraction.as_ref().map(|extraction| {
             (
                 extraction.language.clone(),
                 extraction.imports.iter().map(|import| json!({"module": import.module, "symbol": import.symbol, "line": import.line})).collect::<Vec<_>>(),
-                extraction.exports.iter().map(|export| json!({"name": export.name, "kind": export.kind, "line": export.line})).collect::<Vec<_>>(),
+                extraction.exports().map(|export| json!({"name": export.name, "kind": export.kind, "line": export.line})).collect::<Vec<_>>(),
                 surface::rows(facts, None),
             )
         }))
@@ -142,7 +141,7 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
             let headline = structure.shown_facts.as_ref().map(|facts| facts.headline()).unwrap_or_default();
             let line = format!("{}  {headline}\n", structure.relative);
             let within = share.map(|share| share.saturating_sub(line.len()));
-            let cut = surface::render_rows(&structure.rows, &structure.relative, None, within).text;
+            let cut = surface::render_rows(&structure.rows, &structure.relative, None, within, surface::Fit::Names).text;
             crate::output::Entry {
                 rank: structure.facts.get("imported_by").and_then(Value::as_i64).unwrap_or(0),
                 levels: vec![
@@ -176,29 +175,28 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
         .collect();
     let (chosen, _) = crate::output::fit(&offered, closing);
     let shortened = chosen.iter().filter(|(level, _)| start + level > 0).count();
+    let mut delivery = Delivery::default();
+    let mut answer = String::new();
     for (index, (level, text)) in chosen.into_iter().enumerate() {
         let structure = &structures[index];
         match start + level {
             0 => {
-                let surface = &wholes[index];
-                let mut record = ShownRecord::default();
-                let front_matter = crate::summary::front_matter_once(
+                answer.push_str(&crate::summary::front_matter_once(
                     None,
                     &structure.path,
                     structure.shown_facts.as_ref(),
                     &front_matters[index],
-                    &mut record,
+                    &mut delivery,
                     true,
-                );
-                print!("{front_matter}{surface}");
-                std::io::stdout().flush()?;
-                record.save();
+                ));
+                answer.push_str(&wholes[index]);
             }
-            _ => print!("{text}"),
+            _ => answer.push_str(text),
         }
     }
     if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, entries.len(), "files"));
+        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
     }
+    super::docs::print_with_docs(&answer, paths, "trace_structure", delivery)?;
     Ok(document)
 }

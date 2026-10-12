@@ -6,16 +6,15 @@
 //!   - response includes `docs` (new) and may include `already_loaded`
 //!     (skipped with per-entry source) so the hook can surface both slices
 //!     to the agent
-//!   - emissions land in the log atomically with the response,
-//!     under the supplied `--source` value
-//!   - `--triggering-tool` and `--triggering-command` flags land on the
-//!     log event so downstream auditing has the original
-//!     tool + command
+//!   - the docs sent are recorded with the response, under the supplied
+//!     `--source` value
+//!   - `--triggering-tool` and `--triggering-command` are echoed in the
+//!     query and recorded nowhere
 //!   - second invocation surfaces nothing new (already_loaded carries the
 //!     full ancestor set; `docs` is empty; `doc_count` is 0)
 //!   - the `load` sub-verb and path-mode share one response shape
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,23 +32,11 @@ fn fresh_session_id(tag: &str) -> String {
     format!("trace-docs-load-{tag}-{nanos}-{seq}")
 }
 
-fn log_dir(repo_root: &Path, session_id: &str, agent_id: &str) -> PathBuf {
-    repo_root
-        .join(".tracer-cache")
-        .join("sessions")
-        .join(session_id)
-        .join(agent_id)
-}
-
-fn read_events_jsonl(repo_root: &Path, session_id: &str, agent_id: &str) -> Vec<serde_json::Value> {
-    let path = log_dir(repo_root, session_id, agent_id).join("events.jsonl");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return vec![];
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("events.jsonl line not valid JSON"))
-        .collect()
+/// Every file the agent's record holds.
+fn recorded(f: &Fixture, session_id: &str, agent_id: &str) -> Vec<serde_json::Value> {
+    f.record(session_id, agent_id)
+        .and_then(|record| record["files"].as_object().map(|files| files.values().cloned().collect()))
+        .unwrap_or_default()
 }
 
 fn docs_repo() -> Fixture {
@@ -208,38 +195,29 @@ fn emissions_are_recorded_under_the_supplied_source() {
     )
     .ok();
 
-    let events = read_events_jsonl(&f.root, &sid, "root");
-    assert_eq!(
-        events.len(),
-        2,
-        "expected one event per surfaced doc, got: {events:?}"
-    );
-    for ev in &events {
+    let docs = recorded(&f, &sid, "root");
+    assert_eq!(docs.len(), 2, "expected one entry per surfaced doc, got: {docs:?}");
+    for doc in &docs {
         assert_eq!(
-            ev["source"].as_str().unwrap(),
+            doc["source"].as_str().unwrap(),
             "trace_inject_hook",
-            "log event must record the --source value verbatim: {ev}"
+            "the record must keep the --source value verbatim: {doc}"
         );
-        assert_eq!(ev["kind"].as_str().unwrap(), "doc_injection", "{ev}");
-        assert!(
-            ev["content_hash"].as_str().unwrap().starts_with("sha256:"),
-            "{ev}"
-        );
+        assert_eq!(doc["kind"].as_str().unwrap(), "doc_injection", "{doc}");
+        assert!(doc["hash"].as_str().unwrap().starts_with("sha256:"), "{doc}");
     }
 }
 
 #[test]
-fn triggering_tool_and_command_land_on_the_log_event() {
+fn triggering_flags_are_echoed_in_the_query_and_recorded_nowhere() {
     let f = docs_repo();
     let sid = fresh_session_id("trigger");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
-    f.trace_env(
+    let r = f.trace_env(
         &[
             "docs",
             "sub/util.py",
-            "--source",
-            "trace_inject_hook",
             "--triggering-tool",
             "Bash",
             "--triggering-command",
@@ -247,59 +225,31 @@ fn triggering_tool_and_command_land_on_the_log_event() {
             "--json",
         ],
         &env,
-    )
-    .ok();
-
-    let events = read_events_jsonl(&f.root, &sid, "root");
-    assert!(
-        !events.is_empty(),
-        "log must have at least one event after load"
     );
-    for ev in &events {
-        assert_eq!(
-            ev["triggering_tool"].as_str().unwrap(),
-            "Bash",
-            "log event must record --triggering-tool: {ev}"
-        );
-        assert_eq!(
-            ev["triggering_command"].as_str().unwrap(),
-            "trace info sub/util.py",
-            "log event must record --triggering-command: {ev}"
-        );
+    r.ok();
+    let v = r.view();
+    assert_eq!(v["triggering_tool"], "Bash", "{v}");
+    assert_eq!(v["triggering_command"], "trace info sub/util.py", "{v}");
+
+    let docs = recorded(&f, &sid, "root");
+    assert_eq!(docs.len(), 2, "{docs:?}");
+    for doc in &docs {
+        assert!(doc.get("triggering_tool").is_none(), "{doc}");
+        assert!(doc.get("triggering_command").is_none(), "{doc}");
     }
 }
 
 #[test]
-fn omitted_triggering_flags_record_no_triggering_metadata() {
+fn omitted_triggering_flags_echo_as_null() {
     let f = docs_repo();
     let sid = fresh_session_id("no-trigger");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
-    f.trace_env(
-        &[
-            "docs",
-            "sub/util.py",
-            "--source",
-            "trace_inject_hook",
-            "--json",
-        ],
-        &env,
-    )
-    .ok();
-
-    let events = read_events_jsonl(&f.root, &sid, "root");
-    for ev in &events {
-        // The schema field is `Option<String>` on the log;
-        // absent flag → null.
-        assert!(
-            ev["triggering_tool"].is_null(),
-            "absent --triggering-tool must serialize as null: {ev}"
-        );
-        assert!(
-            ev["triggering_command"].is_null(),
-            "absent --triggering-command must serialize as null: {ev}"
-        );
-    }
+    let r = f.trace_env(&["docs", "sub/util.py", "--json"], &env);
+    r.ok();
+    let v = r.view();
+    assert!(v["triggering_tool"].is_null(), "{v}");
+    assert!(v["triggering_command"].is_null(), "{v}");
 }
 
 // --- cross-source dedupe --------------------------------------------------
@@ -315,7 +265,7 @@ fn docs_loaded_by_path_mode_appear_in_already_loaded_with_path_mode_source() {
     let sid = fresh_session_id("cross-source");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
-    // Seed via path-mode → source `trace_docs` on the events.
+    // Seed via path-mode → source `trace_docs` in the record.
     f.trace_env(&["docs", "sub/util.py", "--json"], &env).ok();
 
     let r = f.trace_env(
@@ -408,12 +358,13 @@ fn default_source_when_flag_omitted() {
         "`trace docs` must default --source to `trace_docs`: {default_source}"
     );
 
-    let events = read_events_jsonl(&f.root, &sid, "root");
-    for ev in &events {
+    let docs = recorded(&f, &sid, "root");
+    assert_eq!(docs.len(), 2, "{docs:?}");
+    for doc in &docs {
         assert_eq!(
-            ev["source"].as_str().unwrap(),
+            doc["source"].as_str().unwrap(),
             default_source,
-            "log event source must match the response default: {ev}"
+            "the recorded source must match the response default: {doc}"
         );
     }
 }
