@@ -75,18 +75,18 @@ pub fn run(
     direction: Direction,
     symbol: Option<&str>,
     path: Option<&Path>,
-    depth: i64,
+    max_depth: i64,
     limit: i64,
     as_json: bool,
 ) -> Result<Value> {
     if let Some(p) = path {
-        return path_mode(direction, p, depth, limit, as_json);
+        return path_mode(direction, p, max_depth, limit, as_json);
     }
     let symbol = match symbol {
         Some(s) if !s.is_empty() => s,
         _ => return Err(crate::process::fail(2, "Error: pass a SYMBOL or --path <path>.")),
     };
-    symbol_mode(direction, symbol, depth, as_json)
+    symbol_mode(direction, symbol, max_depth, as_json)
 }
 
 /// One reached file as a row.
@@ -150,7 +150,7 @@ fn reached_row(
     })
 }
 
-fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) -> Result<Value> {
+fn symbol_mode(direction: Direction, symbol: &str, max_depth: i64, as_json: bool) -> Result<Value> {
     let here = Path::new(".");
     let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
     let index = relations::get(&repo_root);
@@ -207,7 +207,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
 
     let chains: Vec<Vec<relations::Reached>> = subjects
         .iter()
-        .map(|(_, _, _, file, _)| relations::reachable(file, depth, direction.reach(), &repo_root))
+        .map(|(_, _, _, file, _)| relations::reachable(file, max_depth, direction.reach(), &repo_root))
         .collect();
 
     // Both directions carry the same file state, so they answer with
@@ -260,7 +260,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
             subjects.iter().zip(chains.iter().zip(&symbols).zip(&declared))
         {
             let mut heading = format!(
-                "\n{label} [{kind}] @ {source_file}:{source_line}\n  {} (depth ≤ {depth}):",
+                "\n{label} [{kind}] @ {source_file}:{source_line}\n  {} (depth ≤ {max_depth}):",
                 direction.symbol_heading()
             );
             if chain.is_empty() {
@@ -292,7 +292,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
         .map(|s| s[rows_key].as_array().map(|a| a.len()).unwrap_or(0) as i64)
         .sum();
     Ok(crate::output::document(
-        json!({"symbol": symbol, "depth": depth, "mode": "symbol"}),
+        json!({"symbol": symbol, "max_depth": max_depth, "mode": "symbol"}),
         json!({"files": sections::facts_context(&file_facts_by_path)}),
         json!(symbols),
         json!({"symbols": symbols.len(), rows_key: total}),
@@ -302,7 +302,7 @@ fn symbol_mode(direction: Direction, symbol: &str, depth: i64, as_json: bool) ->
 fn path_mode(
     direction: Direction,
     path: &Path,
-    depth: i64,
+    max_depth: i64,
     limit: i64,
     as_json: bool,
 ) -> Result<Value> {
@@ -322,7 +322,7 @@ fn path_mode(
                 .map(|path| path.to_string_lossy().replace('\\', "/"))
         });
     let index = relations::get(&repo_root);
-    let ranked = relations::ranked_by_reach(&index, depth, limit.max(0) as usize, direction.reach(), scope.as_deref());
+    let ranked = relations::ranked_by_reach(&index, max_depth, limit.max(0) as usize, direction.reach(), scope.as_deref());
 
     let ranked_files: Vec<String> = ranked.iter().map(|r| r.file.clone()).collect();
     let facts = loaded(&ranked_files, &repo_root);
@@ -381,7 +381,7 @@ fn path_mode(
         json!({
             "path": path.to_string_lossy(),
             "limit": limit,
-            "depth": depth,
+            "max_depth": max_depth,
             "mode": "path",
         }),
         json!({"files": sections::facts_context(&file_facts_by_path)}),
@@ -396,7 +396,7 @@ fn path_mode(
             answer.push_str(&format!("(no files with {} found in this scope)\n", direction.rows_key()));
         } else {
             answer.push_str(&format!(
-                "Top {} {} nodes in {} (transitive depth ≤ {depth}):\n",
+                "Top {} {} nodes in {} (transitive depth ≤ {max_depth}):\n",
                 rows.len(),
                 direction.path_heading(),
                 path.to_string_lossy(),

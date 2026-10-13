@@ -88,15 +88,21 @@ impl Import {
     }
 }
 
-/// Who can reach a declaration, by its language's own rule. A row's value is
-/// its own declared visibility; `exported` applies its parents' too.
+/// Who can reach a declaration, by its language's own rule and its author's
+/// marks, narrowest first. A row's value is its own; `exported` applies its
+/// parents' too.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     /// Reachable only from its own file.
     FileLocal,
-    /// Reachable from other files, but not part of the public API.
-    Restricted,
+    /// Reachable from other files through a class's own rules, such as a
+    /// subclass, but never through its API: `protected`, and Ruby's
+    /// `private`.
+    Protected,
+    /// Reachable inside its module or package, or public in the language
+    /// but marked internal by its author.
+    Internal,
     /// The rule can't be read.
     #[default]
     Unknown,
@@ -174,11 +180,19 @@ pub struct Declaration {
 }
 
 /// Lines `first` through `last` of `source`, 1-based, without the
-/// indentation they share.
-pub fn source_lines(source: &[u8], first: i64, last: i64) -> String {
+/// indentation they share, found through `starts`, the file's `line_starts`.
+pub fn source_lines(source: &[u8], starts: &[usize], first: i64, last: i64) -> String {
     let mut builder = header::Builder::new(source);
-    builder.slice(line_bytes(source, first).start, line_bytes(source, last.max(first)).end);
+    builder.slice(line_bytes(source, starts, first).start, line_bytes(source, starts, last.max(first)).end);
     builder.finish()
+}
+
+/// The byte offset each line of `source` starts at, so a caller reading
+/// many lines finds each without scanning the lines before it.
+pub fn line_starts(source: &[u8]) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(source.iter().enumerate().filter(|(_, byte)| **byte == b'\n').map(|(at, _)| at + 1))
+        .collect()
 }
 
 /// `declarations` in source order, each with its parent: the nearest
@@ -199,11 +213,14 @@ pub fn nest(declarations: Vec<Declaration>, ranges: Vec<std::ops::Range<usize>>,
     paired.into_iter().map(|(declaration, _)| declaration).collect()
 }
 
-/// The byte range of 1-based `line` in `source`, without its newline.
-fn line_bytes(source: &[u8], line: i64) -> std::ops::Range<usize> {
-    let start = source.split_inclusive(|byte| *byte == b'\n').take(line.saturating_sub(1) as usize).map(<[u8]>::len).sum::<usize>();
-    let end = source[start..].iter().position(|byte| *byte == b'\n').map_or(source.len(), |at| start + at);
-    start..end
+/// The byte range of 1-based `line` in `source`, without its newline, and
+/// empty at the end of `source` for a line past its last.
+fn line_bytes(source: &[u8], starts: &[usize], line: i64) -> std::ops::Range<usize> {
+    let at = usize::try_from(line - 1).unwrap_or(0);
+    match starts.get(at) {
+        Some(&start) => start..starts.get(at + 1).map_or(source.len(), |next| next - 1),
+        None => source.len()..source.len(),
+    }
 }
 
 /// The lines of a file's leading comment its facts keep.
@@ -548,22 +565,176 @@ impl Extraction {
     }
 }
 
-/// Dispatch to the per-language extractor.
+/// Dispatch to the per-language extractor: a language with a tree-sitter
+/// extractor is parsed by the grammar `ccn::lang_for_path` names, and any
+/// other goes to `ctags`.
 pub fn extract(source: &[u8], path: &str) -> Extraction {
     let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_lowercase) else {
         return Extraction::Unsupported;
     };
-    Extraction::Extracted(match ext.as_str() {
-        "py" => python::extract(source, path),
-        "ts" | "js" | "tsx" | "jsx" => typescript::extract(source, path),
-        "php" => php::extract(source),
-        "rs" => rust::extract(source),
-        "go" => go::extract(source),
-        "rb" => ruby::extract(source),
-        "java" => java::extract(source),
-        "c" | "h" => c::extract(source, path),
-        _ => return ctags_extract(source, path, &ext),
+    if !supported_extensions().contains(&ext.as_str()) {
+        return ctags_extract(source, path, &ext);
+    }
+    let tree = crate::ccn::lang_for_path(path).and_then(|(_, language)| {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&language).ok()?;
+        parser.parse(source, None)
+    });
+    tree.and_then(|tree| extract_from_tree(&tree, source, path))
+        .map_or(Extraction::Unsupported, Extraction::Extracted)
+}
+
+/// The extraction of a file parsed once into `tree` by the grammar its
+/// complexity reads, for a language with an extractor of that grammar.
+pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8], path: &str) -> Option<ExtractionResult> {
+    let ext = Path::new(path).extension().and_then(|e| e.to_str())?.to_lowercase();
+    let result = match ext.as_str() {
+        "py" => python::extract_from_tree(tree, source, path),
+        "php" => php::extract_from_tree(tree, source),
+        "ts" | "js" | "tsx" | "jsx" => typescript::extract_from_tree(tree, source, path),
+        "rs" => rust::extract_from_tree(tree, source),
+        "go" => go::extract_from_tree(tree, source),
+        "rb" => ruby::extract_from_tree(tree, source),
+        "java" => java::extract_from_tree(tree, source),
+        "c" | "h" => c::extract_from_tree(tree, source, path),
+        _ => return None,
+    };
+    Some(marked(result, tree, source))
+}
+
+/// `result` with every declaration its author marks internal narrowed to
+/// `Visibility::Internal`, and with it each top-level row that takes a
+/// marked type's visibility without being its child. A mark never widens:
+/// a private member stays private.
+fn marked(mut result: ExtractionResult, tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionResult {
+    let text = String::from_utf8_lossy(source);
+    let mut marks = internal_mark().find_iter(&text).map(|found| found.start()).peekable();
+    if marks.peek().is_none() {
+        return result;
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut starts_marked = vec![false; lines.len()];
+    let mut start = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let end = start + line.len();
+        while marks.next_if(|&at| at <= end).is_some() {
+            starts_marked[index] = true;
+        }
+        start = end + 1;
+    }
+    // Whether the comment, attribute, and annotation lines directly above
+    // each line hold a mark.
+    let mut above = vec![false; lines.len()];
+    for index in 1..lines.len() {
+        let line = lines[index - 1].trim();
+        let annotates = is_comment_line(line) || line.starts_with("#[") || line.starts_with('@');
+        above[index] = annotates && (starts_marked[index - 1] || above[index - 1]);
+    }
+    // A mark that starts the line a declaration is named on comes before
+    // every declaration on that line, so it marks only the first.
+    let named_at = |declaration: &Declaration| usize::try_from(declaration.line - 1).ok().filter(|&at| at < lines.len());
+    let mut first_on: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (index, declaration) in result.declarations.iter().enumerate() {
+        let Some(at) = named_at(declaration).filter(|&at| starts_marked[at]) else { continue };
+        let line = lines[at];
+        let name = declaration.name.trim_start_matches(['$', '#']);
+        let word = |byte: Option<char>| byte.is_some_and(|byte| byte.is_alphanumeric() || byte == '_');
+        let column = line
+            .match_indices(name)
+            .map(|(column, _)| column)
+            .find(|&column| !word(line[..column].chars().next_back()) && !word(line[column + name.len()..].chars().next()))
+            .unwrap_or(usize::MAX);
+        let first = first_on.entry(at).or_insert((column, index));
+        if column < first.0 {
+            *first = (column, index);
+        }
+    }
+    let docstrings = match result.language.as_str() {
+        "python" => python::docstrings(tree, source),
+        _ => HashMap::new(),
+    };
+    let mut types = std::collections::HashSet::new();
+    let mut spans = Vec::new();
+    for (index, declaration) in result.declarations.iter_mut().enumerate() {
+        let Some(named) = named_at(declaration) else { continue };
+        let first = usize::try_from(declaration.header_line - 1).unwrap_or(0).min(named);
+        let author_marked = above[first]
+            || starts_marked[first..named].contains(&true)
+            || first_on.get(&named).is_some_and(|&(_, at)| at == index)
+            || docstrings.get(&declaration.line).is_some_and(|docstring| internal_mark().is_match(docstring));
+        if declaration.visibility > Visibility::Internal && author_marked {
+            declaration.visibility = Visibility::Internal;
+            spans.push(declaration.line + 1..=declaration.end_line);
+            if declaration.parent.is_none() && owner(declaration).is_none() {
+                types.insert(declaration.name.clone());
+            }
+        }
+    }
+    // What a marked declaration's source holds is internal with it, though a
+    // Rust inline `mod`'s items have no parent row to carry it, and so is
+    // every row that takes a marked type's visibility from outside it.
+    for declaration in &mut result.declarations {
+        let held = spans.iter().any(|span| span.contains(&declaration.line));
+        let owned = declaration.parent.is_none() && owner(declaration).is_some_and(|owner| types.contains(owner));
+        if declaration.visibility > Visibility::Internal && (held || owned) {
+            declaration.visibility = Visibility::Internal;
+        }
+    }
+    for import in &mut result.imports {
+        let at = usize::try_from(import.line - 1).unwrap_or(0).min(lines.len() - 1);
+        if import.visibility.is_some_and(|visibility| visibility > Visibility::Internal) && (above[at] || starts_marked[at]) {
+            import.visibility = Some(Visibility::Internal);
+        }
+    }
+    result
+}
+
+/// The type a top-level row takes its visibility from without being its
+/// child: a Rust `impl` block's self type, and a Go method's receiver.
+fn owner(declaration: &Declaration) -> Option<&str> {
+    match declaration.kind.as_str() {
+        "impl" => Some(impl_type(&declaration.name)),
+        _ => declaration.container.as_deref(),
+    }
+}
+
+/// The type a Rust `impl` block's name writes, without its path or generics.
+pub fn impl_type(name: &str) -> &str {
+    let base = name.split('<').next().unwrap_or(name).trim();
+    base.rsplit("::").next().unwrap_or(base)
+}
+
+/// An author's internal mark, at the start of a line: an attribute,
+/// annotation, or decorator named `Internal`, Rust's `#[doc(hidden)]`, or an
+/// `@internal` or `@api private` doc tag. A mark starts its line, after a
+/// comment's leader, a docstring's quotes, or other annotations, the way a
+/// doc tool reads a block tag, so prose that mentions one marks nothing, and
+/// a match never spans two lines.
+fn internal_mark() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(concat!(
+            r#"(?m)^[ \t]*(?:(?:/\*+|\*+|//+|#+|"""|''')[ \t]*)?(?:@[\w.]+(?:\([^)\n]*\))?[ \t]+)*"#,
+            r"(?:@(?:(?:\w+\.)*[Ii]nternal(?:[^\w.\n]|$)|api[ \t]+private\b)",
+            r"|#\[[ \t]*(?:[^\]\n]*,[ \t]*)?\\?(?:\w+\\)*Internal[ \t]*[\],(]",
+            r"|#\[[ \t]*doc[ \t]*\([ \t]*hidden[ \t]*\)[ \t]*\])",
+        ))
+        .expect("the internal mark is a valid pattern")
     })
+}
+
+/// Whether a trimmed source line is a comment line in one of the languages
+/// tracer reads: `//`, a `/* … */` block's lines, or `#` followed by a space,
+/// another `#`, or nothing, never a `#[` attribute or a `#include`. A line
+/// with code after its `*/` declares that code, so it is no comment line.
+fn is_comment_line(line: &str) -> bool {
+    let code_after = line.find("*/").is_some_and(|end| !line[end + 2..].trim().is_empty());
+    !code_after
+        && (line.starts_with("//")
+            || line.starts_with("/*")
+            || line.starts_with('*')
+            || (line.ends_with("*/") && !line.contains("/*"))
+            || line.strip_prefix('#').is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t', '#'])))
 }
 
 /// Names a `ctags` failure, with the file it failed on when there is one.
@@ -755,6 +926,7 @@ fn run_ctags(source: &[u8], extension: &str, language: &str, root: &Path) -> Res
 fn ctags_declarations(source: &[u8], language: &str, tags: &str) -> Option<ExtractionResult> {
     let mut declarations = Vec::new();
     let mut missing_ends = HashSet::new();
+    let starts = line_starts(source);
     for tag in tags.lines() {
         let tag: serde_json::Value = serde_json::from_str(tag).ok()?;
         let raw_kind = tag.get("kind")?.as_str()?;
@@ -771,11 +943,12 @@ fn ctags_declarations(source: &[u8], language: &str, tags: &str) -> Option<Extra
         if end.is_none() {
             missing_ends.insert((name.clone(), line));
         }
-        let header = source_lines(source, line, line).split('{').next().unwrap_or("").trim().to_string();
+        let header = source_lines(source, &starts, line, line).split('{').next().unwrap_or("").trim().to_string();
         let visibility = match tag.get("access").and_then(serde_json::Value::as_str) {
             Some("public") => Visibility::Public,
             Some("private") => Visibility::FileLocal,
-            Some(_) => Visibility::Restricted,
+            Some("protected") => Visibility::Protected,
+            Some(_) => Visibility::Internal,
             None if modifiers(&header, 0, &name).contains(&"private") => Visibility::FileLocal,
             None => Visibility::Unknown,
         };
@@ -796,7 +969,7 @@ fn ctags_declarations(source: &[u8], language: &str, tags: &str) -> Option<Extra
         });
     }
     declarations.sort_by_key(|declaration| declaration.line);
-    let last_line = (source.iter().filter(|byte| **byte == b'\n').count() + 1) as i64;
+    let last_line = starts.len() as i64;
     for index in 0..declarations.len() {
         if !missing_ends.contains(&(declarations[index].name.clone(), declarations[index].line)) {
             continue;

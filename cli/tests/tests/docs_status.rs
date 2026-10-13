@@ -757,7 +757,7 @@ fn historical_native_read_does_not_record_worktree_coverage() {
     let sid = fresh_session_id("native-read-history");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
-    f.trace_env(&["read", "hundred.txt", "--at", "HEAD", "--json"], &env)
+    f.trace_env(&["read", "hundred.txt", "--revision", "HEAD", "--json"], &env)
         .ok();
 
     assert!(

@@ -1103,7 +1103,7 @@ fn search_failures_are_not_successful_empty_documents() {
             "grep",
             "helper",
             ".",
-            "--at",
+            "--revision",
             "no-such-revision",
             "--json",
         ],
@@ -1193,7 +1193,7 @@ fn search_backend_failures_and_malformed_output_are_disclosed() {
         "#!/bin/sh\necho planted-git-failure >&2\nexit 9\n",
     );
     let result = f.trace_env(
-        &["grep", "helper", ".", "--at", "HEAD", "--json"],
+        &["grep", "helper", ".", "--revision", "HEAD", "--json"],
         &[("PATH", &path)],
     );
     assert_ne!(
@@ -1289,7 +1289,7 @@ fn search_backends_disclose_parse_cleanup_and_bounded_diagnostics() {
         "#!/bin/sh\necho 'not-a-git-grep-record'\nexit 0\n",
     );
     let result = f.trace_env(
-        &["grep", "helper", ".", "--at", "HEAD", "--json"],
+        &["grep", "helper", ".", "--revision", "HEAD", "--json"],
         &[("PATH", &path)],
     );
     assert_ne!(result.code, 0);
@@ -1379,7 +1379,7 @@ fn search_backends_disclose_parse_cleanup_and_bounded_diagnostics() {
         (
             "git-large",
             "git",
-            vec!["grep", "helper", ".", "--at", "HEAD", "--json"],
+            vec!["grep", "helper", ".", "--revision", "HEAD", "--json"],
         ),
         (
             "prefilter-large",
@@ -1543,7 +1543,7 @@ fn grep_preserves_unicode_snippets_and_historical_scope() {
     f.write("src/a:b.py", "new_token = true\n");
     f.commit("new search state");
 
-    let unicode = f.trace(&["grep", "needle", ".", "--at", "HEAD~1", "--json"]);
+    let unicode = f.trace(&["grep", "needle", ".", "--revision", "HEAD~1", "--json"]);
     unicode.ok();
     let result = &unicode.json()["results"][0];
     assert_eq!(
@@ -1560,7 +1560,7 @@ fn grep_preserves_unicode_snippets_and_historical_scope() {
         "grep",
         "old_token",
         ".",
-        "--at",
+        "--revision",
         "HEAD~1",
         "--json",
     ]);
@@ -1585,7 +1585,7 @@ fn historical_grep_uses_machine_delimiters_for_path_and_source_text() {
         ("helper", "def helper():"),
         ("https://", "    return \"https://example.test:8443/path\""),
     ] {
-        let result = f.trace(&["grep", pattern, ".", "--at", "HEAD", "--json"]);
+        let result = f.trace(&["grep", pattern, ".", "--revision", "HEAD", "--json"]);
         result.ok();
         let row = &result.json()["results"][0];
         assert_eq!(
@@ -2529,7 +2529,7 @@ fn search_rows_name_the_enclosing_declarations() {
         "Member.php",
         "<?php\nuse App\\Support\\Clock;\n\nclass Member\n{\n    public string $email;\n\n    public function recomputeLoans(): void\n    {\n        $callback = function () {\n            throw new \\RuntimeException('needle');\n        };\n    }\n}\n",
     );
-    let historical = f.trace(&["grep", "needle", ".", "--at", "HEAD", "--json"]);
+    let historical = f.trace(&["grep", "needle", ".", "--revision", "HEAD", "--json"]);
     historical.ok();
     assert_eq!(
         historical.view()["results"][0]["declaration"]["name"],
@@ -2727,7 +2727,7 @@ fn grep_takes_ripgreps_flags() {
     assert_eq!(files(&["needle"]), vec!["src/a.php", "src/b.ts", "vendor/c.php"]);
     assert_eq!(files(&["needle", "-t", "php"]), vec!["src/a.php", "vendor/c.php"]);
     assert_eq!(files(&["needle", "-g", "*.php", "-g", "!vendor/**"]), vec!["src/a.php"]);
-    assert_eq!(files(&["needle", "-t", "php", "--at", "HEAD", "-g", "!vendor/**"]), vec!["src/a.php"]);
+    assert_eq!(files(&["needle", "-t", "php", "--revision", "HEAD", "-g", "!vendor/**"]), vec!["src/a.php"]);
 
     // -c and -l name each file once, with its facts, and no match lines.
     for flag in ["-c", "-l"] {
@@ -2741,7 +2741,7 @@ fn grep_takes_ripgreps_flags() {
     for at in [None, Some("HEAD")] {
         let mut args = vec!["grep", "needle", "-i", "src/a.php", "--json"];
         if let Some(revision) = at {
-            args.extend_from_slice(&["--at", revision]);
+            args.extend_from_slice(&["--revision", revision]);
         }
         let r = f.trace(&args);
         r.ok();
@@ -2752,7 +2752,7 @@ fn grep_takes_ripgreps_flags() {
     for at in [None, Some("HEAD")] {
         let mut args = vec!["grep", "Needle", "-C", "1", "src/a.php"];
         if let Some(revision) = at {
-            args.extend_from_slice(&["--at", revision]);
+            args.extend_from_slice(&["--revision", revision]);
         }
         let r = f.trace(&args);
         r.ok();
@@ -2789,7 +2789,7 @@ fn grep_takes_ripgreps_flags() {
         "{}",
         r.stdout
     );
-    let r = f.trace(&["grep", "needle", "-U", "--at", "HEAD", "."]);
+    let r = f.trace(&["grep", "needle", "-U", "--revision", "HEAD", "."]);
     r.code_is(1);
     assert!(r.combined().contains("-U"), "{}", r.combined());
 
@@ -3031,7 +3031,7 @@ fn symbols_take_a_class_qualifier() {
 }
 
 #[test]
-fn grep_at_ref_searches_the_repository_that_holds_the_path() {
+fn grep_at_a_revision_searches_the_repository_that_holds_the_path() {
     let target = Fixture::new();
     target.write("src/old.py", "def recount():\n    before = 1\n    return 'needle'\n");
     target.commit("old");
@@ -3042,7 +3042,7 @@ fn grep_at_ref_searches_the_repository_that_holds_the_path() {
     elsewhere.commit("other");
 
     let src = target.path("src");
-    let r = elsewhere.trace(&["grep", "needle", &src, "--at", "HEAD~1", "-C", "1", "--json"]);
+    let r = elsewhere.trace(&["grep", "needle", &src, "--revision", "HEAD~1", "-C", "1", "--json"]);
     r.ok();
     let hit = &r.view()["results"][0];
     assert_eq!(hit["file"], format!("{src}/old.py"), "{}", r.stdout);
@@ -3052,7 +3052,7 @@ fn grep_at_ref_searches_the_repository_that_holds_the_path() {
 }
 
 #[test]
-fn grep_at_ref_matches_globs_from_the_directory_it_runs_in() {
+fn grep_at_a_revision_matches_globs_from_the_directory_it_runs_in() {
     let f = Fixture::new();
     f.write("pkg/src/a.py", "needle = 1\n");
     f.write("pkg/test/b.py", "needle = 2\n");
@@ -3071,11 +3071,11 @@ fn grep_at_ref_matches_globs_from_the_directory_it_runs_in() {
             .collect()
     };
     assert_eq!(files(&[]), vec!["src/a.py"]);
-    assert_eq!(files(&["--at", "HEAD"]), vec!["src/a.py"]);
+    assert_eq!(files(&["--revision", "HEAD"]), vec!["src/a.py"]);
 }
 
 #[test]
-fn grep_at_ref_reads_the_pattern_as_ripgrep_does() {
+fn grep_at_a_revision_reads_the_pattern_as_ripgrep_does() {
     let f = Fixture::new();
     f.write("app.py", "alpha = call(1)\nbeta = 2\nalphabet = 3\n");
     f.commit("regex syntax");
@@ -3095,6 +3095,6 @@ fn grep_at_ref_reads_the_pattern_as_ripgrep_does() {
         };
         let worktree = lines(&[]);
         assert!(!worktree.is_empty(), "{pattern}");
-        assert_eq!(lines(&["--at", "HEAD"]), worktree, "{pattern}");
+        assert_eq!(lines(&["--revision", "HEAD"]), worktree, "{pattern}");
     }
 }

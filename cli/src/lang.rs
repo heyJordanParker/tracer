@@ -224,7 +224,7 @@ pub fn accepted() -> String {
 /// `grep -t` names as ripgrep file types, and the matcher ripgrep builds from
 /// them: a table name maps to its ripgrep type, any other name is taken as a
 /// ripgrep type (`rg --type-list`), and one ripgrep does not know is refused
-/// by name. `grep --at` filters a commit's files through the same matcher, so
+/// by name. `grep --revision` filters a commit's files through the same matcher, so
 /// a type selects the same files on a commit as on the working tree.
 pub fn ripgrep_types(names: &[String]) -> Result<(Vec<String>, ignore::types::Types), String> {
     let mut builder = ignore::types::TypesBuilder::new();

@@ -142,12 +142,20 @@ impl FileFacts {
     }
 }
 
+/// The code facts of `bytes` as the file at `path`: the per-file entry they
+/// key, else a fresh extraction. A fresh one is never stored, because only
+/// the mtime index removes a per-file entry, and it knows only the working
+/// tree's files, so a past version's entry would stay for good.
+pub fn of_bytes(bytes: &[u8], path: &str, repo_root: &Path) -> FileFacts {
+    let full = repo_root.join(path);
+    let key = cache::file_hash_from_bytes(bytes, &full, repo_root);
+    cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root)
+        .and_then(|stored| FileFacts::from_bytes(&stored))
+        .unwrap_or_else(|| extract_facts(&full, repo_root, bytes))
+}
+
 pub fn extraction_of(bytes: &[u8], path: &str, repo_root: &Path) -> Option<crate::extraction::ExtractionResult> {
-    let key = cache::file_hash_from_bytes(bytes, &repo_root.join(path), repo_root);
-    match cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root).and_then(|stored| FileFacts::from_bytes(&stored)) {
-        Some(facts) => facts.extraction,
-        None => crate::extraction::extract(bytes, path).extracted(),
-    }
+    of_bytes(bytes, path, repo_root).extraction
 }
 
 /// Join the git facts onto code facts. `git_activity` owns every one of them
@@ -245,31 +253,7 @@ fn extract_facts(path: &Path, repo_root: &Path, source_bytes: &[u8]) -> FileFact
                     // every supported extension now shares its CCN grammar
                     // with its extractor, so this eliminates the second parse
                     // for all of them.
-                    let lower = path_str.to_lowercase();
-                    let shared = if lower.ends_with(".py") {
-                        Some(extraction::python::extract_from_tree(&tree, source_bytes, &path_str))
-                    } else if lower.ends_with(".php") {
-                        Some(extraction::php::extract_from_tree(&tree, source_bytes))
-                    } else if lower.ends_with(".ts")
-                        || lower.ends_with(".js")
-                        || lower.ends_with(".tsx")
-                        || lower.ends_with(".jsx")
-                    {
-                        Some(extraction::typescript::extract_from_tree(&tree, source_bytes, &path_str))
-                    } else if lower.ends_with(".rs") {
-                        Some(extraction::rust::extract_from_tree(&tree, source_bytes))
-                    } else if lower.ends_with(".go") {
-                        Some(extraction::go::extract_from_tree(&tree, source_bytes))
-                    } else if lower.ends_with(".rb") {
-                        Some(extraction::ruby::extract_from_tree(&tree, source_bytes))
-                    } else if lower.ends_with(".java") {
-                        Some(extraction::java::extract_from_tree(&tree, source_bytes))
-                    } else if lower.ends_with(".c") || lower.ends_with(".h") {
-                        Some(extraction::c::extract_from_tree(&tree, source_bytes, &path_str))
-                    } else {
-                        None
-                    };
-                    let extr = match shared {
+                    let extr = match extraction::extract_from_tree(&tree, source_bytes, &path_str) {
                         Some(result) => Extraction::Extracted(result),
                         // Not a shared-grammar ext: its own extractor, which
                         // is `ctags` for a grammar like Lua's.

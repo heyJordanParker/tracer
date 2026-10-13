@@ -196,7 +196,7 @@ pub fn enrich<'a>(
     matches: &'a [Match],
     repo_root: &Path,
     relations: Option<&crate::relations::Relations>,
-    at: Option<&str>,
+    revision: Option<&str>,
 ) -> (
     Vec<EnrichedMatch<'a>>,
     BTreeMap<String, Arc<FileEnrichment>>,
@@ -221,7 +221,7 @@ pub fn enrich<'a>(
         for (name, path) in names.iter().zip(paths.iter()) {
             let (_, key) = file_facts::resolve_under_root(path, repo_root);
             let facts = facts_map.get(&key);
-            let surface = match at {
+            let surface = match revision {
                 None => facts
                     .map(|facts| surface::rows(facts, None))
                     .unwrap_or_default(),

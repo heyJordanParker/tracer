@@ -11,29 +11,7 @@
 
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Parser};
-
-fn empty() -> ExtractionResult {
-    ExtractionResult {
-        language: "ruby".into(),
-        imports: vec![],
-        declarations: vec![],
-        references: vec![],
-    }
-}
-
-pub fn extract(source: &[u8]) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
-    }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source)
-}
+use tree_sitter::Node;
 
 /// Imports/declarations/references from an already-parsed Ruby tree.
 /// Caller guarantees `tree` came from the Ruby grammar.
@@ -77,13 +55,13 @@ fn set_visibility(declarations: &mut [Declaration]) {
         if row.kind == "statement" && row.header.trim() == row.name {
             section.insert(row.parent, row.name != "public");
         }
-        let restricted = row.kind == "function"
+        let protected = row.kind == "function"
             && (section.get(&row.parent).copied().unwrap_or(false)
                 || inline.contains(&row.line)
                 || named.contains(&(row.parent, row.name.clone())));
-        row.visibility = match (row.kind.as_str(), restricted) {
+        row.visibility = match (row.kind.as_str(), protected) {
             ("statement", _) => Visibility::FileLocal,
-            (_, true) => Visibility::Restricted,
+            (_, true) => Visibility::Protected,
             (_, false) => Visibility::Public,
         };
     }

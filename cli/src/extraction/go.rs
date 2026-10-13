@@ -10,29 +10,7 @@
 //! and composite literals (`Type{..}` — `Static`).
 
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
-use tree_sitter::{Node, Parser};
-
-fn empty() -> ExtractionResult {
-    ExtractionResult {
-        language: "go".into(),
-        imports: vec![],
-        declarations: vec![],
-        references: vec![],
-    }
-}
-
-pub fn extract(source: &[u8]) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
-    }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source)
-}
+use tree_sitter::Node;
 
 /// Imports/declarations/references from an already-parsed Go tree.
 /// Caller guarantees `tree` came from the Go grammar.
@@ -58,12 +36,12 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
 }
 
 /// A capital first letter exports a name from its package; any other name
-/// is reachable from the package's other files. A method is never more
-/// visible than its receiver type.
+/// is internal to the package. A method is never more visible than its
+/// receiver type.
 fn visibility(name: &str) -> Visibility {
     match name.starts_with(char::is_uppercase) {
         true => Visibility::Public,
-        false => Visibility::Restricted,
+        false => Visibility::Internal,
     }
 }
 

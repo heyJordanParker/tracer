@@ -6,7 +6,7 @@
 
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
 const QUERY_SRC: &str = r#"
         ; import statements — module path is always a string literal
@@ -36,23 +36,6 @@ fn empty() -> ExtractionResult {
 fn is_tsx(path: &str) -> bool {
     let lower = path.to_lowercase();
     lower.ends_with(".tsx") || lower.ends_with(".jsx")
-}
-
-pub fn extract(source: &[u8], path: &str) -> ExtractionResult {
-    let lang: tree_sitter::Language = if is_tsx(path) {
-        tree_sitter_typescript::LANGUAGE_TSX.into()
-    } else {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-    };
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
-    }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source, path)
 }
 
 /// Imports/declarations/references from an already-parsed TS/TSX tree at
@@ -304,7 +287,7 @@ fn declared(node: Node, source: &[u8], top_level: bool) -> Visibility {
                 .and_then(|modifier| modifier.utf8_text(source).ok());
             match modifier {
                 Some("private") => Visibility::FileLocal,
-                Some("protected") => Visibility::Restricted,
+                Some("protected") => Visibility::Protected,
                 _ => Visibility::Public,
             }
         }

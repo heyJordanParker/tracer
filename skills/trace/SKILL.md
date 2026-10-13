@@ -26,7 +26,7 @@ Example: `trace list src/` replaces `ls src/`; `trace tree src/` replaces `tree 
 
 ### Do not read repository code with git
 Use the matching `trace` subcommand for the git forms trace already answers.
-Example: `trace read <path> --at <ref>` replaces `git show <ref>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --at <ref>` replaces `git grep <pattern> <ref>`; `trace blame <file>` replaces `git blame`; `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S`; `trace diff` replaces `git diff --name-status`.
+Example: `trace read <path> --revision <rev>` replaces `git show <rev>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --revision <rev>` replaces `git grep <pattern> <rev>`; `trace blame <file>` replaces `git blame`; `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S`; `trace diff` replaces `git diff --name-status`.
 Every other git command passes, including `git status`, `git branch`, `git tag`, `git rev-parse`, `git reflog`, `git stash`, `git merge-base`, `git describe`, `git ls-files`, plain `git diff`, `git log -p`, and `git log -G`.
 
 ### Bound a search before sorting it
@@ -63,6 +63,9 @@ Template:
   trace api src/Service
   ```
 
+### Compare two versions' API with `trace api -o`
+`trace api <paths> --revision <rev> -o <file>` writes the API a commit, branch, or tag holds, and `trace api <paths> -o <file>` the working tree's, with no line numbers or facts. Two such files differ only where the API changed, so compare them line by line.
+
 ## 4. Choose the smallest matching command
 
 ### Use relationship commands for symbols
@@ -82,13 +85,13 @@ Use `trace grep` for text in code, `trace logs` for text in a log file, `trace p
 
 Template:
   ```bash
-  trace grep <pattern> [paths...] [-i] [-t <type>] [-g <glob>] [-C <n>] [-A <n>] [-B <n>] [-U] [-l | -c] [--at <ref>]
+  trace grep <pattern> [paths...] [-i] [-t <type>] [-g <glob>] [-C <n>] [-A <n>] [-B <n>] [-U] [-l | -c] [--revision <rev>]
   trace pattern <pattern> -t <type> [paths...]
   trace find <pattern> [bases...]
   ```
 
-### Search a commit with `trace grep --at <ref>`
-`--at` searches that commit instead of the working tree, which is what `git grep <pattern> <ref>` would answer. `-t` and `-g` select the same files on a commit as on the working tree; `-U` needs the working tree.
+### Search a commit with `trace grep --revision <rev>`
+`--revision` searches that commit instead of the working tree, which is what `git grep <pattern> <rev>` would answer. `-t` and `-g` select the same files on a commit as on the working tree; `-U` needs the working tree.
 
 IF a search result names a `nested repository (its own search scope)`:
 ### Re-run the search with the base inside the nested repository
@@ -100,11 +103,11 @@ Use `trace diff`, `trace status`, `trace history`, and `trace blame` to understa
 
 Template:
   ```bash
-  trace diff [paths...] [--base ref] [--symbols]
+  trace diff [paths...] [--base <rev>] [--symbols]
   trace status
   trace history [<file>] [<symbol>]
   trace history --contains <pattern> [--regex] [--all]
-  trace history --commit <ref>
+  trace history --commit <rev>
   trace blame <file> [<symbol>] [--lines L1:L2]
   ```
 
@@ -112,13 +115,13 @@ Template:
 It lists the newest 29 commits that added or removed the string, then the oldest one, where it entered; `--all` lists every commit between them. Each file shows `+` for the lines a commit added and `-` for the lines it removed, with the first line and its declaration. `trace history --commit <sha>` then gives that commit's reason.
 
 ### Read a commit's full body with `trace history --commit`
-The subject says what changed and the body says why. `--commit <ref>` returns the message, author, parents, changed files, and changed lines in one call.
+The subject says what changed and the body says why. `--commit <rev>` returns the message, author, parents, changed files, and changed lines in one call.
 Never: `git show` for a commit message.
 
 ## 5. Read with trace
 
 ### Use `trace read` instead of raw reads
-`trace read` strips Fluff and keeps line numbers. Read whole files, several files, methods, line ranges, anchor ranges, or a git ref.
+`trace read` strips Fluff and keeps line numbers. Read whole files, several files, methods, line ranges, anchor ranges, or a file at a git revision.
 
 Template:
   ```bash
@@ -126,8 +129,8 @@ Template:
   trace read <file> --method <name>
   trace read <file> --lines L1:L2
   trace read <file> --between START END
-  trace read <file> --at ref
-  trace read <file> --at ref --diff
+  trace read <file> --revision <rev>
+  trace read <file> --revision <rev> --diff
   trace read <file> --docs
   trace read <file> --all
   ```
@@ -247,7 +250,7 @@ Template:
 An untracked or added file likely has no callers. A renamed file continues old code. A recent file with few commits may still be moving. An old file with many commits is a settled Precedent. A file with no `on_deploy_branches` is not deployed; `main` or `production` means Capability regression matters.
 
 ### Cross-check modify-or-stack Decisions
-Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md` and check `trace read <path> --at origin/production`. A locally new file may already be deployed through worktrees, squashed baselines, or branch divergence.
+Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md` and check `trace read <path> --revision origin/production`. A locally new file may already be deployed through worktrees, squashed baselines, or branch divergence.
 
 ### Read an annotation as a name, never a meaning
 `directory.annotations` counts the attributes, decorators, and docblock tags the directory's files carry, and a row shows each one as written above its declaration. Tracer does not know what a name means; the project's Claude.md does. Read it before touching a declaration that carries one.

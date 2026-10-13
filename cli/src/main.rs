@@ -102,18 +102,29 @@ enum Command {
     Api {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
-        /// The rows listed: `public`, also `restricted` ones other files
-        /// reach, or `all` with each file's imports.
+        /// The rows listed: `public`, also `internal` ones the language or
+        /// the author marks internal, or `all` with each file's imports.
         #[arg(long, value_enum, default_value = "public")]
         visibility: commands::api::Level,
         /// Only files another file imports.
         #[arg(long)]
         imported: bool,
-        #[arg(long, default_value_t = 4)]
-        depth: usize,
+        /// Only files at most N folders below each path, as ripgrep's
+        /// --max-depth.
+        #[arg(long = "max-depth", value_name = "N")]
+        max_depth: Option<usize>,
         /// Include or, with `!`, exclude files, as ripgrep's `-g` does.
         #[arg(short = 'g', long = "glob", value_name = "GLOB")]
         globs: Vec<String>,
+        /// Read the files at a commit, branch, or tag instead of the working
+        /// tree.
+        #[arg(long, value_name = "REV")]
+        revision: Option<String>,
+        /// Write the API to FILE instead of printing it, uncut by --budget
+        /// and without line numbers or file facts, so two versions compare
+        /// line by line.
+        #[arg(short = 'o', long, value_name = "FILE", conflicts_with = "json")]
+        output: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -166,9 +177,10 @@ enum Command {
         globs: Vec<String>,
         /// Files and directories to search, as ripgrep takes them; `.` when none.
         paths: Vec<String>,
-        /// Search a commit instead of the working tree.
-        #[arg(long = "at")]
-        at: Option<String>,
+        /// Read the files at a commit, branch, or tag instead of the working
+        /// tree.
+        #[arg(long, value_name = "REV")]
+        revision: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -231,8 +243,8 @@ enum Command {
         symbol: Option<String>,
         #[arg(long)]
         path: Option<PathBuf>,
-        #[arg(long, default_value_t = 3)]
-        depth: i64,
+        #[arg(long = "max-depth", value_name = "N", default_value_t = 3)]
+        max_depth: i64,
         #[arg(long, default_value_t = 10)]
         limit: i64,
         #[arg(long)]
@@ -243,8 +255,8 @@ enum Command {
         symbol: Option<String>,
         #[arg(long)]
         path: Option<PathBuf>,
-        #[arg(long, default_value_t = 3)]
-        depth: i64,
+        #[arg(long = "max-depth", value_name = "N", default_value_t = 3)]
+        max_depth: i64,
         #[arg(long, default_value_t = 10)]
         limit: i64,
         #[arg(long)]
@@ -270,8 +282,10 @@ enum Command {
     /// Annotated file tree with per-file complexity ranks (recursive).
     Tree {
         path: PathBuf,
-        #[arg(long, default_value_t = 4)]
-        depth: usize,
+        /// Only files at most N folders below the path, as ripgrep's
+        /// --max-depth.
+        #[arg(long = "max-depth", value_name = "N")]
+        max_depth: Option<usize>,
         #[arg(long)]
         json: bool,
     },
@@ -301,7 +315,7 @@ enum Command {
         paths: Vec<String>,
         /// Compare committed history against this ref instead of comparing
         /// the working tree against HEAD.
-        #[arg(long)]
+        #[arg(long, value_name = "REV")]
         base: Option<String>,
         #[arg(long = "symbols")]
         symbol_mode: bool,
@@ -393,8 +407,10 @@ enum Command {
         /// Return the whole selection with no size budget and no trim marker.
         #[arg(long = "all")]
         all: bool,
-        #[arg(long = "at", value_name = "REF")]
-        at: Option<String>,
+        /// Read the files at a commit, branch, or tag instead of the working
+        /// tree.
+        #[arg(long, value_name = "REV")]
+        revision: Option<String>,
         #[arg(long = "lines", value_name = "L1:L2")]
         lines: Option<String>,
         #[arg(long, num_args = 2, value_names = ["START", "END"])]
@@ -429,7 +445,7 @@ enum Command {
         all: bool,
         /// One commit in full: message, author, parents, changed files and
         /// the changed lines.
-        #[arg(long = "commit")]
+        #[arg(long = "commit", value_name = "REV")]
         commit: Option<String>,
         #[arg(long)]
         json: bool,
@@ -564,8 +580,9 @@ fn run() -> Result<()> {
                 commands::cache::stats(Path::new("."), json)
             }),
         },
-        Command::Api { paths, visibility, imported, depth, globs, json } => output::run_value(json, filter, || {
-            commands::api::run(&paths, &commands::api::Scope { visibility, imported, depth, globs: &globs }, json)
+        Command::Api { paths, visibility, imported, max_depth, globs, revision, output, json } => output::run_value(json, filter, || {
+            let scope = commands::api::Scope { visibility, imported, max_depth, globs: &globs, revision: revision.as_deref() };
+            commands::api::run(&paths, &scope, output.as_deref(), json)
         }),
         Command::Structure { paths, json } => {
             output::run_value(json, filter, || commands::structure::run(&paths, json))
@@ -584,7 +601,7 @@ fn run() -> Result<()> {
             types,
             globs,
             paths,
-            at,
+            revision,
             json,
         } => output::run_streamed(json, filter, |sink| {
             let (pattern, mut paths) = match regexp {
@@ -603,7 +620,7 @@ fn run() -> Result<()> {
                 types,
                 globs,
             };
-            commands::grep::run(&pattern, &paths, at.as_deref(), &options, json, sink)
+            commands::grep::run(&pattern, &paths, revision.as_deref(), &options, json, sink)
         }),
         Command::Logs {
             pattern,
@@ -647,7 +664,7 @@ fn run() -> Result<()> {
         Command::Dependencies {
             symbol,
             path,
-            depth,
+            max_depth,
             limit,
             json,
         } => output::run_value(json, filter, || {
@@ -655,7 +672,7 @@ fn run() -> Result<()> {
                 commands::reach::Direction::Dependencies,
                 symbol.as_deref(),
                 path.as_deref(),
-                depth,
+                max_depth,
                 limit,
                 json,
             )
@@ -663,7 +680,7 @@ fn run() -> Result<()> {
         Command::Usages {
             symbol,
             path,
-            depth,
+            max_depth,
             limit,
             json,
         } => output::run_value(json, filter, || {
@@ -671,7 +688,7 @@ fn run() -> Result<()> {
                 commands::reach::Direction::Dependents,
                 symbol.as_deref(),
                 path.as_deref(),
-                depth,
+                max_depth,
                 limit,
                 json,
             )
@@ -685,8 +702,8 @@ fn run() -> Result<()> {
         } => output::run_value(json, filter, || {
             commands::list_::run(&paths, show_hidden, recent, limit, json)
         }),
-        Command::Tree { path, depth, json } => {
-            output::run_value(json, filter, || commands::tree::run(&path, depth, json))
+        Command::Tree { path, max_depth, json } => {
+            output::run_value(json, filter, || commands::tree::run(&path, max_depth, json))
         }
         Command::Find {
             pattern,
@@ -780,7 +797,7 @@ fn run() -> Result<()> {
             json,
             raw,
             all,
-            at,
+            revision,
             lines,
             between,
             as_diff,
@@ -793,7 +810,7 @@ fn run() -> Result<()> {
                 json,
                 raw,
                 all,
-                at.as_deref(),
+                revision.as_deref(),
                 lines.as_deref(),
                 between.map(|v| (v[0].clone(), v[1].clone())),
                 as_diff,

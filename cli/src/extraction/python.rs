@@ -2,7 +2,7 @@
 
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
 
 const QUERY_SRC: &str = r#"
         ; import_statement covers `import a`, `import a.b`, `import a as c`
@@ -32,17 +32,26 @@ fn empty() -> ExtractionResult {
     }
 }
 
-pub fn extract(source: &[u8], path: &str) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
+/// Each function's and class's docstring, by its name's line: the string
+/// statement that opens its body.
+pub fn docstrings(tree: &tree_sitter::Tree, source: &[u8]) -> HashMap<i64, String> {
+    let mut found = HashMap::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        if matches!(node.kind(), "function_definition" | "class_definition") {
+            let opening = node.child_by_field_name("body").and_then(|body| body.named_child(0));
+            let string = opening
+                .filter(|statement| statement.kind() == "expression_statement")
+                .and_then(|statement| statement.named_child(0))
+                .filter(|child| child.kind() == "string");
+            if let (Some(name), Some(string)) = (node.child_by_field_name("name"), string) {
+                found.insert(name.start_position().row as i64 + 1, string.utf8_text(source).unwrap_or_default().to_string());
+            }
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.named_children(&mut cursor));
     }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source, path)
+    found
 }
 
 /// Imports/declarations/references from an already-parsed Python tree at
@@ -164,17 +173,17 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8], path: &str) ->
 }
 
 /// With `__all__`, the top-level names it lists are the module's API and the
-/// rest are reachable but not public. Without it, a leading `_` marks a name
-/// reachable but not public, except a dunder, which Python itself calls.
+/// rest are internal. Without it, a leading `_` marks a name internal, as
+/// PEP 8 reads it, except a dunder, which Python itself calls.
 fn visibility(name: &str, top_level: bool, all: Option<&HashSet<String>>) -> Visibility {
     if let (true, Some(all)) = (top_level, all) {
         return match all.contains(name) {
             true => Visibility::Public,
-            false => Visibility::Restricted,
+            false => Visibility::Internal,
         };
     }
     match name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__")) {
-        true => Visibility::Restricted,
+        true => Visibility::Internal,
         false => Visibility::Public,
     }
 }

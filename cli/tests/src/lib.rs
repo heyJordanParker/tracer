@@ -35,7 +35,7 @@ pub fn closed_stdout() -> Stdio {
 }
 
 /// SCHEMA_VERSION as published in the tracer Claude.md and `cache.rs`.
-pub const PUBLISHED_SCHEMA_VERSION: u32 = 53;
+pub const PUBLISHED_SCHEMA_VERSION: u32 = 54;
 
 /// The directory under `.tracer-cache/file/` holding every entry `schema`
 /// writes in the worktree at `root`.

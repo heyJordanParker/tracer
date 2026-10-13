@@ -480,7 +480,7 @@ fn parse_lines(value: &str) -> Result<(i64, i64)> {
     Ok((l1, l2))
 }
 
-fn resolve_ref(ref_: &str, repo_root: &Path) -> Option<Value> {
+fn resolve_revision(revision: &str, repo_root: &Path) -> Option<Value> {
     let out = crate::git_activity::git_output(
         repo_root,
         [
@@ -488,7 +488,7 @@ fn resolve_ref(ref_: &str, repo_root: &Path) -> Option<Value> {
             "-1",
             "--pretty=format:%H|%h|%ad|%s",
             "--date=short",
-            ref_,
+            revision,
         ],
     )
     .ok()?;
@@ -512,8 +512,8 @@ fn resolve_ref(ref_: &str, repo_root: &Path) -> Option<Value> {
     }))
 }
 
-fn load_at_ref(ref_: &str, repo_root: &Path, relative: &str) -> Option<String> {
-    crate::git_activity::blob(repo_root, ref_, relative).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+fn load_at_revision(revision: &str, repo_root: &Path, relative: &str) -> Option<String> {
+    crate::git_activity::blob(repo_root, revision, relative).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Function name -> (start_line, end_line) via the AST CCN backend, used
@@ -681,7 +681,7 @@ fn render_one(
     method: Option<&str>,
     line_range: Option<(i64, i64)>,
     between: Option<(&str, &str)>,
-    ref_: Option<&str>,
+    revision: Option<&str>,
     raw: bool,
     all: bool,
     as_diff: bool,
@@ -705,12 +705,12 @@ fn render_one(
     let mut ref_meta: Option<Value> = None;
     let mut binary: Option<usize> = None;
     let source: String;
-    if let Some(r) = ref_ {
-        let Some(m) = resolve_ref(r, &repo_root) else {
+    if let Some(r) = revision {
+        let Some(m) = resolve_revision(r, &repo_root) else {
             bail!("unknown git ref '{r}'");
         };
         ref_meta = Some(m);
-        let Some(s) = load_at_ref(r, &repo_root, &relative) else {
+        let Some(s) = load_at_revision(r, &repo_root, &relative) else {
             bail!("'{relative}' does not exist at ref '{r}'");
         };
         source = s;
@@ -780,7 +780,7 @@ fn render_one(
     let content_hash = session::content_hash(&source);
     let content_size = source.len();
     let mut facts = file_facts::get(&file_path, &repo_root);
-    if let (Some(facts), Some(_)) = (facts.as_mut(), ref_) {
+    if let (Some(facts), Some(_)) = (facts.as_mut(), revision) {
         facts.extraction = extraction::extract(source.as_bytes(), &relative).extracted();
     }
     // The front matter: at a ref, the commit the source came from, in `git
@@ -789,12 +789,12 @@ fn render_one(
     let in_repository = cache::worktree_root_for(&file_path).is_some();
     let shown_facts = facts
         .as_ref()
-        .filter(|_| in_repository && ref_.is_none())
+        .filter(|_| in_repository && revision.is_none())
         .map(|facts| Facts::of(facts, relations::ready(&repo_root).and_then(|index| index.module_counts(&relative)).as_ref()));
     let window = (start_line as i64, selection_end as i64);
     let windowed = method.is_some() || line_range.is_some() || between.is_some();
     let mut calls = match facts.as_ref() {
-        Some(facts) if windowed && in_repository && ref_.is_none() => {
+        Some(facts) if windowed && in_repository && revision.is_none() => {
             crate::calls::calls(facts, &relative, window, &repo_root)
         }
         _ => Vec::new(),
@@ -811,7 +811,7 @@ fn render_one(
     } else {
         clean(selected, &source, &relative)
     };
-    let symbol_diff_data = (as_diff && ref_.is_some())
+    let symbol_diff_data = (as_diff && revision.is_some())
         .then(|| {
             let worktree_source = std::fs::read(&file_path)
                 .ok()
@@ -831,11 +831,11 @@ fn render_one(
     let unread = docs::unread(memories.clone());
 
     let mut shown = session::Delivery::default();
-    let front_matter: Option<serde_json::Map<String, Value>> = if ref_.is_some() {
+    let front_matter: Option<serde_json::Map<String, Value>> = if revision.is_some() {
         ref_meta.as_ref().map(|m| {
             let mut map = serde_json::Map::new();
             map.insert("file".into(), relative.clone().into());
-            map.insert("ref".into(), json!(ref_));
+            map.insert("ref".into(), json!(revision));
             map.insert("commit".into(), m["full_sha"].clone());
             map.insert("date".into(), m["date"].clone());
             map.insert("subject".into(), summary::clip(m["subject"].as_str().unwrap_or(""), 60).into());
@@ -853,7 +853,7 @@ fn render_one(
             map
         })
     };
-    let header = heading(&relative, ref_, method, line_range, between, between_resolved_lines.as_deref());
+    let header = heading(&relative, revision, method, line_range, between, between_resolved_lines.as_deref());
     let head = match &front_matter {
         Some(map) => summary::front_matter_once(Some(&header), &file_path, shown_facts.as_ref(), map, &mut shown, once),
         None => format!("{header}\n"),
@@ -873,7 +873,7 @@ fn render_one(
     );
     let rows_budget = budget.map(|budget| budget.saturating_sub(front_matter_size) / 2);
     // A read of part of the file offers only that part's rows.
-    let mut surface_text = match once && ref_.is_none() {
+    let mut surface_text = match once && revision.is_none() {
         true => surface::delivered(&surface_rows, &relative, windowed.then_some(window), rows_budget, &file_path, &mut shown),
         false => surface::render_within(&surface_rows, &relative, Some(window), rows_budget),
     };
@@ -883,7 +883,7 @@ fn render_one(
         let docs_size = crate::output::width(&docs::fit(unread.clone(), None, &docs_command).text);
         (left / 4).max(left.saturating_sub(surface_text.len() + content_size + docs_size + reserved))
     });
-    let delivery = (once && ref_.is_none()).then_some(&mut shown);
+    let delivery = (once && revision.is_none()).then_some(&mut shown);
     surface_text.push_str(&crate::calls::render_calls("calls", &mut calls, &relative, calls_share, delivery));
     let truncated = budget.is_some_and(|budget| {
         trim_to_budget(
@@ -913,8 +913,8 @@ fn render_one(
     if truncated {
         if let Some(last_line) = rendered.last().map(|(number, _)| *number) {
             let mut flags = String::new();
-            if let Some(r) = ref_ {
-                flags.push_str(&format!(" --at {r}"));
+            if let Some(r) = revision {
+                flags.push_str(&format!(" --revision {r}"));
             }
             if raw {
                 flags.push_str(" --raw");
@@ -946,7 +946,7 @@ fn render_one(
         "file": display_file,
         "between_resolved_lines": between_resolved_lines,
         "ref_resolved": ref_meta,
-        "source": if ref_.is_some() { "ref" } else { "worktree" },
+        "source": if revision.is_some() { "ref" } else { "worktree" },
         "content": content,
         "raw": raw,
         "truncated": truncated,
@@ -988,14 +988,14 @@ fn render_one(
 /// the lines, or the anchors with the lines they resolved to.
 fn heading(
     relative: &str,
-    ref_: Option<&str>,
+    revision: Option<&str>,
     method: Option<&str>,
     line_range: Option<(i64, i64)>,
     between: Option<(&str, &str)>,
     between_resolved_lines: Option<&[i64]>,
 ) -> String {
     let mut header = format!("# {relative}");
-    if let Some(r) = ref_ {
+    if let Some(r) = revision {
         header += &format!(" @ {r}");
     }
     if let Some(m) = method {
@@ -1055,7 +1055,7 @@ pub fn run(
     as_json: bool,
     raw: bool,
     all: bool,
-    ref_: Option<&str>,
+    revision: Option<&str>,
     lines_arg: Option<&str>,
     between: Option<(String, String)>,
     as_diff: bool,
@@ -1064,8 +1064,8 @@ pub fn run(
     sink: &crate::output::Sink<'_>,
 ) -> Result<()> {
     let docs_on = docs_enabled(docs_override, as_json);
-    if as_diff && ref_.is_none() {
-        return Err(crate::process::fail(2, "Error: --diff requires --at <ref>"));
+    if as_diff && revision.is_none() {
+        return Err(crate::process::fail(2, "Error: --diff requires --revision <REV>"));
     }
     if lines_arg.is_some() && between.is_some() {
         return Err(crate::process::fail(2, "Error: --lines and --between are mutually exclusive"));
@@ -1074,9 +1074,9 @@ pub fn run(
     let line_range = lines_arg.map(parse_lines).transpose()?;
 
     // Every positional is a path, and a directory reads as the files under
-    // it; `--method` names a function. At `--at <ref>` a path may exist only
+    // it; `--method` names a function. At `--revision <REV>` a path may exist only
     // in that commit, so it is taken as written.
-    let files: Vec<String> = if ref_.is_some() {
+    let files: Vec<String> = if revision.is_some() {
         paths.to_vec()
     } else {
         let requested: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
@@ -1111,7 +1111,7 @@ pub fn run(
             method.as_deref(),
             line_range,
             between_ref,
-            ref_,
+            revision,
             raw,
             all,
             as_diff,
@@ -1137,7 +1137,7 @@ pub fn run(
             let mut delivery = std::mem::take(&mut rendered.shown);
             if record {
                 rendered.docs.record(&mut delivery, "trace_read");
-                if ref_.is_none() {
+                if revision.is_none() {
                     record_delivered_read(&mut delivery, &rendered);
                 }
             }
@@ -1179,7 +1179,7 @@ pub fn run(
             "method": method,
             "lines": line_range.map(|(a, b)| vec![a, b]),
             "between": between.as_ref().map(|(a, b)| vec![a.clone(), b.clone()]),
-            "ref": ref_,
+            "ref": revision,
             "raw": raw,
             "all": all,
             "diff": as_diff,
@@ -1197,7 +1197,7 @@ pub fn run(
                 if docs_on {
                     delivery.sent(&rendered.memories, "trace_read");
                 }
-                if ref_.is_none() {
+                if revision.is_none() {
                     record_delivered_read(&mut delivery, rendered);
                 }
             }

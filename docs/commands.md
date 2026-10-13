@@ -22,16 +22,16 @@ Every path argument takes several paths, and a directory names the files under i
 | `trace context <file> [--offset N] [--limit N]` | One file's facts and the declarations of the lines read. |
 | `trace stats [<path>]` | Lines of code, languages, and the complexity distribution, with one row per directory. |
 | `trace list <dir> [--recent] [--limit N]` | One directory level from the disk, ignored files included, with size, code, and git columns. |
-| `trace tree <path>` | The file tree with each file's complexity rank. |
+| `trace tree <path> [--max-depth N]` | The file tree with each file's complexity rank, every depth unless `--max-depth` limits it. |
 | `trace info <paths> [--brief]` | A file's or directory's structure, complexity, importers, and imports. |
-| `trace api <paths> [--visibility public\|restricted\|all] [--imported] [--depth N] [-g <glob>]` | The API of files and folders: each file's purpose, then every declaration and re-export the visibility reaches, each header whole. |
+| `trace api <paths> [--visibility public\|internal\|all] [--imported] [--max-depth N] [-g <glob>] [--revision REV] [-o FILE]` | The API of files and folders: each file's purpose, then every declaration and re-export the visibility reaches, each header whole. `internal` adds what the language keeps inside its module or package and what the author marks internal: an `Internal` attribute, annotation, or decorator, an `@internal` doc tag, Rust's `#[doc(hidden)]`, or Ruby's `@api private`. `all` adds protected and private members and every import. `--revision` reads a commit, branch, or tag. `-o` writes the API to a file without line numbers or facts, so the files of two versions compare line by line. |
 | `trace structure <paths>` | Every declaration of each file: classes, functions, properties, imports, exports. |
 
 ## Search
 
 | Command | Answers |
 |---|---|
-| `trace grep <pattern> [paths] [-i] [-t type] [-g glob] [-C n] [-U] [-l \| -c] [--at ref]` | Text matches through ripgrep, each under the declarations that hold it. Takes ripgrep's own flags, and `-e <pattern>` for a pattern that starts with `-`. |
+| `trace grep <pattern> [paths] [-i] [-t type] [-g glob] [-C n] [-U] [-l \| -c] [--revision REV]` | Text matches through ripgrep, each under the declarations that hold it. Takes ripgrep's own flags, and `-e <pattern>` for a pattern that starts with `-`. |
 | `trace pattern <pattern> -t <lang> [paths]` | Structural matches through ast-grep, grouped the same way. |
 | `trace find <pattern> [bases] [--type f\|d] [--sort complexity\|recent\|path]` | Files or directories by name or path glob, with their facts. |
 | `trace logs [<pattern>] [--path P] [--file GLOB] [--since WHEN] [--until WHEN] [--around N]` | Timestamped log entries, ignored files included, a stack trace kept whole, `.gz` rotations read. |
@@ -42,9 +42,9 @@ Every path argument takes several paths, and a directory names the files under i
 |---|---|
 | `trace defines <symbol>` | Every declaration of the symbol. `Class::method` or `Class.method` picks one of several. |
 | `trace callers <symbol>` | Every call site of the symbol, each with its confidence: `EXTRACTED`, `INFERRED`, or `AMBIGUOUS`. |
-| `trace usages <symbol> [--depth N]` | What depends on the symbol, transitively. |
+| `trace usages <symbol> [--max-depth N]` | What depends on the symbol, transitively, 3 levels deep unless `--max-depth` sets another limit. |
 | `trace usages --path <P>` | The most-depended-on files in `P`. |
-| `trace dependencies <symbol> [--depth N]` | What the symbol depends on, transitively. |
+| `trace dependencies <symbol> [--max-depth N]` | What the symbol depends on, transitively, 3 levels deep unless `--max-depth` sets another limit. |
 | `trace dependencies --path <P>` | The files in `P` that depend on the most others. |
 
 If A imports B, B is a dependency of A, and A is a usage of B.
@@ -57,7 +57,7 @@ If A imports B, B is a dependency of A, and A is a usage of B.
 | `trace read <file> --method <name>` | One function or method. |
 | `trace read <file> --lines L1:L2` | A line range. |
 | `trace read <file> --between START END` | The section between two anchors. |
-| `trace read <file> --at <ref> [--diff]` | The file at a commit, or its difference from that commit. |
+| `trace read <file> --revision <REV> [--diff]` | The file at a commit, or its difference from that commit. |
 | `trace read <file> --all` | Every line, with no budget. |
 
 A windowed read adds a `calls:` block: each function the window calls, with its source when it is short and the session has not read it, and its other call sites.
@@ -67,10 +67,10 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 | Command | Answers |
 |---|---|
 | `trace status [--state added\|renamed\|modified\|deleted\|untracked]` | The working tree's changed files, the most-imported first. |
-| `trace diff [paths] [--base ref] [--symbols]` | What changed as lines, with the declarations each change touched: `changed`, `removed`, `added`, and `touches`. |
+| `trace diff [paths] [--base REV] [--symbols]` | What changed as lines, with the declarations each change touched: `changed`, `removed`, `added`, and `touches`. |
 | `trace history <file> [<symbol>]` | A file's commits, or one function's line history. |
 | `trace history --contains <text> [--regex] [--all]` | Every commit that added or removed the text, with the lines and the declaration each one changed. |
-| `trace history --commit <ref>` | One commit in full: message, author, parents, files, and changed lines. |
+| `trace history --commit <REV>` | One commit in full: message, author, parents, files, and changed lines. |
 | `trace blame <file> [<symbol>] [--lines L1:L2]` | Blame collapsed into regions, each with its commit subject. |
 
 ## Project docs
@@ -113,5 +113,5 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 | Code | Meaning |
 |---|---|
 | `0` | The command answered, including a search with no matches. |
-| `2` | A path, symbol, or ref was not found. The message on stderr names what was missing. |
+| `2` | A path, symbol, or revision was not found. The message on stderr names what was missing. |
 | `1` | Anything else failed. |

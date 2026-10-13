@@ -402,6 +402,21 @@ fn whole_row(rows: &[Row], index: usize, file: &str) -> String {
     output
 }
 
+/// Every row whole, indented two spaces per parent, with no line number or
+/// complexity, so the text changes only when a header does.
+pub fn render_plain(rows: &[Row]) -> String {
+    let mut output = String::new();
+    for index in distinct(rows) {
+        let indent = "  ".repeat(depth(index, rows));
+        for line in header(&rows[index]).lines() {
+            output.push_str(&indent);
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    output
+}
+
 /// A row cut to its line and name.
 fn short_row(rows: &[Row], index: usize) -> String {
     format!("L{:<5}{}{}\n", rows[index].line, "  ".repeat(depth(index, rows)), called(&rows[index]))

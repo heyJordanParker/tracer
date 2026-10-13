@@ -582,18 +582,18 @@ fn read_between_over_budget_continues_inside_the_anchor_section() {
 }
 
 #[test]
-fn read_at_ref_over_budget_keeps_the_ref_in_the_continue_command() {
+fn read_at_a_revision_over_budget_keeps_the_revision_in_the_continue_command() {
     let f = standard_repo();
     f.write("big.py", &oversized_python(2000));
     f.commit("add big.py");
 
-    let r = f.trace(&["read", "big.py", "--at", "HEAD", "--json"]);
+    let r = f.trace(&["read", "big.py", "--revision", "HEAD", "--json"]);
     r.ok();
     let v = r.view();
     assert_eq!(v["results"][0]["truncated"], true);
     let marker = trim_marker_of(v["results"][0]["content"].as_str().unwrap()).expect("trim marker");
     assert!(
-        marker.ends_with("--at HEAD]"),
+        marker.ends_with("--revision HEAD]"),
         "the continue command must stay on the ref: {marker}"
     );
 }
@@ -703,7 +703,7 @@ fn read_method_bare_name_reaches_a_php_method_with_its_markers() {
 }
 
 #[test]
-fn read_method_at_ref_extracts_committed_body() {
+fn read_method_at_a_revision_extracts_committed_body() {
     // The method must be carved out of the *committed* file, not the
     // worktree: the worktree version of fn has a different body and an
     // extra function that must not appear.
@@ -723,7 +723,7 @@ fn read_method_at_ref_extracts_committed_body() {
             "    return 1\n",
         ),
     );
-    let r = f.trace(&["read", "m.py", "--method", "target", "--at", "HEAD", "--json"]);
+    let r = f.trace(&["read", "m.py", "--method", "target", "--revision", "HEAD", "--json"]);
     r.ok();
     let v = r.view();
     assert_eq!(v["results"][0]["source"], "ref");
@@ -1078,7 +1078,7 @@ fn read_cleaning_removes_only_standalone_generated_comment_banners() {
         lock.stdout
     );
 
-    let committed_range = f.trace(&["read", "generated.rs", "--lines", "1:3", "--at", "HEAD"]);
+    let committed_range = f.trace(&["read", "generated.rs", "--lines", "1:3", "--revision", "HEAD"]);
     committed_range.ok();
     assert!(
         committed_range.stdout.contains("L2: const MARKER")
@@ -1240,7 +1240,7 @@ fn read_preserves_mixed_line_source_identity_across_modes() {
         "--between",
         "const START",
         "const END",
-        "--at",
+        "--revision",
         "HEAD",
         "--json",
     ]);
@@ -1273,7 +1273,7 @@ fn read_preserves_mixed_line_source_identity_across_modes() {
     );
 
     f.write("mixed.rs", &source.replace("START\r", "START + 1\r"));
-    let diff = f.trace(&["read", "mixed.rs", "--at", "HEAD", "--diff", "--json"]);
+    let diff = f.trace(&["read", "mixed.rs", "--revision", "HEAD", "--diff", "--json"]);
     diff.ok();
     assert!(
         diff.json()["context"]["files"]["mixed.rs"]["symbol_diff"]["changed"]
@@ -1357,12 +1357,12 @@ fn read_keeps_ambiguous_leading_comments() {
 }
 
 #[test]
-fn read_at_ref_reads_committed_content() {
+fn read_at_a_revision_reads_committed_content() {
     let f = Fixture::new();
     f.write("v.py", "VALUE = 1\n");
     f.commit("v1");
     f.write("v.py", "VALUE = 2\n");
-    let r = f.trace(&["read", "v.py", "--at", "HEAD", "--json"]);
+    let r = f.trace(&["read", "v.py", "--revision", "HEAD", "--json"]);
     r.ok();
     let v = r.view();
     assert_eq!(v["results"][0]["source"], "ref");
@@ -1377,12 +1377,12 @@ fn read_at_ref_reads_committed_content() {
 }
 
 #[test]
-fn read_diff_requires_at_ref() {
+fn read_diff_requires_a_revision() {
     let f = standard_repo();
     let r = f.trace(&["read", "src/util.py", "--diff"]);
     r.code_is(2);
     assert!(
-        r.combined().contains("--diff requires --at"),
+        r.combined().contains("--diff requires --revision"),
         "{}",
         r.combined()
     );
@@ -1395,7 +1395,7 @@ fn read_symbol_diff_partitions_added_removed_changed() {
     //   - add `fresh`
     //   - change the body of `kept` (signature/name unchanged)
     //   - leave `stable` byte-identical
-    // `read --at HEAD --diff` compares the ref against the worktree, so the
+    // `read --revision HEAD --diff` compares the ref against the worktree, so the
     // added/removed/changed sets are exactly that partition.
     let f = Fixture::new();
     f.write(
@@ -1425,7 +1425,7 @@ fn read_symbol_diff_partitions_added_removed_changed() {
             "    return 42\n",
         ),
     );
-    let r = f.trace(&["read", "mod.py", "--at", "HEAD", "--diff", "--json"]);
+    let r = f.trace(&["read", "mod.py", "--revision", "HEAD", "--diff", "--json"]);
     r.ok();
     let v = r.view();
     let d = &v["files"]["mod.py"]["symbol_diff"];
@@ -2045,7 +2045,7 @@ fn tree_keeps_every_fact_beyond_one_resolve_chunk() {
     }
     f.commit("large tree");
 
-    let r = f.trace(&["tree", "src", "--depth", "1", "--json"]);
+    let r = f.trace(&["tree", "src", "--max-depth", "1", "--json"]);
     r.ok();
     let v = r.view();
     let rows = v["results"]
@@ -4967,7 +4967,7 @@ fn surface_rows_follow_windows_history_budgets_and_batch_json() {
         "entry.php",
         "<?php\nclass Entry {\n    public static function create(): static {\n        return new static();\n    }\n\n    public function added(): void {}\n}\n",
     );
-    let historical = f.trace(&["read", "entry.php", "--at", "HEAD", "--json"]);
+    let historical = f.trace(&["read", "entry.php", "--revision", "HEAD", "--json"]);
     historical.ok();
     let historical_json = historical.json();
     let historical_surface = &historical_json["context"]["files"]
@@ -4982,7 +4982,7 @@ fn surface_rows_follow_windows_history_budgets_and_batch_json() {
     );
     assert!(
         !historical_surface.to_string().contains("added"),
-        "historical rows must come from --at content: {historical_surface}"
+        "historical rows must come from --revision content: {historical_surface}"
     );
 
     let large = format!("class Big:\n{}", oversized_python(2000));

@@ -3,28 +3,6 @@
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use tree_sitter::{Node, Parser};
 
-fn empty() -> ExtractionResult {
-    ExtractionResult {
-        language: "php".into(),
-        imports: vec![],
-        declarations: vec![],
-        references: vec![],
-    }
-}
-
-pub fn extract(source: &[u8]) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_php::LANGUAGE_PHP.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
-    }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source)
-}
-
 /// Imports/declarations/references from an already-parsed PHP tree.
 /// Decoupled from the parse for single-parse. Caller guarantees `tree` came
 /// from the PHP grammar.
@@ -57,7 +35,7 @@ fn visibility(mut node: Node, source: &[u8]) -> Visibility {
         .map(str::to_ascii_lowercase);
     match modifier.as_deref() {
         Some("private") => Visibility::FileLocal,
-        Some("protected") => Visibility::Restricted,
+        Some("protected") => Visibility::Protected,
         _ => Visibility::Public,
     }
 }

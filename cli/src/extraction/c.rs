@@ -10,29 +10,7 @@
 use crate::extraction::header::Builder;
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
 use std::ops::Range;
-use tree_sitter::{Node, Parser};
-
-fn empty() -> ExtractionResult {
-    ExtractionResult {
-        language: "c".into(),
-        imports: vec![],
-        declarations: vec![],
-        references: vec![],
-    }
-}
-
-pub fn extract(source: &[u8], path: &str) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_c::LANGUAGE.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
-    }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source, path)
-}
+use tree_sitter::Node;
 
 /// Imports/declarations/references from an already-parsed C tree at `path`.
 /// Caller guarantees `tree` came from the C grammar.
@@ -48,7 +26,7 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8], path: &str) ->
 }
 
 /// `static` keeps a declaration in its translation unit: file-local in a
-/// `.c` file, and restricted in a header, whose every includer calls it.
+/// `.c` file, and internal in a header, whose every includer calls it.
 /// Anything else links from every file.
 fn linkage(node: Node, source: &[u8], header_file: bool) -> Visibility {
     let mut cursor = node.walk();
@@ -56,7 +34,7 @@ fn linkage(node: Node, source: &[u8], header_file: bool) -> Visibility {
         .children(&mut cursor)
         .any(|child| child.kind() == "storage_class_specifier" && child.utf8_text(source) == Ok("static"));
     match local {
-        true if header_file => Visibility::Restricted,
+        true if header_file => Visibility::Internal,
         true => Visibility::FileLocal,
         false => Visibility::Public,
     }

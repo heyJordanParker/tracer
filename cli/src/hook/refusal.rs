@@ -200,7 +200,7 @@ impl Scope<'_> {
                 }
                 let (revision, file) = positional.iter().find_map(|arg| arg.split_once(':'))?;
                 let revision = if revision.is_empty() { "HEAD" } else { revision };
-                Some(shell::join(&["trace".into(), "read".into(), file.into(), "--at".into(), revision.into()]))
+                Some(shell::join(&["trace".into(), "read".into(), file.into(), "--revision".into(), revision.into()]))
             }
             "log" => {
                 if flags.iter().any(|flag| flag.starts_with("-G") || *flag == "-p" || *flag == "--patch") {

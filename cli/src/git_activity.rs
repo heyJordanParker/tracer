@@ -244,12 +244,20 @@ pub fn blob(repo_root: &Path, revision: &str, path: &str) -> Option<Vec<u8>> {
 }
 
 pub fn blobs(repo_root: &Path, names: &[String], mut visit: impl FnMut(usize, Option<&[u8]>)) {
+    let fetched = prefetch(repo_root, names);
     let request: Vec<u8> = names
         .iter()
         .flat_map(|name| name.bytes().chain(std::iter::once(b'\n')))
         .collect();
     let mut visited = 0;
-    let _ = piped(repo_root, &["cat-file", "--batch"], request, |_| {}, |stdout| {
+    // After a failed batch fetch, such as offline, `cat-file` would try the
+    // remote again once per missing object.
+    let configure = |command: &mut Command| {
+        if !fetched {
+            command.env("GIT_NO_LAZY_FETCH", "1");
+        }
+    };
+    let _ = piped(repo_root, &["cat-file", "--batch"], request, configure, |stdout| {
         let mut stdout = BufReader::new(stdout);
         let mut header = Vec::new();
         let mut body = Vec::new();
@@ -275,6 +283,75 @@ pub fn blobs(repo_root: &Path, names: &[String], mut visit: impl FnMut(usize, Op
     for index in visited..names.len() {
         visit(index, None);
     }
+}
+
+/// In a partial clone, fetches the objects among `names`, object ids, that
+/// the clone lacks in one request to its promisor remote, the request git's
+/// own commands batch them into, so `cat-file` never fetches them one round
+/// trip at a time. One object gains nothing from a batch, so it is left to
+/// `cat-file`. False when the batch fetch failed.
+fn prefetch(repo_root: &Path, names: &[String]) -> bool {
+    let ids: Vec<&String> = names.iter().filter(|name| name.len() >= 40 && name.bytes().all(|byte| byte.is_ascii_hexdigit())).collect();
+    if ids.len() < 2 {
+        return true;
+    }
+    let Some((remote, _)) = partial_clone(repo_root) else {
+        return true;
+    };
+    let request: Vec<u8> = ids.iter().flat_map(|id| id.bytes().chain(std::iter::once(b'\n'))).collect();
+    let checked = piped(
+        repo_root,
+        &["cat-file", "--batch-check"],
+        request,
+        |command| {
+            command.env("GIT_NO_LAZY_FETCH", "1");
+        },
+        |mut stdout| {
+            let mut read = String::new();
+            stdout.read_to_string(&mut read)?;
+            Ok(read)
+        },
+    );
+    let Ok((checked, _)) = checked else {
+        return true;
+    };
+    let missing: Vec<u8> = checked
+        .lines()
+        .filter_map(|line| line.strip_suffix(" missing"))
+        .flat_map(|id| id.bytes().chain(std::iter::once(b'\n')))
+        .collect();
+    if missing.is_empty() {
+        return true;
+    }
+    let fetch = [
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        remote.as_str(),
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--filter=blob:none",
+        "--stdin",
+    ];
+    piped(repo_root, &fetch, missing, |_| {}, |mut stdout| std::io::copy(&mut stdout, &mut std::io::sink()))
+        .is_ok_and(|(_, fetched)| fetched)
+}
+
+/// A partial clone's promisor remote, which fetches the objects the clone
+/// lacks, and the filter it was cloned with, such as `blob:none`; none for a
+/// full clone. `git clone --filter` writes both into the remote's config.
+fn partial_clone(repo_root: &Path) -> Option<(String, String)> {
+    static PARTIAL_CLONE_MEMO: memo::Memo<Option<(String, String)>> = OnceLock::new();
+    memo::get_or_build(&PARTIAL_CLONE_MEMO, repo_root, || {
+        git_str(repo_root, &["config", "--get-regexp", r"^remote\..*\.partialclonefilter$"])?.lines().find_map(|line| {
+            let (key, filter) = line.split_once(' ')?;
+            let remote = key.strip_prefix("remote.")?.strip_suffix(".partialclonefilter")?;
+            Some((remote.to_string(), filter.to_string()))
+        })
+    })
+    .as_ref()
+    .clone()
 }
 
 pub(crate) fn piped<T>(
@@ -655,7 +732,15 @@ impl CommitIndex<'_> {
             .collect();
         if !missing.is_empty() {
             let grafted: HashSet<&str> = commits.grafts.iter().map(String::as_str).collect();
-            let (walked, finished) = walk_commits(self.repo_root, &missing, &grafted);
+            let (mut walked, mut finished) = walk_commits(self.repo_root, &missing, &grafted, "-M");
+            // A clone filtered of its file contents lacks the old contents a
+            // rename with edits is matched by, and the walk never fetches
+            // them; object ids alone still match a rename with unchanged
+            // contents. A clone filtered of its trees can't walk either way.
+            let blobless = || partial_clone(self.repo_root).is_some_and(|(_, filter)| filter.starts_with("blob:"));
+            if !finished && blobless() {
+                (walked, finished) = walk_commits(self.repo_root, &missing, &grafted, "-M100%");
+            }
             commits.commits.extend(walked);
             commits.incomplete = !finished;
         }
@@ -672,7 +757,9 @@ impl CommitIndex<'_> {
     }
 }
 
-fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>) -> (HashMap<String, Commit>, bool) {
+/// The commits `ids` name with every file each changed, renames matched by
+/// `renames`, git's `-M` option, and whether git walked them all.
+fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>, renames: &str) -> (HashMap<String, Commit>, bool) {
     let request = ids.join("\n").into_bytes();
     let walked = piped(
         repo_root,
@@ -680,7 +767,7 @@ fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>) -> (Has
             "log",
             "--no-walk=unsorted",
             "--stdin",
-            "-M",
+            renames,
             "--diff-merges=first-parent",
             "--raw",
             "--no-abbrev",

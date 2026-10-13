@@ -531,7 +531,7 @@ fn dependencies_transitive_reach_is_exact_per_depth() {
     f.trace(&["cache", "build", "."]).ok();
 
     let at = |depth: &str| -> Vec<String> {
-        let r = f.trace(&["dependencies", "a_fn", "--depth", depth, "--json"]);
+        let r = f.trace(&["dependencies", "a_fn", "--max-depth", depth, "--json"]);
         r.ok();
         let v = r.view();
         let mut ids = node_ids(&symbol(&v, "pkg/a.py::a_fn")["dependencies"]);
@@ -628,7 +628,7 @@ fn usages_transitive_reach_is_exact_per_depth() {
     f.trace(&["cache", "build", "."]).ok();
 
     let at = |depth: &str| -> Vec<String> {
-        let r = f.trace(&["usages", "d_fn", "--depth", depth, "--json"]);
+        let r = f.trace(&["usages", "d_fn", "--max-depth", depth, "--json"]);
         r.ok();
         let v = r.view();
         let mut ids = node_ids(&symbol(&v, "pkg/d.py::d_fn")["dependents"]);
@@ -671,7 +671,7 @@ fn usages_excludes_unrelated_symbol() {
     // Absence: the island has no dependents at any depth.
     let f = chain_repo();
     f.trace(&["cache", "build", "."]).ok();
-    let r = f.trace(&["usages", "lone_fn", "--depth", "9", "--json"]);
+    let r = f.trace(&["usages", "lone_fn", "--max-depth", "9", "--json"]);
     r.ok();
     let v = r.view();
     let dependents = symbol(&v, "lone.py::lone_fn")["dependents"]
@@ -721,7 +721,7 @@ fn reverse_query_returns_complete_dependent_set() {
     f.commit("fan-in repo");
     f.trace(&["cache", "build", "."]).ok();
 
-    let r = f.trace(&["usages", "core_fn", "--depth", "1", "--json"]);
+    let r = f.trace(&["usages", "core_fn", "--max-depth", "1", "--json"]);
     r.ok();
     let v = r.view();
     let mut dependents = node_ids(&symbol(&v, "pkg/core.py::core_fn")["dependents"]);
@@ -1253,7 +1253,7 @@ fn path_mode_matches_exact_reach_oracle_beyond_thirty_subjects() {
                 let depth_arg = depth.to_string();
                 let r = f.trace_env(
                     &[
-                        command, "--path", "scope", "--depth", &depth_arg, "--limit", "100",
+                        command, "--path", "scope", "--max-depth", &depth_arg, "--limit", "100",
                         "--json",
                     ],
                     &[("RAYON_NUM_THREADS", worker_count)],
@@ -1561,32 +1561,218 @@ fn api_lists_each_languages_public_rows_and_re_exports() {
     assert_eq!(public.len(), expected.len(), "a file with no public rows is left out: {public:?}");
 }
 
-#[test]
-fn api_restricted_adds_the_rows_other_files_reach() {
-    let f = api_repo();
-    let (public, restricted) = (api_names(&f, "public"), api_names(&f, "restricted"));
-    let added = |file: &str| -> Vec<String> {
-        let mut rows = restricted.get(file).cloned().unwrap_or_default();
-        for name in public.get(file).into_iter().flatten() {
-            let at = rows.iter().position(|row| row == name).unwrap_or_else(|| panic!("{file} lost {name}: {restricted:?}"));
-            rows.remove(at);
-        }
-        rows
-    };
-    assert_eq!(added("lib.rs"), ["shared"]);
-    assert_eq!(added("box.ts"), ["seal"]);
-    assert_eq!(added("lib.go"), ["Area", "area", "inner"]);
-    assert_eq!(added("Lib.java"), ["Hidden", "pkg", "prot", "run"]);
-    assert_eq!(added("shape.php"), ["scale"]);
-    assert_eq!(added("shape.py"), ["_hidden", "_scale"]);
-    assert_eq!(added("shape.rb"), ["cache"]);
-    assert_eq!(added("lib.h"), ["helper"]);
-    assert!(added("lib.c").is_empty(), "a .c file's static stays in its file: {restricted:?}");
-    let all = api_names(&f, "all");
-    for (file, private) in [("lib.rs", "helper"), ("box.ts", "peek"), ("box.ts", "hidden"), ("Lib.java", "priv"), ("shape.php", "cache"), ("lib.c", "hidden"), ("shape.rb", "private")] {
-        assert!(!restricted[file].contains(&private.to_string()), "{file} {private}: {restricted:?}");
-        assert!(all[file].contains(&private.to_string()), "{file} {private}: {all:?}");
+/// The rows `wider` lists in `file` beyond what `narrower` lists, sorted.
+fn added_rows(narrower: &HashMap<String, Vec<String>>, wider: &HashMap<String, Vec<String>>, file: &str) -> Vec<String> {
+    let mut rows = wider.get(file).cloned().unwrap_or_default();
+    for name in narrower.get(file).into_iter().flatten() {
+        let at = rows.iter().position(|row| row == name).unwrap_or_else(|| panic!("{file} lost {name}: {wider:?}"));
+        rows.remove(at);
     }
+    rows
+}
+
+/// `internal` adds what a language keeps inside its module or package;
+/// `protected` and `private` members are left to `all`.
+#[test]
+fn api_internal_adds_what_the_language_keeps_inside_its_module() {
+    let f = api_repo();
+    let (public, internal, all) = (api_names(&f, "public"), api_names(&f, "internal"), api_names(&f, "all"));
+    let added = |file: &str| added_rows(&public, &internal, file);
+    assert_eq!(added("lib.rs"), ["shared"]);
+    assert!(added("box.ts").is_empty(), "a protected member is not internal: {internal:?}");
+    assert_eq!(added("lib.go"), ["Area", "area", "inner"]);
+    assert_eq!(added("Lib.java"), ["Hidden", "pkg", "run"]);
+    assert!(added("shape.php").is_empty(), "a protected member is not internal: {internal:?}");
+    assert_eq!(added("shape.py"), ["_hidden", "_scale"]);
+    assert!(added("shape.rb").is_empty(), "a Ruby private method is not internal: {internal:?}");
+    assert_eq!(added("lib.h"), ["helper"]);
+    assert!(added("lib.c").is_empty(), "a .c file's static stays in its file: {internal:?}");
+    for (file, hidden) in [("lib.rs", "helper"), ("box.ts", "peek"), ("box.ts", "seal"), ("box.ts", "hidden"), ("Lib.java", "priv"), ("Lib.java", "prot"), ("shape.php", "cache"), ("shape.php", "scale"), ("lib.c", "hidden"), ("shape.rb", "cache"), ("shape.rb", "private")] {
+        assert!(!internal[file].contains(&hidden.to_string()), "{file} {hidden}: {internal:?}");
+        assert!(all[file].contains(&hidden.to_string()), "{file} {hidden}: {all:?}");
+    }
+}
+
+/// An author's mark narrows a declaration to `internal` in every language:
+/// an attribute, annotation, or decorator named `Internal`, Rust's
+/// `#[doc(hidden)]`, an `@internal` doc tag, and Ruby's `@api private`,
+/// above the declaration or on its own line. A marked type takes its
+/// members with it, a Rust `impl` and a Go method included; prose that
+/// mentions `@internal` marks nothing; and a mark never widens a private
+/// member.
+#[test]
+fn api_internal_follows_the_authors_internal_marks() {
+    let f = Fixture::new();
+    f.write(
+        "Access.php",
+        "<?php\n#[Internal]\nfinal class Hidden\n{\n    public function run(): void {}\n}\n\nfinal class Access\n{\n    public function grant(): void {}\n\n    #[\\JetBrains\\PhpStorm\\Internal]\n    public function rebuild(): void {}\n\n    /** @internal Only the importer calls this. */\n    public function rawRows(): array { return []; }\n\n    #[Internal]\n    private function log(): void {}\n\n    public function contact(): string { return 'ops@internal.example'; }\n}\n\n/**\n * Unlike classes marked #[Internal], this one is public.\n */\nfinal class Service\n{\n    public function serve(): void {}\n}\n",
+    );
+    f.write("Access.java", "public class Access {\n  public void grant() {}\n  @ApiStatus.Internal\n  public void rebuild() {}\n  /**\n   * Raw rows.\n   * @internal\n   */\n  public void rawRows() {}\n}\n");
+    f.write(
+        "access.ts",
+        "export class Access {\n  grant(): void {}\n  @Internal()\n  rebuild(): void {}\n  /** @internal */\n  rawRows(): void {}\n  /** @internal */ inline(): void {}\n  // Shows how to call the @internal helpers\n  documented(): void {}\n}\n\n/** @internal */ export function sameLine(): void {}\n\n/** @internal */ export const hidden = 1; export const shown = hidden;\n\n/** @internal */ export const value = 1; export const inter = 2;\n\n/** @internal */\nexport { helper } from './helper';\n",
+    );
+    f.write(
+        "access.py",
+        "class Access:\n    def grant(self):\n        pass\n\n    @internal\n    def rebuild(self):\n        pass\n\n    def raw_rows(self):\n        \"\"\"Raw rows.\n\n        @internal\n        \"\"\"\n        pass\n\n\ndef plain(x):  # noqa\n    if x:\n        \"\"\"@internal\"\"\"\n    return x\n\n\ndef shown():\n    \"\"\"Calls the @internal helpers.\"\"\"\n",
+    );
+    f.write(
+        "lib.rs",
+        "pub fn grant() {}\n\n#[doc(hidden)]\npub fn rebuild() {}\n\n/// @internal\npub fn raw_rows() {}\n\n/// Unlike the helpers that are `#[doc(hidden)]`, this one is public.\npub fn documented() {}\n\n#[cfg(any(test, internal))]\npub fn gated() {}\n\n#[doc(hidden)] pub fn a2() {} pub fn b2() {}\n\n#[doc(hidden)]\npub mod __private {\n    pub fn helper() {}\n}\n\n#[doc(hidden)]\npub use crate::helpers::Support;\n\n#[doc(hidden)]\npub struct Hidden;\n\nimpl Hidden {\n    pub fn new() -> Self {\n        Hidden\n    }\n}\n\nimpl std::fmt::Display for Hidden {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {\n        Ok(())\n    }\n}\n",
+    );
+    f.write(
+        "access.go",
+        "package access\n\nfunc Grant() {}\n\n// @internal\nfunc RawRows() {}\n\n// @internal\ntype Engine struct{}\n\nfunc (e *Engine) Start() {}\n\ntype Logger struct{}\n\nfunc (l *Logger) Print() {}\n\ntype Server struct{}\n\n// @internal\nfunc (s *Server) Logger() *Logger { return nil }\n",
+    );
+    f.write("access.rb", "class Access\n  def grant\n  end\n\n  # @api private\n  def raw_rows\n  end\nend\n");
+    f.commit("marks");
+    let (public, internal, all) = (api_names(&f, "public"), api_names(&f, "internal"), api_names(&f, "all"));
+    let expected: &[(&str, &[&str], &[&str])] = &[
+        ("Access.php", &["Access", "Service", "contact", "grant", "serve"], &["Hidden", "rawRows", "rebuild", "run"]),
+        ("Access.java", &["Access", "grant"], &["rawRows", "rebuild"]),
+        ("access.ts", &["Access", "documented", "grant", "inter", "shown"], &["./helper", "hidden", "inline", "rawRows", "rebuild", "sameLine", "value"]),
+        ("access.py", &["Access", "grant", "plain", "shown"], &["raw_rows", "rebuild"]),
+        ("lib.rs", &["b2", "documented", "gated", "grant"], &["Hidden", "Hidden", "Hidden", "Support", "__private", "a2", "fmt", "helper", "new", "raw_rows", "rebuild"]),
+        ("access.go", &["Grant", "Logger", "Print", "Server", "access"], &["Engine", "Logger", "RawRows", "Start"]),
+        ("access.rb", &["Access", "grant"], &["raw_rows"]),
+    ];
+    for (file, shown, marked) in expected {
+        assert_eq!(public[*file], *shown, "{file}: {public:?}");
+        assert_eq!(added_rows(&public, &internal, file), *marked, "{file}: {internal:?}");
+    }
+    assert!(!internal["Access.php"].contains(&"log".to_string()) && all["Access.php"].contains(&"log".to_string()), "a mark never widens a private member: {internal:?}");
+}
+
+/// `--output` writes each file's path and rows, with no line numbers or
+/// facts, so a body edit leaves the file unchanged and a signature edit
+/// changes one line.
+#[test]
+fn api_output_writes_only_what_the_api_says() {
+    let f = Fixture::new();
+    f.write("src/Shop/Cart.php", "<?php\n/** Holds what a buyer picked. */\n#[Entity]\nfinal class Cart\n{\n    public function total(int $tax): int\n    {\n        return $tax;\n    }\n\n    private function helper(): void {}\n}\n");
+    f.commit("cart");
+    let write = |name: &str| {
+        let run = f.trace(&["api", "src", "-o", name]);
+        run.ok();
+        assert_eq!(run.stdout.lines().next(), Some(format!("wrote the API of 1 file to {name}").as_str()), "{}", run.stdout);
+        std::fs::read_to_string(f.root.join(name)).unwrap()
+    };
+    let first = write("first.txt");
+    assert_eq!(
+        first,
+        "src/Shop/Cart.php  — Holds what a buyer picked.\n  #[Entity]\n  final class Cart { … }\n    public function total(int $tax): int { … }\n"
+    );
+    f.write("src/Shop/Cart.php", "<?php\n/** Holds what a buyer picked. */\n#[Entity]\nfinal class Cart\n{\n\n    public function total(int $tax): int\n    {\n        $sum = $tax * 2;\n        return $sum;\n    }\n\n    private function helper(): void {}\n}\n");
+    assert_eq!(write("second.txt"), first, "a body edit and shifted lines leave the API unchanged");
+    f.write("src/Shop/Cart.php", "<?php\n/** Holds what a buyer picked. */\n#[Entity]\nfinal class Cart\n{\n    public function total(int $tax, bool $round): int\n    {\n        return $tax;\n    }\n}\n");
+    assert_eq!(
+        write("third.txt"),
+        "src/Shop/Cart.php  — Holds what a buyer picked.\n  #[Entity]\n  final class Cart { … }\n    public function total(int $tax, bool $round): int { … }\n"
+    );
+    let json = f.trace(&["api", "src", "-o", "x.txt", "--json"]);
+    assert_eq!(json.code, 2, "--output never combines with --json: {}", json.stderr);
+}
+
+/// `--revision` reads the files a commit holds, whatever the working tree
+/// holds now, and an unknown revision or a path the commit lacks fails.
+#[test]
+fn api_revision_reads_the_files_a_commit_holds() {
+    let f = Fixture::new();
+    f.write("src/a.ts", "export function first(): void {}\n");
+    f.commit("first");
+    f.write("src/a.ts", "export function second(): void {}\n");
+    f.write("src/b.ts", "export function added(): void {}\n");
+    f.commit("second");
+    std::fs::remove_file(f.root.join("src/a.ts")).unwrap();
+    let names = |args: &[&str]| -> Vec<String> {
+        let v = f.trace(&[&["api", "src", "--json"][..], args].concat()).json();
+        v["results"].as_array().unwrap().iter().map(|row| row["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&["--revision", "HEAD~1"]), ["first"]);
+    assert_eq!(names(&["--revision", "HEAD"]), ["second", "added"]);
+    assert_eq!(names(&[]), ["added"], "the working tree is read without --revision");
+    f.trace(&["api", "src", "--revision", "HEAD~1", "-o", "old.txt"]).ok();
+    assert_eq!(std::fs::read_to_string(f.root.join("old.txt")).unwrap(), "src/a.ts\n  export function first(): void { … }\n");
+    let unknown = f.trace(&["api", "src", "--revision", "no_such_ref_zzz"]);
+    assert_eq!(unknown.code, 2, "{}", unknown.stderr);
+    let missing = f.trace(&["api", "src/b.ts", "--revision", "HEAD~1"]);
+    assert_eq!(missing.code, 2, "{}", missing.stderr);
+    assert!(missing.stderr.contains("does not exist at HEAD~1"), "{}", missing.stderr);
+    let imported = f.trace(&["api", "src", "--imported", "--revision", "HEAD"]);
+    assert_eq!(imported.code, 2, "{}", imported.stderr);
+}
+
+/// On a clean tree the API written from the working tree and from HEAD are
+/// the same file, `cloud.rs` beside `cloud/` included, which git orders
+/// apart from a path-by-path listing. A file the budget collapses names the
+/// command that lists it at the same revision.
+#[test]
+fn api_from_head_matches_the_clean_working_tree() {
+    let f = Fixture::new();
+    f.write("src/cloud.rs", "pub fn up() {}\n");
+    f.write("src/cloud/drive.rs", "pub fn mount() {}\n");
+    f.write("src/cloud-sync.rs", "pub fn sync() {}\n");
+    f.write("src/a/b.rs", "pub fn deep() {}\n");
+    std::os::unix::fs::symlink("cloud.rs", f.root.join("src/link.rs")).unwrap();
+    f.commit("layout");
+    f.trace(&["api", "src", "-o", "tree.txt"]).ok();
+    f.trace(&["api", "src", "--revision", "HEAD", "-o", "head.txt"]).ok();
+    let tree = std::fs::read_to_string(f.root.join("tree.txt")).unwrap();
+    assert_eq!(std::fs::read_to_string(f.root.join("head.txt")).unwrap(), tree);
+    assert!(tree.contains("src/cloud.rs") && tree.contains("src/cloud/drive.rs"), "{tree}");
+    assert_eq!(tree.matches("pub fn up()").count(), 1, "a link lists nothing the file it names doesn't: {tree}");
+    let cut = f.trace(&["api", "src", "--revision", "HEAD", "--budget", "150"]);
+    cut.ok();
+    assert!(cut.stdout.contains("--revision HEAD"), "a collapsed file keeps its revision: {}", cut.stdout);
+}
+
+/// Every depth is listed unless `--max-depth` limits it, the way ripgrep
+/// counts it: 1 is the files directly in the path.
+#[test]
+fn api_lists_every_depth_unless_max_depth_limits_it() {
+    let f = Fixture::new();
+    f.write("app/top.ts", "export function top(): void {}\n");
+    f.write("app/a/b/c/d/deep.ts", "export function deep(): void {}\n");
+    f.commit("depth");
+    let files = |args: &[&str]| -> Vec<String> {
+        let v = f.trace(&[&["api", "app", "--json"][..], args].concat()).json();
+        v["results"].as_array().unwrap().iter().map(|row| row["file"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(files(&[]), ["app/a/b/c/d/deep.ts", "app/top.ts"]);
+    assert_eq!(files(&["--max-depth", "1"]), ["app/top.ts"]);
+    assert_eq!(files(&["--max-depth", "0", "app/top.ts"]), ["app/top.ts"], "a file named on the command line is always listed");
+}
+
+/// A folder named on the command line lists its files even when git
+/// ignores it, itself or through a folder above it, the way ripgrep does,
+/// and a file an ignore pattern matches stays out.
+#[test]
+fn api_read_and_structure_list_an_ignored_folder_they_are_given() {
+    let f = Fixture::new();
+    f.write(".gitignore", "vendor/\n*.gen.ts\n");
+    f.write("gen/api.gen.ts", "export function generated(): void {}\n");
+    f.write("vendor/acme/lib/client.gen.ts", "export function generated(): void {}\n");
+    f.write("app.ts", "export function app(): void {}\n");
+    f.commit("ignore vendor");
+    f.write("vendor/acme/lib/Client.php", "<?php\nfinal class Client\n{\n    public function send(): void {}\n}\n");
+    f.write("vendor/acme/nested/.git/HEAD", "ref: refs/heads/main\n");
+    f.write("vendor/acme/nested/Nested.php", "<?php\nfinal class Nested {}\n");
+    let api = f.trace(&["api", "vendor/acme"]);
+    api.ok();
+    assert!(api.stdout.contains("public function send(): void { … }"), "{}", api.stdout);
+    assert!(!api.stdout.contains("generated"), "an ignored file under a named folder stays out: {}", api.stdout);
+    assert!(!api.stdout.contains("Nested"), "a nested repository is its own scope: {}", api.stdout);
+    let generated = f.trace(&["api", "gen"]);
+    generated.ok();
+    assert!(!generated.stdout.contains("generated"), "{}", generated.stdout);
+    let structure = f.trace(&["structure", "vendor/acme/lib"]);
+    structure.ok();
+    assert!(structure.stdout.contains("file: vendor/acme/lib/Client.php"), "{}", structure.stdout);
+    let read = f.trace(&["read", "vendor/acme"]);
+    read.ok();
+    assert!(read.stdout.contains("# vendor/acme/lib/Client.php"), "{}", read.stdout);
+    let root = f.trace(&["api", ".", "--json"]).json();
+    assert!(root["results"].as_array().unwrap().iter().all(|row| !row["file"].as_str().unwrap().contains("vendor")), "an ignored folder under a named one stays out: {root}");
 }
 
 /// Each row of `trace api <path> --visibility all` as its header and its

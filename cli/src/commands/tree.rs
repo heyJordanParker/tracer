@@ -46,8 +46,10 @@ struct Entry {
     max_function_complexity: i64,
 }
 
-/// Depth-bounded tree walk under `base`, collecting entries.
-fn walk(base: &Path, max_depth: usize) -> Vec<Entry> {
+/// Tree walk under `base`, collecting entries at most `max_depth` folders
+/// below it, or at every depth.
+fn walk(base: &Path, max_depth: Option<usize>) -> Vec<Entry> {
+    let deeper = |depth: usize| max_depth.is_some_and(|max| depth > max);
     let repo_root = cache::worktree_root_for(base).unwrap_or_else(|| cache::display_root(base));
     let base_abs = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     let tracked = repo_files::tracked_files(&repo_root, (base_abs != repo_root).then_some(base));
@@ -66,8 +68,7 @@ fn walk(base: &Path, max_depth: usize) -> Vec<Entry> {
                     Ok(u) => u.to_string_lossy().to_string(),
                     Err(_) => continue,
                 };
-                let depth = under.matches('/').count() + 1;
-                if depth > max_depth {
+                if deeper(under.matches('/').count() + 1) {
                     continue;
                 }
                 selected.push(full);
@@ -81,7 +82,7 @@ fn walk(base: &Path, max_depth: usize) -> Vec<Entry> {
                     Ok(r) => r.components().count(),
                     Err(_) => continue,
                 };
-                if depth > max_depth {
+                if deeper(depth) {
                     continue;
                 }
                 selected.push(full);
@@ -109,14 +110,14 @@ fn walk(base: &Path, max_depth: usize) -> Vec<Entry> {
     entries
 }
 
-pub fn run(path: &Path, depth: usize, as_json: bool) -> Result<Value> {
+pub fn run(path: &Path, max_depth: Option<usize>, as_json: bool) -> Result<Value> {
     crate::pathval::require_exists(path, "PATH")?;
     // The displayed base is the resolved path.
     let base = path
         .canonicalize()
         .unwrap_or_else(|_| cache::absolutize(path));
     let base_abs = base.clone();
-    let entries = walk(&base, depth);
+    let entries = walk(&base, max_depth);
     let ctx = repo_context::repo_context(&base);
 
     // Each file's facts are per-file enrichment, so they sit in `context`
@@ -142,7 +143,7 @@ pub fn run(path: &Path, depth: usize, as_json: bool) -> Result<Value> {
         })
         .collect();
     let value = crate::output::document(
-        json!({"root": base.to_string_lossy(), "depth": depth}),
+        json!({"root": base.to_string_lossy(), "max_depth": max_depth}),
         json!({"repo": ctx.clone(), "files": Value::Object(file_facts_by_path)}),
         json!(files),
         json!({"files": files.len()}),

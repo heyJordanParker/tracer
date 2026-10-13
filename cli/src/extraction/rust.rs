@@ -21,19 +21,6 @@ use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Referen
 use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
-fn empty() -> ExtractionResult {
-    ExtractionResult {
-        language: "rust".into(),
-        imports: vec![],
-        declarations: vec![],
-        references: vec![],
-    }
-}
-
-pub fn extract(source: &[u8]) -> ExtractionResult {
-    parse(source).map_or_else(empty, |tree| extract_from_tree(&tree, source))
-}
-
 fn parse(source: &[u8]) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
@@ -58,7 +45,7 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
 }
 
 /// The visibility an item's `pub` states: `pub` is public, `pub(crate)`,
-/// `pub(super)`, and `pub(in …)` reach other files, and no `pub` or
+/// `pub(super)`, and `pub(in …)` are internal to the crate, and no `pub` or
 /// `pub(self)` keeps the item in its module.
 fn declared(node: Node, source: &[u8]) -> Visibility {
     let mut cursor = node.walk();
@@ -70,7 +57,7 @@ fn declared(node: Node, source: &[u8]) -> Visibility {
         None => Visibility::FileLocal,
         Some(text) if text == "pub" => Visibility::Public,
         Some(text) if text == "pub(self)" => Visibility::FileLocal,
-        Some(_) => Visibility::Restricted,
+        Some(_) => Visibility::Internal,
     }
 }
 
@@ -98,11 +85,7 @@ fn inherit_visibility(declarations: &mut [Declaration]) {
     for index in 0..declarations.len() {
         let parent = declarations[index].parent.map(|parent| &declarations[parent as usize]);
         let inherited = match (declarations[index].kind.as_str(), parent) {
-            ("impl", _) => {
-                let name = &declarations[index].name;
-                let base = name.split('<').next().unwrap_or(name).trim();
-                Some(types.get(base.rsplit("::").next().unwrap_or(base)).copied().unwrap_or(Visibility::Public))
-            }
+            ("impl", _) => Some(types.get(super::impl_type(&declarations[index].name)).copied().unwrap_or(Visibility::Public)),
             (_, Some(parent)) if declarations[index].visibility == Visibility::Unknown => Some(parent.visibility),
             _ => None,
         };

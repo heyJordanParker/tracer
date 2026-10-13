@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tracer_cli_tests::{
-    schema_directory, standard_repo, trace, Fixture, PUBLISHED_SCHEMA_VERSION,
+    schema_directory, standard_repo, trace, trace_env, Fixture, PUBLISHED_SCHEMA_VERSION,
 };
 
 /// The git facts `info` shows for one repo-relative path.
@@ -1881,11 +1881,11 @@ fn history_commit_fits_the_budget() {
     );
 }
 
-/// `grep --at <ref>` searches a commit. ripgrep reads the disk, so the past
+/// `grep --revision <REV>` searches a commit. ripgrep reads the disk, so the past
 /// was reachable only by `git show <ref>:<path>` — 40,433 times in the
 /// census.
 #[test]
-fn grep_at_ref_searches_a_commit_not_the_worktree() {
+fn grep_at_a_revision_searches_a_commit_not_the_worktree() {
     let f = Fixture::new();
     f.write("app.py", "SECRET_TOKEN = 'old'\n");
     f.commit("with the token");
@@ -1901,7 +1901,7 @@ fn grep_at_ref_searches_a_commit_not_the_worktree() {
         now.stdout
     );
 
-    let past = f.trace(&["grep", "'old'", ".", "--at", "HEAD~1", "--json"]);
+    let past = f.trace(&["grep", "'old'", ".", "--revision", "HEAD~1", "--json"]);
     past.ok();
     let v = past.view();
     assert_eq!(v["matches"].as_i64().unwrap(), 1, "{}", past.stdout);
@@ -1985,8 +1985,62 @@ fn partial_clone_answers_without_fetching_and_still_reads_old_versions() {
         .filter(|entry| entry.file_name().to_string_lossy().starts_with("git_activity_v2__"))
         .count();
     assert_eq!(stored_history, 0, "an unfinished history walk was stored");
+    let walked = trace_env(&clone, ["info", "app.py"], &[("TRACE_TIMING", "1")]);
+    walked.ok();
+    let walks = walked.stderr.lines().filter(|line| line.starts_with("timing git log")).count();
+    assert_eq!(walks, 1, "a clone without trees walks once, never again by object id: {}", walked.stderr);
 
-    let old = trace(&clone, &["read", "app.py", "--at", "HEAD~1", "--raw"]);
+    let old = trace(&clone, &["read", "app.py", "--revision", "HEAD~1", "--raw"]);
     old.ok();
     assert!(old.stdout.contains("VALUE = 'first'"), "{}", old.stdout);
+}
+
+/// A clone without old file contents still stores its history: a rename
+/// with edits can't be matched without the old contents, so the walk
+/// matches renames by object id instead of failing on every call. Reading a
+/// folder at an old revision fetches the contents it lacks in one request,
+/// never one per file.
+#[test]
+fn blobless_clone_stores_its_history_and_fetches_a_revision_in_one_request() {
+    let origin = Fixture::new();
+    origin.write("src/cart.py", "def total(lines):\n    return sum(lines)\n");
+    origin.write("src/order.py", "def place(cart):\n    return cart\n");
+    origin.commit("first");
+    std::fs::remove_file(origin.root.join("src/cart.py")).unwrap();
+    origin.write("src/basket.py", "def total(lines, tax):\n    return sum(lines) + tax\n");
+    origin.write("src/order.py", "def place(basket):\n    return basket\n");
+    origin.commit("rename cart with an edit");
+    origin.write("config/one.py", "ONE = 1\n");
+    origin.commit("third");
+    origin.git(&["mv", "config/one.py", "config/first.py"]);
+    origin.commit("rename one unchanged");
+    origin.git(&["config", "uploadpack.allowFilter", "true"]);
+    origin.git(&["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    let clone = origin.root.join("blobless");
+    origin.git(&["clone", "--quiet", "--filter=blob:none", &format!("file://{}", origin.root.display()), clone.to_str().unwrap()]);
+
+    trace(&clone, &["info", "src/basket.py"]).ok();
+    assert!(schema_directory(&clone, PUBLISHED_SCHEMA_VERSION).join("commits_v1.json").exists(), "the walk was never stored");
+    let warm = trace_env(&clone, ["info", "src/basket.py"], &[("TRACE_TIMING", "1")]);
+    warm.ok();
+    assert!(!warm.stderr.contains("timing git log"), "a warm call walked history again: {}", warm.stderr);
+    let renamed = trace(&clone, &["info", "config/first.py", "--json"]).ok().json();
+    let git = &renamed["context"]["files"]["config/first.py"]["git"];
+    assert_eq!((git["commits"].as_u64(), git["renamed_from"].as_str()), (Some(2), Some("config/one.py")), "a rename with unchanged contents keeps its history: {renamed}");
+
+    let remote = git_in(&clone, &["remote", "get-url", "origin"]);
+    git_in(&clone, &["remote", "set-url", "origin", "file:///nonexistent-tracer-remote"]);
+    let offline = trace(&clone, &["api", "src", "--revision", "HEAD~3", "-o", "offline.txt"]);
+    assert_eq!(offline.code, 2, "a file it could not read never passes for a removed API: {}", offline.stderr);
+    assert!(offline.stderr.contains("could not be read at HEAD~3"), "{}", offline.stderr);
+    git_in(&clone, &["remote", "set-url", "origin", remote.trim()]);
+
+    let read = trace_env(&clone, ["api", "src", "--revision", "HEAD~3", "-o", "old.txt"], &[("TRACE_TIMING", "1")]);
+    read.ok();
+    let fetches = read.stderr.lines().filter(|line| line.starts_with("timing git -c")).count();
+    assert_eq!(fetches, 1, "the old contents came in one request: {}", read.stderr);
+    assert_eq!(
+        std::fs::read_to_string(clone.join("old.txt")).unwrap(),
+        "src/cart.py\n  def total(lines): …\nsrc/order.py\n  def place(cart): …\n"
+    );
 }

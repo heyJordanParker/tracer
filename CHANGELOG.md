@@ -7,6 +7,13 @@
 - Extra context waits about a second for the relations index and never longer, so one large file still being read no longer holds a hook past its deadline.
 - A subagent's `trace` call inside `bash -c`, `xargs`, `find -exec`, `env`, `timeout`, `nice`, `nohup`, `command`, or `exec` is credited to the subagent.
 - `trace docs archive`, `--triggering-tool`, and `--triggering-command` are gone. They did nothing.
+- `trace api -o <file>` writes the API to a file without line numbers or facts, and `--revision <rev>` reads it from a commit, branch, or tag, so the files of two versions compare line by line.
+- `trace api --visibility internal` replaces `restricted`. It adds what the language keeps inside its module or package, and what the author marks internal: an attribute, annotation, or decorator named `Internal`, an `@internal` doc tag, Rust's `#[doc(hidden)]`, or Ruby's `@api private`. Protected members move to `all`. The marks apply wherever tracer reads a file's exports, `read --diff` and `diff --symbols` included.
+- `trace api` and `trace tree` list every depth unless `--max-depth N` limits it. `usages` and `dependencies` take `--max-depth N`, still 3 by default. `--depth` is gone.
+- `grep --at` and `read --at` are now `--revision`.
+- `trace api`, `read`, and `structure` list the files of a folder git ignores when you name it, the way ripgrep does.
+- Reading the declarations of a large file through `ctags`, such as a 4 MB stylesheet, takes seconds instead of minutes.
+- A clone made with `--filter=blob:none` stores its history the first time instead of walking it on every call, and reads a folder at an old revision in one fetch per 512 files instead of one per file.
 
 ## 0.4.0
 

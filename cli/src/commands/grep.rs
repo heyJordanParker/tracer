@@ -270,14 +270,14 @@ pub(super) fn globbed(globs: &[String]) -> Result<impl Fn(&Path) -> bool> {
 /// the same files on a commit as on the working tree.
 fn git_grep(
     pattern: &str,
-    at: &str,
+    revision: &str,
     repo_root: &Path,
     scope: &[(&str, String)],
     options: &Options,
     types: &ignore::types::Types,
 ) -> Result<Vec<(String, Match)>> {
     if options.multiline {
-        bail!("-U needs ripgrep, and --at searches with git grep, which has no multiline mode");
+        bail!("-U needs ripgrep, and --revision searches with git grep, which has no multiline mode");
     }
     let globbed = globbed(&options.globs)?;
     let selected = |file: &str| {
@@ -288,7 +288,7 @@ fn git_grep(
     if options.ignore_case {
         args.push("--ignore-case");
     }
-    args.extend(["-e", pattern, at, "--"]);
+    args.extend(["-e", pattern, revision, "--"]);
     args.extend(scope.iter().map(|(_, within)| within.as_str()));
     let mut matches = crate::git_activity::git_command(repo_root, args, |command| {
         let mut child = crate::process::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
@@ -312,7 +312,7 @@ fn git_grep(
         if !status.success() && status.code() != Some(1) {
             bail!("{}", backend_error("git grep", status, stderr, total));
         }
-        let prefix = format!("{at}:").into_bytes();
+        let prefix = format!("{revision}:").into_bytes();
         let mut matches = Vec::new();
         let mut remaining = stdout.as_slice();
         while !remaining.is_empty() {
@@ -471,13 +471,13 @@ fn attach_context(matches: &mut [Match], lines: &Lines, before: usize, after: us
 
 /// Every match of `pattern` under `paths`, grouped by the repository each
 /// file belongs to, with `-B` and `-A` context attached.
-fn searched(pattern: &str, paths: &[String], at: Option<&str>, options: &Options) -> Result<Groups> {
+fn searched(pattern: &str, paths: &[String], revision: Option<&str>, options: &Options) -> Result<Groups> {
     // A type is resolved before the search runs: an unknown one must fail by
     // name, never as an empty result the agent reads as "this does not
     // exist".
     let (types, matcher) = crate::lang::ripgrep_types(&options.types)
         .map_err(|message| crate::process::fail(2, format!("Error: {message}")))?;
-    let (mut groups, lines) = match at {
+    let (mut groups, lines) = match revision {
         Some(revision) => at_revision(pattern, revision, paths, options, &matcher)?,
         None => {
             let (matches, lines) = ripgrep(pattern, paths, options, &types)?;
@@ -497,13 +497,13 @@ type Enriched<'a> = (
 );
 
 /// Each group's matches with their files' facts and declaration rows.
-fn enriched<'a>(groups: &'a Groups, at: Option<&str>) -> Enriched<'a> {
+fn enriched<'a>(groups: &'a Groups, revision: Option<&str>) -> Enriched<'a> {
     let mut enriched = Vec::new();
     let mut files = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
     for (root, group) in groups {
         let relations = crate::relations::ready(root);
-        let (group_enriched, group_files, group_surfaces) = matches::enrich(group, root, relations.as_deref(), at);
+        let (group_enriched, group_files, group_surfaces) = matches::enrich(group, root, relations.as_deref(), revision);
         enriched.extend(group_enriched);
         files.extend(group_files);
         surfaces.extend(group_surfaces);
@@ -530,18 +530,18 @@ pub fn native_context(
 pub fn run(
     pattern: &str,
     paths: &[String],
-    at: Option<&str>,
+    revision: Option<&str>,
     options: &Options,
     as_json: bool,
     sink: &Sink,
 ) -> Result<()> {
-    let groups = searched(pattern, paths, at, options)?;
+    let groups = searched(pattern, paths, revision, options)?;
     let abs = cache::absolutize(Path::new(&paths[0]));
     let first_root = root_of(&paths[0]);
     let ((enriched, files, surfaces, signpost), repo_ctx) = rayon::join(
         || {
             let signpost = matches::signpost(matches::searched_name(pattern), &first_root);
-            let (enriched, files, surfaces) = enriched(&groups, at);
+            let (enriched, files, surfaces) = enriched(&groups, revision);
             (enriched, files, surfaces, signpost)
         },
         || if as_json { repo_context::repo_context(&abs) } else { Value::Null },
@@ -566,7 +566,7 @@ pub fn run(
             answer.push_str(&format!("nested repository (its own search scope): {r}\n"));
         }
         // Docs belong to the worktree, so a search at a revision sends none.
-        let reached: Vec<PathBuf> = if at.is_none() { paths.iter().map(PathBuf::from).collect() } else { Vec::new() };
+        let reached: Vec<PathBuf> = if revision.is_none() { paths.iter().map(PathBuf::from).collect() } else { Vec::new() };
         crate::docs::print_with_docs(&answer, &reached, "trace_grep", delivery)?;
     }
     drop(surfaces);
@@ -575,7 +575,7 @@ pub fn run(
         query: json!({
             "pattern": pattern,
             "paths": paths,
-            "at": at,
+            "revision": revision,
             "type": options.types,
             "glob": options.globs,
             "ignore_case": options.ignore_case,

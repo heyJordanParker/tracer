@@ -9,29 +9,7 @@
 //! return type hints (`Static`, the type names the class).
 
 use crate::extraction::{Declaration, ExtractionResult, Import, RefShape, Reference, Visibility};
-use tree_sitter::{Node, Parser};
-
-fn empty() -> ExtractionResult {
-    ExtractionResult {
-        language: "java".into(),
-        imports: vec![],
-        declarations: vec![],
-        references: vec![],
-    }
-}
-
-pub fn extract(source: &[u8]) -> ExtractionResult {
-    let lang: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
-    let mut parser = Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return empty();
-    }
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return empty(),
-    };
-    extract_from_tree(&tree, source)
-}
+use tree_sitter::Node;
 
 /// Imports/declarations/references from an already-parsed Java tree.
 /// Caller guarantees `tree` came from the Java grammar.
@@ -48,8 +26,8 @@ pub fn extract_from_tree(tree: &tree_sitter::Tree, source: &[u8]) -> ExtractionR
     }
 }
 
-/// `public` is public, `private` file-local, and `protected` or no modifier
-/// reachable from the package and subclasses. A member of an interface or
+/// `public` is public, `private` file-local, `protected` open to subclasses,
+/// and no modifier internal to the package. A member of an interface or
 /// annotation type is public unless it says `private`.
 fn visibility(node: Node, source: &[u8], in_interface: bool) -> Visibility {
     let mut cursor = node.walk();
@@ -63,8 +41,10 @@ fn visibility(node: Node, source: &[u8], in_interface: bool) -> Visibility {
         Visibility::FileLocal
     } else if has("public") || in_interface {
         Visibility::Public
+    } else if has("protected") {
+        Visibility::Protected
     } else {
-        Visibility::Restricted
+        Visibility::Internal
     }
 }
 
@@ -201,7 +181,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                     out.push(Declaration {
                         name: name.to_string(),
                         kind: k.to_string(),
-                        header_line: line,
+                        header_line: n.start_position().row as i64 + 1,
                         line,
                         end_line: n.end_position().row as i64 + 1,
                         container: decl_container.clone(),
