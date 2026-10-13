@@ -226,24 +226,104 @@ where
     cmd
 }
 
-/// Runs `cmd` to its exit, `input` on its stdin, and captures the outcome.
+/// How long one `trace` call may run before the suite kills it and fails.
+pub const HUNG_AFTER: Duration = Duration::from_secs(60);
+
+/// Runs `cmd` to its exit, `input` on its stdin, and captures the outcome. A
+/// call still running after [`HUNG_AFTER`] is killed with the programs it
+/// started, and the test fails naming those programs and the stderr printed so
+/// far, so the log says where the call stopped instead of only that it ran on.
 pub fn run(mut cmd: Command, input: Option<&str>) -> Run {
     let start = Instant::now();
-    let out = match input {
-        None => cmd.output(),
-        Some(input) => cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().and_then(|mut child| {
-            std::io::Write::write_all(&mut child.stdin.take().expect("stdin is piped"), input.as_bytes())?;
-            child.wait_with_output()
-        }),
+    let mut child = cmd
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("failed to spawn `{}`: {e}", trace_bin()));
+    if let Some(input) = input {
+        std::io::Write::write_all(&mut child.stdin.take().expect("stdin is piped"), input.as_bytes())
+            .unwrap_or_else(|e| panic!("failed to write `{}`'s stdin: {e}", trace_bin()));
     }
-    .unwrap_or_else(|e| panic!("failed to spawn `{}`: {e}", trace_bin()));
+    let stdout = Drained::start(child.stdout.take().expect("stdout is piped"));
+    let stderr = Drained::start(child.stderr.take().expect("stderr is piped"));
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap_or_else(|e| panic!("failed to wait for `{}`: {e}", trace_bin())) {
+            break status;
+        }
+        if start.elapsed() > HUNG_AFTER {
+            let running = children_of(child.id());
+            for (pid, _) in &running {
+                let _ = Command::new("kill").args(["-9", pid]).status();
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            let running: Vec<String> = running.into_iter().map(|(pid, command)| format!("{pid} {command}")).collect();
+            panic!(
+                "`{}` ran past {HUNG_AFTER:?} and was killed\n--- programs it was waiting on ---\n{}\n--- stderr so far ---\n{}",
+                trace_bin(),
+                if running.is_empty() { "none".to_string() } else { running.join("\n") },
+                stderr.so_far()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
     let elapsed = start.elapsed();
     Run {
-        code: out.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: status.code().unwrap_or(-1),
+        stdout: stdout.finish(),
+        stderr: stderr.finish(),
         elapsed,
     }
+}
+
+/// One pipe read to its end on a thread of its own, into a buffer readable at
+/// any moment, so a killed call still shows what it printed.
+struct Drained {
+    buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    reader: std::thread::JoinHandle<()>,
+}
+
+impl Drained {
+    fn start(mut pipe: impl std::io::Read + Send + 'static) -> Self {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let filled = buffer.clone();
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            while let Ok(read) = pipe.read(&mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                filled.lock().unwrap().extend_from_slice(&chunk[..read]);
+            }
+        });
+        Self { buffer, reader }
+    }
+
+    fn so_far(&self) -> String {
+        String::from_utf8_lossy(&self.buffer.lock().unwrap()).into_owned()
+    }
+
+    fn finish(self) -> String {
+        let Self { buffer, reader } = self;
+        reader.join().expect("pipe reader");
+        let read = buffer.lock().unwrap();
+        String::from_utf8_lossy(&read).into_owned()
+    }
+}
+
+/// Each process whose parent is `pid`, as its id and command line.
+fn children_of(pid: u32) -> Vec<(String, String)> {
+    let listing = Command::new("ps").args(["-A", "-o", "ppid=,pid=,command="]).output().map(|out| out.stdout).unwrap_or_default();
+    String::from_utf8_lossy(&listing)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let parent = fields.next()?;
+            let child = fields.next()?;
+            (parent == pid.to_string()).then(|| (child.to_string(), fields.collect::<Vec<_>>().join(" ")))
+        })
+        .collect()
 }
 
 #[allow(non_upper_case_globals)] // project naming rule bans ALL_CAPS for our own identifiers

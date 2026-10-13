@@ -8,6 +8,7 @@ on:
 jobs:
   trace:
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
