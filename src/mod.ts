@@ -1,11 +1,5 @@
-import { defineMod, type Mod } from '../node_modules/@cmodjs/core/mod.js'
+import { defineMod, messageOf, type HookAnswer, type Mod, type ModEvent } from '../node_modules/@cmodjs/core/mod.js'
 import { option } from '../node_modules/@cmodjs/core/options.js'
-import { toolContext } from './enrich.js'
-import { commandDocs } from './project-docs.js'
-import { archiveAgentLog, forgetLoadedDocs, recordLoadedDoc, startSession } from './session.js'
-import { refuseRawRead } from './tracer-only.js'
-
-const ENRICHED_TOOLS = new Set(['Read', 'Edit', 'Write', 'Grep', 'Glob'])
 
 const options = {
   tracerOnly: option.toggle({
@@ -17,18 +11,24 @@ const options = {
 
 export type TracerMod = Mod<Record<never, never>, typeof options>
 
+const EVENTS = ['SessionStart', 'InstructionsLoaded', 'PreCompact', 'SubagentStart', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'] as const satisfies readonly ModEvent[]
+
+const TIMEOUT_MS = 10_000
+
+const DEADLINE_MS = TIMEOUT_MS - 1_000
+
 export const tracer = defineMod({
   name: 'tracer',
   options,
   setup(mod) {
-    mod.on('SessionStart', (input) => startSession(mod, input))
-    mod.on('InstructionsLoaded', (input) => recordLoadedDoc(mod, input))
-    mod.on('PreCompact', (input) => forgetLoadedDocs(mod, input))
-    mod.on('SubagentStop', (input) => archiveAgentLog(mod, input))
-    mod.on('PreToolUse', async (input) => {
-      if (input.tool_name === 'Bash') return (mod.options.tracerOnly ? await refuseRawRead(mod, input) : undefined) ?? commandDocs(mod, input)
-      if (ENRICHED_TOOLS.has(input.tool_name)) return toolContext(mod, input)
-      return undefined
-    })
+    for (const event of EVENTS) mod.on(event, (input) => hook(mod, event, input))
   },
 })
+
+async function hook(mod: TracerMod, event: ModEvent, input: { readonly cwd: string }): Promise<HookAnswer | undefined> {
+  const argv = ['trace', 'hook', event, '--harness', 'claude', '--deadline-ms', String(DEADLINE_MS), ...(mod.options.tracerOnly ? ['--tracer-only'] : [])]
+  const traced = await mod.process.run(argv, { cwd: input.cwd, stdin: JSON.stringify(input), timeoutMs: TIMEOUT_MS }).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
+  if (traced.exitCode === 0) return traced.stdout.trim() === '' ? undefined : (JSON.parse(traced.stdout) as HookAnswer)
+  if (event === 'PreToolUse') return undefined
+  throw new Error(`trace hook ${event} exited ${traced.exitCode}: ${traced.stderr.trim().split('\n').at(-1) ?? ''}`)
+}

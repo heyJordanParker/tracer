@@ -16,29 +16,31 @@ Template:
   trace context
   trace context <paths...> [--directory] [--offset N] [--limit N] [--no-record]
   trace docs prime [<files...>] [--reason session_start|post_compact]
+  trace hook <event> --harness claude|codex --deadline-ms <n> [--tracer-only]
   trace list <dirs...> [--all] [--recent] [--limit N]
-  trace tree <path> [--depth N]
+  trace tree <path> [--max-depth N]
   trace info <paths...> [--brief]
+  trace api <paths...> [--visibility public|internal|all] [--imported] [--max-depth N] [-g <glob>]... [--revision <rev>] [-o <file>]
   trace structure <paths...>
   trace defines <symbol>
   trace callers <symbol> [--limit N]
-  trace dependencies <symbol> [--depth N]
+  trace dependencies <symbol> [--max-depth N]
   trace dependencies --path <path> [--limit N]
-  trace usages <symbol> [--depth N]
+  trace usages <symbol> [--max-depth N]
   trace usages --path <path> [--limit N]
   trace stats [<path>]
-  trace grep <pattern | -e pattern> [paths...] [-i] [-l] [-c] [-C N] [-A N] [-B N] [-U] [-t <type>]... [-g <glob>]... [--at <ref>]
+  trace grep <pattern | -e pattern> [paths...] [-i] [-l] [-c] [-C N] [-A N] [-B N] [-U] [-t <type>]... [-g <glob>]... [--revision <rev>]
   trace pattern <pattern> -t <type> [paths...]
   trace logs [<pattern>] [--path <p>] [--file <glob>] [--since <when>] [--until <when>] [--around N] [--limit N]
   trace find <pattern> [bases...] [--path <p>] [--exclude <p>]... [--type f|d] [--limit N] [--sort complexity|recent|path]
-  trace read <paths...> [--method <name>] [--at <ref>] [--lines L1:L2] [--between START END] [--diff] [--raw] [--all] [--docs]
-  trace docs <paths...> [--directory] [--skip <path>]... [--source <s>] [--triggering-tool <t>] [--triggering-command <c>]
+  trace read <paths...> [--method <name>] [--revision <rev>] [--lines L1:L2] [--between START END] [--diff] [--raw] [--all] [--docs]
+  trace docs <paths...> [--directory] [--skip <path>]... [--source <s>]
   trace docs <path> --graph
   trace docs status [<path>]
   trace docs reset [--source <s>]
-  trace diff [paths...] [--base <ref>] [--symbols]
+  trace diff [paths...] [--base <rev>] [--symbols]
   trace status [--state added|renamed|modified|deleted|untracked]
-  trace history [<file>] [<symbol>] [--contains <pattern>] [--regex] [--commit <ref>]
+  trace history [<file>] [<symbol>] [--contains <pattern>] [--regex] [--commit <rev>]
   trace blame <file> [<symbol>] [--lines L1:L2]
   ```
 
@@ -55,6 +57,10 @@ IF a path argument names a path that does not exist:
 ### Read the error, then the rest of the answer
 The missing path is named on stderr, every other path still answers, and the command exits 2, as ripgrep does.
 
+IF stderr says `ctags failed`:
+### Treat the named file's declarations as missing
+`universal-ctags` extracts every language without a tree-sitter extractor, and the answer lacks the declarations it failed to give. Every other file still answers, and the command exits 2. `trace doctor` checks the `ctags` install.
+
 ## 2. Know each command's edge cases
 
 ### `-t` takes a language name or any `rg --type-list` type
@@ -62,10 +68,16 @@ The missing path is named on stderr, every other path still answers, and the com
 
 IF a search backend fails to run:
 ### Expect a nonzero exit, not an empty match
-`grep`, `pattern`, and `grep --at` exit nonzero and name the failed backend when the search process itself fails; a genuine no-match prints `(no matches)` and exits zero.
+`grep`, `pattern`, and `grep --revision` exit nonzero and name the failed backend when the search process itself fails; a genuine no-match prints `(no matches)` and exits zero.
 
 ### Take a `trace diff` row's declaration groups from its four arrays
 `--json` carries `changed`, `removed`, `added`, and `touches` on the row. `changed` holds a `{before, after}` pair of surface rows; the other three hold surface rows. The hunk ranges come from a `--unified=0` pass, not the rendered lines.
+
+### Widen `trace api` with `--visibility`, never by reading the files
+`public`, the default, lists a file's public declarations and its re-exports. `internal` adds what the language keeps inside its module or package, such as Rust's `pub(crate)`, Go's lowercase names, Java's package-private, or a Python `_name`, and what its author marks internal: an attribute, annotation, or decorator named `Internal`, an `@internal` doc tag, Rust's `#[doc(hidden)]`, or Ruby's `@api private`. A marked class takes its members with it. `all` adds protected and private members and each file's imports. A file with nothing to list is left out. Every depth under a folder is listed unless `--max-depth N` limits it. Past the budget no header is cut to its name: each file's facts go first, then its purpose, then the least-imported files collapse to one line that names the `trace api` command listing them. An import or re-export prints once per statement and whole, named by the names it binds. `--json` puts one row per declaration and per import or re-export statement in `results`, each with its `file` and `visibility`.
+
+### Write an API to compare with `trace api -o <file>`
+`-o` writes each file's path and purpose, then its rows' headers with their attributes, indented by nesting, with no line numbers, facts, or budget, and prints `wrote the API of N files to <file>`. `--revision <rev>` reads the files a commit, branch, or tag holds. Write one file per version and compare them line by line. An unknown revision, a path the revision lacks, `--imported` with `--revision`, and `-o` with `--json` exit 2.
 
 ### Check a declaration's classification with `trace structure --json`
 `results.symbols_by_kind` groups the files' surface rows by `kind`, each row carrying its `file`, `node_id`, and `annotations`; `results.imports` and `results.exports` carry their `file` too, so one file and many share one shape.
@@ -77,7 +89,7 @@ IF asking who calls a property:
 ## 3. Use `trace docs` correctly
 
 ### `trace docs <paths...>` sends the docs not yet loaded, nearest first
-Text is Markdown: `## <path>` and the document below its frontmatter, nearest directory first, each from the first line the agent has not seen. The first doc longer than the room left under `--budget` arrives as `## <path> (L<from>-L<to> of <total>)`, cut at a whole line and ending in `read`'s trim marker; the docs after it are named under the `trace docs` command that sends them. A doc is loaded once every line arrived, so the next call continues it. `--skip <path>` leaves out a doc the calling command prints itself. Nothing prints when every doc is already loaded. `--json` returns every doc whole and records them all.
+Text is Markdown: `## <path>` and the document below its frontmatter, nearest directory first, each from the first line the agent has not seen. The first doc longer than the room left under `--budget` arrives as `## <path> (L<from>-L<to> of <total>)`, cut at a whole line and ending in `read`'s trim marker; the docs after it are named under the `trace docs` command that sends them. A doc is loaded once every line arrived, so the next call continues it. A doc that changed after it arrived whole comes back as `## <path> (changed since sent: <n> lines, <m> removed)` with only its added or changed lines, each as `L<n>: <text>`. `--skip <path>` leaves out a doc the calling command prints itself. Nothing prints when every doc is already loaded. `--json` returns every doc whole and records them all.
 
 Template:
   ```json
@@ -85,9 +97,7 @@ Template:
     "query": {
       "path": "relative/path",
       "directory_scoped": false,
-      "source": "trace_docs",
-      "triggering_tool": "Bash",
-      "triggering_command": "trace read relative/path"
+      "source": "trace_docs"
     },
     "context": {
       "already_loaded": [
@@ -103,9 +113,6 @@ Template:
 
 ### `trace docs prime` records what the harness loaded
 With files it records exactly those files as loaded, source `instructions_loaded`. With no file it records the root-to-cwd `Claude.md` chain.
-
-### `trace docs archive` moves a stopped Subagent's log aside
-It moves the session log of `TRACER_AGENT_ID` under `archived/`, and does nothing for an Agent that never wrote one. Reads fall back to the archived log, and the Agent's first write after a resume takes it back.
 
 ### `trace docs <path> --graph` projects the docs graph
 The path is optional with `--graph`; it defaults to the repository root for the current working directory.
@@ -144,8 +151,8 @@ One line is one entry. A line carrying no timestamp attaches to the entry above 
 
 ## 5. Use `trace read` modes correctly
 
-### Project docs are opt-in for direct reads
-Pass `--docs` to load ancestor docs. There is no `--no-docs` flag because direct reads default to docs off.
+### Project docs follow the answer in a session
+In a session, `read` and every other command that takes paths print the ancestor docs after the answer, once per context. Outside a session, pass `--docs` to load them; `--json` carries them only with `--docs`.
 
 ### `--raw` skips cleaning
 Default reads strip generated banners, decorative separators, runs of blank lines, and prefix preserved lines with `L<n>:`.
@@ -153,8 +160,8 @@ Default reads strip generated banners, decorative separators, runs of blank line
 ### Several files share one budget
 Each file of a multi-file read gets an even share of `--budget`, and a read cut at its share ends with its own trim marker. The marker sits inside the content stream and survives `--raw`. `--json` carries `truncated`, `shown_lines` as `[first, last]`, and `total_lines` on every read.
 
-### `--at` reads a git ref
-Use `--diff` with `--at` to append a symbol-level diff of added, removed, and changed top-level exports.
+### `--revision` reads a file at a commit, branch, or tag
+Use `--diff` with `--revision` to append a symbol-level diff of added, removed, and changed top-level exports.
 
 ## 6. Take facts from the JSON document
 

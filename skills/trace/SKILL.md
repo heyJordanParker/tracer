@@ -26,7 +26,7 @@ Example: `trace list src/` replaces `ls src/`; `trace tree src/` replaces `tree 
 
 ### Do not read repository code with git
 Use the matching `trace` subcommand for the git forms trace already answers.
-Example: `trace read <path> --at <ref>` replaces `git show <ref>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --at <ref>` replaces `git grep <pattern> <ref>`; `trace blame <file>` replaces `git blame`; `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S`; `trace diff` replaces `git diff --name-status`.
+Example: `trace read <path> --revision <rev>` replaces `git show <rev>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --revision <rev>` replaces `git grep <pattern> <rev>`; `trace blame <file>` replaces `git blame`; `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S`; `trace diff` replaces `git diff --name-status`.
 Every other git command passes, including `git status`, `git branch`, `git tag`, `git rev-parse`, `git reflog`, `git stash`, `git merge-base`, `git describe`, `git ls-files`, plain `git diff`, `git log -p`, and `git log -G`.
 
 ### Bound a search before sorting it
@@ -52,7 +52,7 @@ A cut output ends with `[N of M files shortened to fit --budget B — whole: <co
 ## 3. Orient before deep reads
 
 ### Start broad, then narrow
-Run `trace context` first. Then use `trace stats`, `trace list`, `trace tree`, `trace info`, or `trace structure` before reading code deeply.
+Run `trace context` first. Then use `trace stats`, `trace list`, `trace tree`, `trace info`, or `trace api` before reading code deeply. `trace api` prints a folder's public API with every header whole, so it answers what a module offers without reading its files.
 
 Template:
   ```bash
@@ -60,8 +60,11 @@ Template:
   trace stats
   trace list src
   trace info src/Entity/Loan.php --brief
-  trace structure src/Entity/Loan.php src/Service/Notifier.php
+  trace api src/Service
   ```
+
+### Compare two versions' API with `trace api -o`
+`trace api <paths> --revision <rev> -o <file>` writes the API a commit, branch, or tag holds, and `trace api <paths> -o <file>` the working tree's, with no line numbers or facts. Two such files differ only where the API changed, so compare them line by line.
 
 ## 4. Choose the smallest matching command
 
@@ -82,13 +85,13 @@ Use `trace grep` for text in code, `trace logs` for text in a log file, `trace p
 
 Template:
   ```bash
-  trace grep <pattern> [paths...] [-i] [-t <type>] [-g <glob>] [-C <n>] [-A <n>] [-B <n>] [-U] [-l | -c] [--at <ref>]
+  trace grep <pattern> [paths...] [-i] [-t <type>] [-g <glob>] [-C <n>] [-A <n>] [-B <n>] [-U] [-l | -c] [--revision <rev>]
   trace pattern <pattern> -t <type> [paths...]
   trace find <pattern> [bases...]
   ```
 
-### Search a commit with `trace grep --at <ref>`
-`--at` searches that commit instead of the working tree, which is what `git grep <pattern> <ref>` would answer. `-t` and `-g` select the same files on a commit as on the working tree; `-U` needs the working tree.
+### Search a commit with `trace grep --revision <rev>`
+`--revision` searches that commit instead of the working tree, which is what `git grep <pattern> <rev>` would answer. `-t` and `-g` select the same files on a commit as on the working tree; `-U` needs the working tree.
 
 IF a search result names a `nested repository (its own search scope)`:
 ### Re-run the search with the base inside the nested repository
@@ -100,11 +103,11 @@ Use `trace diff`, `trace status`, `trace history`, and `trace blame` to understa
 
 Template:
   ```bash
-  trace diff [paths...] [--base ref] [--symbols]
+  trace diff [paths...] [--base <rev>] [--symbols]
   trace status
   trace history [<file>] [<symbol>]
   trace history --contains <pattern> [--regex] [--all]
-  trace history --commit <ref>
+  trace history --commit <rev>
   trace blame <file> [<symbol>] [--lines L1:L2]
   ```
 
@@ -112,13 +115,13 @@ Template:
 It lists the newest 29 commits that added or removed the string, then the oldest one, where it entered; `--all` lists every commit between them. Each file shows `+` for the lines a commit added and `-` for the lines it removed, with the first line and its declaration. `trace history --commit <sha>` then gives that commit's reason.
 
 ### Read a commit's full body with `trace history --commit`
-The subject says what changed and the body says why. `--commit <ref>` returns the message, author, parents, changed files, and changed lines in one call.
+The subject says what changed and the body says why. `--commit <rev>` returns the message, author, parents, changed files, and changed lines in one call.
 Never: `git show` for a commit message.
 
 ## 5. Read with trace
 
 ### Use `trace read` instead of raw reads
-`trace read` strips Fluff and keeps line numbers. Read whole files, several files, methods, line ranges, anchor ranges, or a git ref.
+`trace read` strips Fluff and keeps line numbers. Read whole files, several files, methods, line ranges, anchor ranges, or a file at a git revision.
 
 Template:
   ```bash
@@ -126,8 +129,8 @@ Template:
   trace read <file> --method <name>
   trace read <file> --lines L1:L2
   trace read <file> --between START END
-  trace read <file> --at ref
-  trace read <file> --at ref --diff
+  trace read <file> --revision <rev>
+  trace read <file> --revision <rev> --diff
   trace read <file> --docs
   trace read <file> --all
   ```
@@ -164,7 +167,7 @@ Template:
 - A list of many files prints each file's facts on one line: `path  {imported_by: 63, cyclomatic_complexity: 66, lines: 318, git: modified}`.
 
 ### Read the front matter as the file's facts
-Keys use git and GitHub words; dates are ages. `docs_not_loaded` names the project docs this session has not read, and `directory` names the file's directory, its importers and imports, and its entries the first time you see that directory or after its entries change. Entries leave out what git ignores.
+Keys use git and GitHub words; dates are ages. `directory` names the file's directory, its importers and imports, and its entries the first time you see that directory or after its entries change. Entries leave out what git ignores.
 
 Template:
   ```yaml
@@ -184,7 +187,6 @@ Template:
     on_deploy_branches: [main, production]
     usually_changed_with: [src/Service/Notifier.php]
     main_author: Jordan Parker
-  docs_not_loaded: [src/Entity/Claude.md]
   directory:
     path: src/Entity/
     imported_by: 54
@@ -195,8 +197,11 @@ Template:
   ```
 
 ### Read a heading's headline as facts you already hold
-A file's facts print once per context, whichever command showed them, and whole again after a compaction or `/clear`. A repeat carries the headline on its heading line. After an edit or another Agent's commit, a repeat shows only the lines that changed, and a fact that went away shows as `null`. Its block keeps the command's own answer, such as `info`'s `language` and `functions` or `structure`'s `declarations`, plus `docs_not_loaded`. A `directory` you already hold prints only the lines that changed, such as a new `imported_by`, and none when nothing changed.
+A file's facts print once per context, whichever command showed them, and whole again after a compaction or `/clear`. A repeat carries the headline on its heading line. After an edit or another Agent's commit, a repeat shows only the lines that changed, and a fact that went away shows as `null`. Its block keeps the command's own answer, such as `info`'s `language` and `functions` or `structure`'s `declarations`. A `directory` you already hold prints only the lines that changed, such as a new `imported_by`, and none when nothing changed.
 Example: `# src/Entity/Loan.php :: L24-L40  {imported_by: 21, cyclomatic_complexity: 18, lines: 164, git: modified}`
+
+### Read the docs after an answer as the rules for those paths
+In a session, every command that takes paths prints the project docs those paths reach after its answer, nearest first, each once per context. The docs past the budget are named under the `trace docs` command that sends them.
 
 ### Read the row as the source's own text
 A row is `L<line>` and the declaration's header as written — attributes, modifiers, name, parameters, return type, heritage — with every body elided as `{ … }` and a data initializer as `= …`. A row indents two spaces under the declaration that holds it, and a function's complexity follows as a comment in the file's own syntax.
@@ -245,7 +250,7 @@ Template:
 An untracked or added file likely has no callers. A renamed file continues old code. A recent file with few commits may still be moving. An old file with many commits is a settled Precedent. A file with no `on_deploy_branches` is not deployed; `main` or `production` means Capability regression matters.
 
 ### Cross-check modify-or-stack Decisions
-Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md` and check `trace read <path> --at origin/production`. A locally new file may already be deployed through worktrees, squashed baselines, or branch divergence.
+Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md` and check `trace read <path> --revision origin/production`. A locally new file may already be deployed through worktrees, squashed baselines, or branch divergence.
 
 ### Read an annotation as a name, never a meaning
 `directory.annotations` counts the attributes, decorators, and docblock tags the directory's files carry, and a row shows each one as written above its declaration. Tracer does not know what a name means; the project's Claude.md does. Read it before touching a declaration that carries one.
@@ -259,5 +264,5 @@ Before recommending modify or stack, read the nearest `Claude.md` or `Agents.md`
 ## References
 
 - Full command selection, flags, JSON payload shapes, `trace docs`, and `trace read` modes → [commands.md](references/commands.md)
-- The tracer mod's Hooks, identity propagation, and session-log environment variables → [hooks.md](references/hooks.md)
+- `trace hook`, the Hooks it serves for every Harness, identity propagation, and session environment variables → [hooks.md](references/hooks.md)
 - Disk cache namespaces, invalidation, `trace doctor`, and install checks → [cache.md](references/cache.md)

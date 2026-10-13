@@ -1,4 +1,4 @@
-// node_modules/@cmodjs/core/utils/text.js
+// ../Developer/tracer/node_modules/@cmodjs/core/utils/text.js
 function listed(items) {
   if (items.length <= 1)
     return items.join("");
@@ -13,7 +13,7 @@ function formatExit(code, reason) {
   return clause ? `${exit}: ${clause}` : exit;
 }
 
-// node_modules/@cmodjs/core/records.js
+// ../Developer/tracer/node_modules/@cmodjs/core/records.js
 var listPermissions = ["network", "run", "files"];
 var flagPermissions = ["conversation", "prompt", "model", "agents", "tools", "config", "approve"];
 var permissionNames = [...listPermissions, ...flagPermissions];
@@ -317,7 +317,7 @@ function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// node_modules/@cmodjs/core/vendor.js
+// ../Developer/tracer/node_modules/@cmodjs/core/vendor.js
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -2497,8 +2497,6 @@ function normalizeWindowsPath(input = "") {
   return input.replace(/\\/g, "/").replace(_DRIVE_LETTER_START_RE, (r) => r.toUpperCase());
 }
 var _IS_ABSOLUTE_RE = /^[/\\](?![/\\])|^[/\\]{2}(?!\.)|^[A-Za-z]:[/\\]/;
-var _DRIVE_LETTER_RE = /^[A-Za-z]:$/;
-var _ROOT_FOLDER_RE = /^\/([A-Za-z]:)?$/;
 function cwd() {
   if (false) {}
   return "/";
@@ -2585,29 +2583,6 @@ function normalizeString(path, allowAboveRoot) {
 var isAbsolute = function(p) {
   return _IS_ABSOLUTE_RE.test(p);
 };
-var relative = function(from, to) {
-  const _from = resolve(from).replace(_ROOT_FOLDER_RE, "$1").split("/");
-  const _to = resolve(to).replace(_ROOT_FOLDER_RE, "$1").split("/");
-  if (_to[0][1] === ":" && _from[0][1] === ":" && _from[0] !== _to[0]) {
-    return _to.join("/");
-  }
-  const _fromCopy = [..._from];
-  for (const segment of _fromCopy) {
-    if (_to[0] !== segment) {
-      break;
-    }
-    _from.shift();
-    _to.shift();
-  }
-  return [..._from.map(() => ".."), ..._to].join("/");
-};
-var dirname = function(p) {
-  const segments = normalizeWindowsPath(p).replace(/\/$/, "").split("/").slice(0, -1);
-  if (segments.length === 1 && _DRIVE_LETTER_RE.test(segments[0])) {
-    segments[0] += "/";
-  }
-  return segments.join("/") || (isAbsolute(p) ? "/" : ".");
-};
 var basename = function(p, extension) {
   const segments = normalizeWindowsPath(p).split("/");
   let lastSegment = "";
@@ -2625,7 +2600,7 @@ var $quote = require_quote();
 var $parse = require_parse2();
 var export_picomatch = import_posix.default;
 
-// node_modules/@cmodjs/core/utils/paths.js
+// ../Developer/tracer/node_modules/@cmodjs/core/utils/paths.js
 function expandHome(path, home) {
   const prefix = /^(~|\$HOME)(?=\/|$)/.exec(path)?.[0];
   return prefix === undefined ? path : `${home}${path.slice(prefix.length)}`;
@@ -2637,7 +2612,7 @@ function relativePath(base, path) {
   return path.startsWith(prefix) ? path.slice(prefix.length) : undefined;
 }
 
-// node_modules/@cmodjs/core/runtime/deadline.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/deadline.js
 function beforeDeadline(claude, { ms, job }, call, task) {
   return new Promise((resolve2, reject) => {
     const passed = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`;
@@ -2652,7 +2627,7 @@ function beforeDeadline(claude, { ms, job }, call, task) {
   });
 }
 
-// node_modules/@cmodjs/core/runtime/dependencies.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/dependencies.js
 async function answerCall(name, api, e) {
   const method = Object.hasOwn(api, e.method) ? api[e.method] : undefined;
   if (method === undefined)
@@ -2671,7 +2646,7 @@ function notInstalled(name) {
   return `${name} is not installed. Run cmod install ${name}.`;
 }
 
-// node_modules/@cmodjs/core/runtime/tool-calls.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/tool-calls.js
 var reservedKeys = ["tool", "tool_use_id", "consent", "agentId"];
 function toolInputOf(envelope) {
   return Object.fromEntries(Object.entries(envelope).filter(([key]) => !reservedKeys.includes(key)));
@@ -2728,7 +2703,7 @@ function toolCalls(claude, router) {
   };
 }
 
-// node_modules/@cmodjs/core/utils/parse-shell.js
+// ../Developer/tracer/node_modules/@cmodjs/core/utils/parse-shell.js
 var markerPattern = /\u0001(\d+)\u0001/g;
 var descriptorPattern = /[0-9]+(?=[<>])/y;
 var assignmentPattern = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
@@ -3758,7 +3733,7 @@ function literal(text) {
   return { text, isGlob: false, isDynamic: false };
 }
 
-// node_modules/@cmodjs/core/utils/call-effects.js
+// ../Developer/tracer/node_modules/@cmodjs/core/utils/call-effects.js
 function callEffects(use, workspace) {
   const { fs } = workspace;
   const absolute = (path, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home));
@@ -3838,7 +3813,7 @@ function optionalTextField(use, name) {
   return fieldOf(use, name) === undefined ? undefined : textField(use, name);
 }
 
-// node_modules/@cmodjs/core/runtime/hooks.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/hooks.js
 var permissionEvents = ["tool.check", "classic.PermissionRequest"];
 var flags = ["suppressOriginalPrompt", "reloadSkills", "retry"];
 var readFields = {
@@ -4038,7 +4013,7 @@ function mergeClassic(below, ours) {
   return merged;
 }
 
-// node_modules/@cmodjs/core/runtime/grants.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/grants.js
 class PermissionRefused extends Error {
 }
 var configFiles = [".claude/settings.json", ".claude/settings.local.json", ".mcp.json"];
@@ -4320,7 +4295,7 @@ function expanded(path, home) {
   return path.startsWith("~/") && home !== undefined ? `${home}${path.slice(1)}` : path;
 }
 
-// node_modules/@cmodjs/core/runtime/programs.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/programs.js
 function locatingPrograms(claude) {
   let folder;
   let names = new Set;
@@ -4345,7 +4320,7 @@ function locatingPrograms(claude) {
   };
 }
 
-// node_modules/@cmodjs/core/utils/metadata.js
+// ../Developer/tracer/node_modules/@cmodjs/core/utils/metadata.js
 class MetadataError extends Error {
   line;
   constructor(line, message) {
@@ -4601,7 +4576,7 @@ function scalar(text) {
   return isPlain ? text : JSON.stringify(text);
 }
 
-// node_modules/@cmodjs/core/runtime/metadata.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/metadata.js
 var skippedFolders = [".git", "node_modules"];
 var ownKey = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 function resolvedPath(path, places) {
@@ -4755,7 +4730,7 @@ function createModFiles({ name, claude, places, checkWrite: checkWrite2 }) {
   };
 }
 
-// node_modules/@cmodjs/core/options.js
+// ../Developer/tracer/node_modules/@cmodjs/core/options.js
 var option = {
   text: (field) => ({ ...field, kind: "text" }),
   secret: (field) => ({ ...field, kind: "secret" }),
@@ -4806,7 +4781,7 @@ function fitsOption(declared, value) {
   return;
 }
 
-// node_modules/@cmodjs/core/ui/elements.js
+// ../Developer/tracer/node_modules/@cmodjs/core/ui/elements.js
 var drawing;
 function drawWith(table, draw, markdown2) {
   const outer = drawing;
@@ -4837,7 +4812,7 @@ var Input = element("Input");
 var Select = element("Select");
 var Image = element("Image");
 
-// node_modules/@cmodjs/core/runtime/installer.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/installer.js
 var installerPaneId = "cmod-installer";
 function createInstaller(name, claude) {
   let page;
@@ -4949,7 +4924,7 @@ function createInstaller(name, claude) {
   };
 }
 
-// node_modules/@cmodjs/core/runtime/options.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/options.js
 class MissingOptions extends Error {
   keys;
   titles;
@@ -5045,7 +5020,7 @@ function valueOf(key, option2, own, project, locked) {
   return option2.default ?? (option2.kind === "list" ? Object.freeze([]) : option2.kind === "number" ? undefined : "");
 }
 
-// node_modules/@cmodjs/core/runtime/router.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/router.js
 function createRouter() {
   const hooks = new Map;
   return {
@@ -5068,7 +5043,7 @@ function createRouter() {
   };
 }
 
-// node_modules/@cmodjs/core/runtime/state.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/state.js
 var lifetimes = ["memory", "session", "project", "global"];
 var keptPerValue = 20;
 var listeners = new WeakMap;
@@ -5194,13 +5169,13 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-// node_modules/@cmodjs/core/ui/components.js
+// ../Developer/tracer/node_modules/@cmodjs/core/ui/components.js
 function ProgressBar({ done, total, width = 24 }) {
   const filled = total > 0 ? Math.round(Math.min(done / total, 1) * width) : 0;
   return Text({ children: [Text({ color: "claude", children: "█".repeat(filled) }), Text({ color: "subtle", children: "░".repeat(width - filled) }), "  ", Text({ dimColor: true, children: `${done}/${total}` })] });
 }
 
-// node_modules/@cmodjs/core/runtime/ui.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/ui.js
 var spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 var spinnerMs = 100;
 var bullet = "⏺";
@@ -5565,7 +5540,7 @@ function createUi({ name, claude, router, progress, announce, mod }) {
   };
 }
 
-// node_modules/@cmodjs/core/runtime/lifecycle.js
+// ../Developer/tracer/node_modules/@cmodjs/core/runtime/lifecycle.js
 var cmodPluginName = "cmod";
 var announcedKey = "cmod:announced";
 var cmodCheckMs = 1000;
@@ -6298,7 +6273,7 @@ function lastLineOf(text) {
 `) + 1).trim();
 }
 
-// node_modules/@cmodjs/core/register.js
+// ../Developer/tracer/node_modules/@cmodjs/core/register.js
 var lifecycle;
 var checksPermissions = false;
 var registered;
@@ -6407,7 +6382,7 @@ function registerMod(addHook, definition, options) {
   addHook("cmod.call", routeToMod);
 }
 
-// node_modules/@cmodjs/core/mod.js
+// ../Developer/tracer/node_modules/@cmodjs/core/mod.js
 function defineMod(definition) {
   if (definition.name.trim() === "")
     throw new Error("defineMod: the mod needs a name, such as the name in .claude-plugin/plugin.json.");
@@ -6415,362 +6390,8 @@ function defineMod(definition) {
     checkOptions(definition.name, definition.options);
   return definition;
 }
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/trace.ts
-var BUDGET = "10000";
-async function trace(mod, caller, args, timeoutMs = 1e4) {
-  const env = { AGENT_SESSION_ID: caller.sessionId };
-  if (caller.agentId !== undefined)
-    env["TRACER_AGENT_ID"] = caller.agentId;
-  try {
-    const { exitCode, stdout, stderr } = await mod.process.run(["trace", ...args], { cwd: caller.cwd, env, timeoutMs });
-    return { exitCode, stdout, stderr };
-  } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: messageOf(error) };
-  }
-}
-function quote(word) {
-  return /^[\w@%+=:,./-][\w@%+=:,./~^-]*$/.test(word) ? word : `'${word.replaceAll("'", `'"'"'`)}'`;
-}
-function context(event, text, updatedInput) {
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: text, ...updatedInput === undefined ? {} : { updatedInput } } };
-}
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/enrich.ts
-var NO_MATCHES = "(no matches)";
-async function toolContext(mod, input) {
-  const request = await requestOf(mod, input);
-  if (request === undefined)
-    return;
-  const traced = await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, request.args);
-  const text = traced.stdout.trim();
-  if ((traced.exitCode === 0 || traced.exitCode === 2) && text !== "" && text !== NO_MATCHES)
-    return context("PreToolUse", text);
-  if (traced.exitCode === 0 || !request.isExisting)
-    return;
-  const reason = traced.stderr.trim().split(`
-`).at(-1) || `trace exited ${traced.exitCode}`;
-  return context("PreToolUse", `${request.target}
-[trace context unavailable: ${reason}]`);
-}
-async function requestOf(mod, input) {
-  const tool = input.tool_input;
-  switch (input.tool_name) {
-    case "Read":
-    case "Edit":
-    case "Write": {
-      const target = textOf(tool["file_path"]);
-      if (target === "")
-        return;
-      const args = ["context", target, "--budget", BUDGET];
-      if (input.tool_name === "Read") {
-        args.push(...option2("--offset", tool["offset"]), ...option2("--limit", tool["limit"]));
-      } else {
-        args.push("--no-record");
-      }
-      if (input.tool_name === "Edit")
-        args.push(...await editedLines(mod, resolve(input.cwd, target), textOf(tool["old_string"])));
-      return { args, target, isExisting: input.tool_name !== "Write" };
-    }
-    case "Glob": {
-      const pattern = textOf(tool["pattern"]);
-      if (pattern === "")
-        return;
-      const path = textOf(tool["path"]) || input.cwd;
-      return { args: ["find", pattern, path, "--budget", BUDGET], target: path, isExisting: false };
-    }
-    case "Grep": {
-      const pattern = textOf(tool["pattern"]);
-      if (pattern === "")
-        return;
-      const path = textOf(tool["path"]) || input.cwd;
-      const args = ["grep", "--budget", BUDGET];
-      if (tool["-i"] === true)
-        args.push("-i");
-      if (textOf(tool["glob"]) !== "")
-        args.push("-g", textOf(tool["glob"]));
-      if (textOf(tool["type"]) !== "")
-        args.push("-t", textOf(tool["type"]));
-      if (tool["multiline"] === true)
-        args.push("-U");
-      return { args: [...args, "--", pattern, shownPath(path, input.cwd)], target: path, isExisting: false };
-    }
-    default:
-      return;
-  }
-}
-function shownPath(path, cwd2) {
-  const searched = resolve(cwd2, path);
-  const inside = relative(cwd2, searched);
-  return inside === ".." || inside.startsWith("../") ? searched : inside || ".";
-}
-async function editedLines(mod, path, replaced) {
-  if (replaced === "")
-    return [];
-  const source = await mod.fs.read(path).catch(() => "");
-  const at = source.indexOf(replaced);
-  if (at < 0)
-    return [];
-  const line = source.slice(0, at).split(`
-`).length;
-  return ["--offset", String(line), "--limit", String(replaced.split(`
-`).length)];
-}
-function option2(flag, value) {
-  return typeof value === "number" ? [flag, String(value)] : [];
-}
-function textOf(value) {
-  return typeof value === "string" ? value : "";
-}
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/project-docs.ts
-var PATH_TAKING = new Set(["read", "info", "list", "tree", "structure", "grep", "pattern", "find", "blame", "history", "diff"]);
-var VALUED_LEADING = new Set(["-C", "--budget", "--agent", "--filter"]);
-var TRACE_CALL = /(?<=^|[;&|(\n])(\s*(?:\S*\/)?trace)(?=\s|$)(?!\s+--agent\b)/g;
-async function commandDocs(mod, input) {
-  const line = typeof input.tool_input["command"] === "string" ? input.tool_input["command"] : "";
-  if (line === "")
-    return;
-  const rewrite = withAgent(input, line);
-  const call = tracedCall(line, input.cwd);
-  let text = "";
-  if (call !== undefined) {
-    const existing = await Promise.all(call.candidates.map(async (path) => await mod.fs.exists(path) ? [path] : []));
-    const targets = existing.flat().length > 0 ? [...new Set(existing.flat())] : [call.base];
-    const skips = call.subcommand === "read" ? targets.flatMap((path) => ["--skip", path]) : [];
-    const args = ["docs", ...targets, "--budget", BUDGET, "--source", "tracer_project_docs", "--triggering-tool", "Bash", "--triggering-command", line, ...skips];
-    const traced = await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, args);
-    if (traced.exitCode === 0)
-      text = traced.stdout.trim();
-  }
-  if (text !== "")
-    return context("PreToolUse", text, rewrite);
-  if (rewrite !== undefined)
-    return { hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: rewrite } };
-  return;
-}
-function tracedCall(line, cwd2) {
-  for (const { argv: [program, ...args], folder } of parseShell(line).commands) {
-    if (basename(program) !== "trace")
-      continue;
-    let base = resolve(cwd2, folder);
-    let at = 0;
-    while (at < args.length && args[at].startsWith("-")) {
-      const flag = args[at];
-      const value = args[at + 1];
-      if (flag === "-C" && value !== undefined)
-        base = resolve(base, value);
-      at += VALUED_LEADING.has(flag) ? 2 : 1;
-    }
-    const subcommand = args[at];
-    if (subcommand === undefined || !PATH_TAKING.has(subcommand))
-      continue;
-    const candidates = args.slice(at + 1).filter((arg) => !arg.startsWith("-")).map((arg) => resolve(base, arg));
-    return { subcommand, base, candidates };
-  }
-  return;
-}
-function withAgent(input, line) {
-  const agent = input.agent_id;
-  if (agent === undefined || agent === "")
-    return;
-  const replaced = line.replace(TRACE_CALL, (call) => `${call} --agent ${quote(agent)}`);
-  return replaced === line ? undefined : { ...input.tool_input, command: replaced };
-}
-
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/session.ts
-async function startSession(mod, input) {
-  const caller = { cwd: input.cwd, sessionId: input.session_id };
-  if (input.source === "clear")
-    await trace(mod, caller, ["docs", "reset", "--source", "tracer_clear"]);
-  await trace(mod, caller, ["docs", "prime", "--reason", input.source === "compact" ? "post_compact" : "session_start"]);
-  await trace(mod, caller, ["docs", input.cwd, "--json", "--source", "tracer_session_start"]);
-  const repository = await mod.process.run(["git", "rev-parse", "--is-inside-work-tree"], { cwd: input.cwd }).catch(() => {
-    return;
-  });
-  if (repository?.exitCode !== 0)
-    return;
-  const primer = await trace(mod, caller, ["context"], 12000);
-  const text = primer.stdout.trimEnd();
-  return primer.exitCode === 0 && text !== "" ? context("SessionStart", text) : undefined;
-}
-async function recordLoadedDoc(mod, input) {
-  await trace(mod, { cwd: input.cwd, sessionId: input.session_id }, ["docs", "prime", input.file_path]);
-}
-async function forgetLoadedDocs(mod, input) {
-  await trace(mod, { cwd: input.cwd, sessionId: input.session_id }, ["docs", "reset", "--source", "tracer_compact"]);
-}
-async function archiveAgentLog(mod, input) {
-  await trace(mod, { cwd: input.cwd, sessionId: input.session_id, agentId: input.agent_id }, ["docs", "archive"]);
-}
-
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/tracer-only.ts
-var READERS = new Set(["cat", "head", "tail", "sed", "awk"]);
-var SEARCHERS = new Set(["grep", "egrep", "fgrep", "rg"]);
-var LISTERS = new Set(["ls", "tree"]);
-var FILTERS = new Set(["grep", "egrep", "fgrep", "rg", "sed", "awk", "head", "tail", "cut", "sort", "uniq", "wc", "column", "fold", "tr", "jq"]);
-var SEARCH_VALUED = new Set(["-e", "-f", "-g", "--glob", "-t", "--type", "-T", "--type-not", "-m", "--max-count", "-A", "-B", "-C", "-M"]);
-var FIND_ACTIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir"]);
-var GLOB = /[*?[]/;
-async function refuseRawRead(mod, input) {
-  const line = typeof input.tool_input["command"] === "string" ? input.tool_input["command"] : "";
-  const { commands } = parseShell(line);
-  for (const { argv: [program, ...args], folder, input: piped } of commands) {
-    const source = piped === undefined ? undefined : commands[piped]?.argv;
-    const replacement = source !== undefined && basename(source[0]) === "trace" && FILTERS.has(basename(program)) ? filteredReplacement(source, basename(program), args) : await replacementOf(mod, { program: basename(program), args, base: resolve(input.cwd, folder) });
-    if (replacement !== undefined) {
-      return {
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: `tracer: Claude reads this project's code only through tracer.
-Run this instead: ${replacement}`
-        }
-      };
-    }
-  }
-  return;
-}
-function filteredReplacement(trace2, filter, args) {
-  const expression = filter === "jq" ? args.find((arg) => !arg.startsWith("-")) : undefined;
-  if (expression === undefined)
-    return shell(trace2);
-  return shell([...trace2, ...trace2.includes("--json") ? [] : ["--json"], "--filter", expression]);
-}
-async function replacementOf(mod, command) {
-  if (command.program === "git")
-    return gitReplacement(mod, command);
-  if (SEARCHERS.has(command.program))
-    return searchReplacement(mod, command);
-  if (READERS.has(command.program))
-    return readReplacement(mod, command);
-  if (LISTERS.has(command.program))
-    return listReplacement(mod, command);
-  if (command.program === "find")
-    return findReplacement(mod, command);
-  return;
-}
-async function searchReplacement(mod, { program, args, base }) {
-  const positional = [];
-  const flags2 = [];
-  let pattern;
-  for (let at = 0;at < args.length; at += 1) {
-    const arg = args[at];
-    if (SEARCH_VALUED.has(arg)) {
-      const value = args[at + 1];
-      if (arg === "-e" && value !== undefined)
-        pattern = value;
-      if ((arg === "-g" || arg === "--glob" || arg === "-t" || arg === "--type") && value !== undefined)
-        flags2.push(arg.length === 2 ? arg : `-${arg[2]}`, value);
-      at += 1;
-    } else if (arg === "-i" || arg === "--ignore-case") {
-      flags2.push("-i");
-    } else if (!arg.startsWith("-")) {
-      positional.push(arg);
-    }
-  }
-  if (pattern === undefined)
-    pattern = positional.shift();
-  if (pattern === undefined)
-    return;
-  const paths = await projectPaths(mod, base, positional);
-  const recursive = program === "rg" || args.some((arg) => arg === "-r" || arg === "-R" || arg === "--recursive");
-  if (paths.length === 0 && !(recursive && positional.length === 0 && await inProject(mod, base, ".")))
-    return;
-  return shell(["trace", "grep", pattern, ...paths, ...flags2]);
-}
-async function readReplacement(mod, { program, args, base }) {
-  if (program === "sed" && args.some((arg) => arg.startsWith("-i") || arg === "--in-place"))
-    return;
-  const paths = await projectPaths(mod, base, args);
-  return paths.length === 0 ? undefined : shell(["trace", "read", ...paths]);
-}
-async function listReplacement(mod, { program, args, base }) {
-  const named = args.filter((arg) => !arg.startsWith("-"));
-  const paths = named.length === 0 ? await inProject(mod, base, ".") ? ["."] : [] : await projectPaths(mod, base, named);
-  if (paths.length === 0)
-    return;
-  return program === "tree" ? shell(["trace", "tree", paths[0]]) : shell(["trace", "list", ...paths]);
-}
-async function findReplacement(mod, { args, base }) {
-  if (args.some((arg) => FIND_ACTIONS.has(arg)))
-    return;
-  const end = args.findIndex((arg) => arg.startsWith("-") || arg === "(" || arg === "!");
-  const named = end < 0 ? args : args.slice(0, end);
-  const bases = named.length === 0 ? await inProject(mod, base, ".") ? ["."] : [] : await projectPaths(mod, base, named);
-  if (bases.length === 0)
-    return;
-  const name = args.findIndex((arg) => arg === "-name" || arg === "-iname");
-  return shell(["trace", "find", name < 0 ? "*" : args[name + 1] ?? "*", ...bases]);
-}
-async function gitReplacement(mod, { args, base }) {
-  const at = args.findIndex((arg) => !arg.startsWith("-"));
-  const subcommand = args[at];
-  if (subcommand === undefined)
-    return;
-  const rest = args.slice(at + 1);
-  const separator = rest.includes("--") ? rest.indexOf("--") : rest.length;
-  const flags2 = rest.slice(0, separator).filter((arg) => arg.startsWith("-"));
-  const positional = [...rest.slice(0, separator).filter((arg) => !arg.startsWith("-")), ...rest.slice(separator + 1)];
-  switch (subcommand) {
-    case "blame":
-    case "annotate": {
-      const [file] = await projectPaths(mod, base, positional);
-      if (file === undefined)
-        return;
-      const range = rest[rest.indexOf("-L") + 1];
-      const lines = rest.includes("-L") && range !== undefined && /^\d+,\d+$/.test(range) ? ["--lines", range.replace(",", ":")] : [];
-      return shell(["trace", "blame", file, ...lines]);
-    }
-    case "grep": {
-      const [pattern, ...paths] = positional;
-      return pattern === undefined ? undefined : shell(["trace", "grep", pattern, ...await projectPaths(mod, base, paths)]);
-    }
-    case "show":
-    case "cat-file": {
-      if (subcommand === "cat-file" && !flags2.includes("-p"))
-        return;
-      const shown = positional.find((arg) => arg.includes(":"));
-      if (shown === undefined)
-        return;
-      const split = shown.indexOf(":");
-      return shell(["trace", "read", shown.slice(split + 1), "--at", shown.slice(0, split) || "HEAD"]);
-    }
-    case "log": {
-      if (flags2.some((flag) => flag.startsWith("-G") || flag === "-p" || flag === "--patch"))
-        return;
-      const search = rest.indexOf("-S");
-      if (search >= 0) {
-        const text = rest[search + 1];
-        return text === undefined || text.startsWith("-") ? "trace history --contains <pattern>" : shell(["trace", "history", "--contains", text]);
-      }
-      if (flags2.includes("-L"))
-        return "trace history <file> <symbol>";
-      const paths = await projectPaths(mod, base, positional);
-      return paths.length === 0 || paths.length !== positional.length ? undefined : shell(["trace", "history", paths[0]]);
-    }
-    case "diff":
-      return flags2.includes("--name-status") ? "trace diff" : undefined;
-    default:
-      return;
-  }
-}
-async function projectPaths(mod, base, args) {
-  const found = await Promise.all(args.map(async (arg) => await inProject(mod, base, arg) ? [arg] : []));
-  return found.flat();
-}
-async function inProject(mod, base, arg) {
-  if (arg === "" || arg.startsWith("-"))
-    return false;
-  const glob = arg.search(GLOB);
-  const path = glob < 0 ? resolve(base, arg) : resolve(base, dirname(`${arg.slice(0, glob)}x`));
-  const root = mod.projectRoot;
-  return (path === root || path.startsWith(`${root}/`)) && await mod.fs.exists(path);
-}
-function shell(words) {
-  return words.map(quote).join(" ");
-}
-
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/src/mod.ts
-var ENRICHED_TOOLS = new Set(["Read", "Edit", "Write", "Grep", "Glob"]);
+// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-mL6VDF/release/src/mod.ts
 var options = {
   tracerOnly: option.toggle({
     title: "Claude reads code only through tracer",
@@ -6778,25 +6399,29 @@ var options = {
     default: false
   })
 };
+var EVENTS = ["SessionStart", "InstructionsLoaded", "PreCompact", "SubagentStart", "PreToolUse", "PostToolUse", "PostToolUseFailure"];
+var TIMEOUT_MS = 1e4;
+var DEADLINE_MS = TIMEOUT_MS - 1000;
 var tracer = defineMod({
   name: "tracer",
   options,
   setup(mod) {
-    mod.on("SessionStart", (input) => startSession(mod, input));
-    mod.on("InstructionsLoaded", (input) => recordLoadedDoc(mod, input));
-    mod.on("PreCompact", (input) => forgetLoadedDocs(mod, input));
-    mod.on("SubagentStop", (input) => archiveAgentLog(mod, input));
-    mod.on("PreToolUse", async (input) => {
-      if (input.tool_name === "Bash")
-        return (mod.options.tracerOnly ? await refuseRawRead(mod, input) : undefined) ?? commandDocs(mod, input);
-      if (ENRICHED_TOOLS.has(input.tool_name))
-        return toolContext(mod, input);
-      return;
-    });
+    for (const event of EVENTS)
+      mod.on(event, (input) => hook(mod, event, input));
   }
 });
+async function hook(mod, event, input) {
+  const argv = ["trace", "hook", event, "--harness", "claude", "--deadline-ms", String(DEADLINE_MS), ...mod.options.tracerOnly ? ["--tracer-only"] : []];
+  const traced = await mod.process.run(argv, { cwd: input.cwd, stdin: JSON.stringify(input), timeoutMs: TIMEOUT_MS }).catch((error) => ({ exitCode: 1, stdout: "", stderr: messageOf(error) }));
+  if (traced.exitCode === 0)
+    return traced.stdout.trim() === "" ? undefined : JSON.parse(traced.stdout);
+  if (event === "PreToolUse")
+    return;
+  throw new Error(`trace hook ${event} exited ${traced.exitCode}: ${traced.stderr.trim().split(`
+`).at(-1) ?? ""}`);
+}
 
-// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-vaQtH3/release/hooks/register.ts
+// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-mL6VDF/release/hooks/register.ts
 function register(addHook, options2) {
   registerMod(addHook, tracer, options2);
 }
