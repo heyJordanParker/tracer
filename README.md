@@ -58,6 +58,7 @@ Homebrew installs `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` beside it.
 - **Facts with every file.** Each file prints as YAML front matter: lines, cyclomatic complexity and its rank in the repository, importers, git status, commit counts, the files usually changed with it, and the deploy branches it is on. A file's facts print once per agent context, and after an edit only the lines that changed.
 - **Output that fits.** Every text answer fits `--budget`, 30,000 characters by default. The budget cuts detail, never coverage, and the last line names the command for the rest.
 - **Project docs once.** `Claude.md`, `AGENTS.md`, and `.claude/rules/` files arrive the first time a command reaches their directory, nearest first, and never twice in one context.
+- **API at a glance.** `trace api` lists a module's public API, every header whole, and `--visibility internal` adds what the language or the author marks internal. `-o` writes it to a file from the working tree or `--revision` any commit, so two versions compare line by line.
 - **Git archaeology.** `trace history --contains` finds every commit that added or removed a string in about a second, with the lines and the declaration each one changed. `trace blame` collapses by symbol. `trace diff` names the declarations a change touched.
 
 ## Documentation

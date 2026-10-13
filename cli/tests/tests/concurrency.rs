@@ -311,22 +311,13 @@ fn concurrent_calls_show_a_directory_listing_once() {
     assert_eq!(listed, 1, "the listing must show exactly once across concurrent calls");
 }
 
-/// The microseconds one `TRACE_TIMING` phase took across a call's stderr.
-fn phase_micros(stderr: &str, phase: &str) -> u128 {
-    let prefix = format!("timing {phase} ");
-    stderr
-        .lines()
-        .filter_map(|line| line.strip_prefix(&prefix)?.parse::<u128>().ok())
-        .sum()
-}
-
 /// Claude Code sends one Agent's `Read`s in parallel, and each runs a windowed
 /// `context` on its own file. Each call resolves its `calls:` block before it
 /// takes the Agent's lock, so a call waits on the others only for their
-/// compare, print, and save, never for their resolution. Measured on this
-/// fixture: holding the lock across the resolution made five of six calls
-/// wait 40% to 67% of their render; resolving first, the longest wait was
-/// 0.3%, so the 10% bound sits well clear of both.
+/// compare, print, and save, never for their resolution. `TRACE_TIMING` prints
+/// a phase's line when the phase ends, so each call's `calls` line comes before
+/// its `lock session` line. A wait measured against render time failed on a slow
+/// runner once render got faster than the locked compare, print, and save.
 #[test]
 fn one_agents_parallel_windowed_calls_never_wait_on_each_others_calls() {
     let f = Fixture::new();
@@ -375,16 +366,17 @@ fn one_agents_parallel_windowed_calls_never_wait_on_each_others_calls() {
     for run in &runs {
         run.ok();
         assert!(run.stdout.contains("Ledger::record15"), "the window resolves its calls:\n{}", run.stdout);
-        assert!(run.stderr.contains("timing lock session "), "each new file takes the lock:\n{}", run.stderr);
+        let lines: Vec<&str> = run.stderr.lines().collect();
+        let resolved = lines.iter().position(|line| line.starts_with("timing calls "));
+        let locked = lines
+            .iter()
+            .position(|line| line.strip_prefix("timing lock session ").is_some_and(|wait| wait.parse::<u128>().is_ok()));
+        assert!(
+            matches!((resolved, locked), (Some(resolved), Some(locked)) if resolved < locked),
+            "each call resolves its calls: block before it takes the Agent's lock:\n{}",
+            run.stderr
+        );
     }
-    let waits: Vec<(u128, u128)> = runs
-        .iter()
-        .map(|run| (phase_micros(&run.stderr, "lock session"), phase_micros(&run.stderr, "render")))
-        .collect();
-    assert!(
-        waits.iter().all(|(lock, render)| lock * 10 < *render),
-        "a call waited on another's calls: (lock µs, render µs) per call: {waits:?}"
-    );
 }
 
 /// A primer must finish when its warm cache learns a newly tracked directory.

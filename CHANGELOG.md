@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - A hook and a shell `trace` call keep one session record whatever `TMPDIR` each sees, so a fact or a doc one of them showed Claude is not shown again by the other.
 - A session in a large repository starts with every primer section that needs no index, before the hook's deadline, instead of an empty primer. The index then builds in the background, one build per user at a time, and the build ends when it finishes or its Claude Code session ends.

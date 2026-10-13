@@ -57,7 +57,7 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `tests/cache_and_backend.rs` pins that neither `cache clear` nor `cache clear --all` touches the session record.
 - `tests/enrichment.rs` pins doc delivery: a doc longer than the budget arriving in parts, every line once and in order; a doc read in part continuing after the read; a doc sent whole staying loaded after a partial read; Markdown read verbatim counting as read; several paths with `--skip`; and `--agent` keeping a Subagent's record its own.
 - `tests/concurrency.rs` pins that concurrent doc deliveries for one session never send the same lines.
-- `tests/concurrency.rs` pins that one Agent's parallel windowed `context` calls wait on its lock for under a tenth of their render, because each resolves its `calls:` before its first offer.
+- `tests/concurrency.rs` pins that each of one Agent's parallel windowed `context` calls resolves its `calls:` before it takes the Agent's lock, read from the order of its `calls` and `lock session` timing lines.
 - `tests/docs_status.rs` pins that a `trace docs` or `read --docs` whose stdout closes before it prints records no doc as sent, in text and `--json`, and that `trace docs --json --filter` records none.
 - `tests/concurrency.rs` holds the deadlock tripwire: a 600-source fixture whose primer runs twenty times under a ten-second deadline.
 - `tests/speed.rs` contains loose regression tripwires for command latency.

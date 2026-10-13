@@ -13,6 +13,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "cli -> .target"
+
       - name: Install the programs trace runs
         run: brew install ast-grep ripgrep scc universal-ctags
 
@@ -22,7 +26,7 @@ jobs:
 
       - name: Run the unit tests
         working-directory: cli
-        run: cargo test --release --locked --workspace
+        run: cargo test --locked --workspace
 
       - name: Run the command-line suite against the build
         working-directory: cli/tests
