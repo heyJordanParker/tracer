@@ -540,10 +540,17 @@ fn complete_cached(repo_root: &Path) -> Arc<HashMap<String, GitActivity>> {
 /// today's date: keyed by HEAD alone, a branch that sits idle keeps serving
 /// the velocity it had on the day the entry was written.
 fn bulk_cached_uncached(repo_root: &Path) -> HashMap<String, GitActivity> {
-    let (history, (working, presence)) = rayon::join(
-        || cached_history(repo_root),
-        || rayon::join(|| porcelain(repo_root), || cached_presence(repo_root)),
-    );
+    // Scoped threads, never the pool, because the complete map's memo lock is held.
+    let (history, working, presence) = std::thread::scope(|scope| {
+        let working = scope.spawn(|| porcelain(repo_root));
+        let presence = scope.spawn(|| cached_presence(repo_root));
+        let history = cached_history(repo_root);
+        (
+            history,
+            working.join().expect("porcelain worker panicked"),
+            presence.join().expect("presence worker panicked"),
+        )
+    });
     compose_live(&history, working.as_deref().unwrap_or(&Porcelain::new()), &presence)
 }
 

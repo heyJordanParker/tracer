@@ -9,9 +9,11 @@
 //! subprocesses. Getting that wrong is silent: the map is still correct, it
 //! is just built twice and copied per caller.
 //!
-//! A build may use the pool only through a call that never blocks on a memo,
-//! and a memo consumer never runs on the pool while a build of that memo can
-//! run its work there.
+//! A thread waiting on rayon's pool runs other queued jobs meanwhile, so a
+//! build that holds its lock and waits there can run a job that waits on that
+//! lock, and neither returns. So a build runs its parallel work on scoped
+//! threads, never the pool. The relations index is the one build that
+//! extracts on the pool, so while it runs no job on the pool waits for it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

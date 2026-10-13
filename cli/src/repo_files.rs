@@ -406,11 +406,13 @@ fn stamp(path: &Path) -> Option<Stamp> {
 
 fn discover_files(repo_root: &Path) -> Option<TrackedFiles> {
     // The index listing and the porcelain status are two git subprocesses
-    // that read the same index and never wait on each other.
-    let (out, working) = rayon::join(
-        || crate::git_activity::git_output(repo_root, ["ls-files", "--cached", "-z"]),
-        || crate::git_activity::working_paths(repo_root),
-    );
+    // that read the same index and never wait on each other. They run on a
+    // scoped thread, never the pool, because the listing's memo lock is held.
+    let (out, working) = std::thread::scope(|scope| {
+        let working = scope.spawn(|| crate::git_activity::working_paths(repo_root));
+        let out = crate::git_activity::git_output(repo_root, ["ls-files", "--cached", "-z"]);
+        (out, working.join().expect("porcelain worker panicked"))
+    });
     let out = out.ok()?;
     if !out.status.success() {
         return None;

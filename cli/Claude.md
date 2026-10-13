@@ -23,7 +23,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - A relations update that extracts at most `UNCUT_FILES`, 100, files ignores the limit, so a small repository keeps its relations on a busy machine and only a large cold build is cut.
 - `output::run_streamed` calls `process::whole` for `--json`, so `process::context_limit` is `None` and a JSON document's facts are never left out.
 - Only an index brought up to date is memoized, so a stale one never stands in for a later `relations::get` in the same call.
-- `memo.rs` owns every per-repo memo, so an index or map is read and parsed at most once per invocation.
+- `memo.rs` owns every per-repo memo, so an index or map is read and parsed at most once per invocation. A memo build holds its lock while it runs, so its parallel work runs on scoped threads, never rayon's pool, whose waiting threads run other jobs that can wait on that lock.
 - `repo_context::metrics` hands every caller one shared handle to the scc payload, and `repo_context` is the one place scc runs. `stats` reads `repo_context::metrics_under`, the snapshot's rows under its path; outside a repository scc walks the path itself.
 - `cache clear` empties the `file/` namespace, every schema's directory included, and `--all` removes the whole tree.
 - The write that creates an index's key removes every other key of its family in its schema's directory, the keys that share its name up to a trailing `_v<N>` version, so a key that moves with repo state or a version leaves no superseded entry behind.
