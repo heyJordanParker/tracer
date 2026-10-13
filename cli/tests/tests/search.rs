@@ -1816,9 +1816,13 @@ fn pattern_multi_literal_prefilter_keeps_exact_real_matches() {
 #[test]
 fn pattern_splits_only_after_the_platform_refuses_the_full_argument_list() {
     let f = Fixture::new();
-    for i in 0..4500 {
+    // A path takes about 230 bytes, so one path per 200 bytes of the
+    // platform's limit (1 MB on macOS, 2 MB on Linux) overruns it.
+    let limit = Command::new("getconf").arg("ARG_MAX").output().expect("getconf ARG_MAX").stdout;
+    let files = String::from_utf8(limit).unwrap().trim().parse::<usize>().unwrap() / 200;
+    for i in 0..files {
         f.write(
-            &format!("src/{}-{i:04}/module.py", "wide".repeat(53)),
+            &format!("src/{}-{i:05}/module.py", "wide".repeat(53)),
             "needle = tail\n",
         );
     }
@@ -1886,14 +1890,14 @@ fn pattern_splits_only_after_the_platform_refuses_the_full_argument_list() {
         .collect();
     assert_eq!(
         rg_candidate_arguments.len(),
-        4500,
+        files,
         "each broad candidate must be searched exactly once across split ripgrep batches"
     );
     let rg_candidates: std::collections::HashSet<&[u8]> =
         rg_candidate_arguments.iter().copied().collect();
     assert_eq!(
         rg_candidates.len(),
-        4500,
+        files,
         "every broad candidate must survive the remaining-literal ripgrep phase"
     );
 
@@ -1904,14 +1908,14 @@ fn pattern_splits_only_after_the_platform_refuses_the_full_argument_list() {
         .collect();
     assert_eq!(
         sg_candidate_arguments.len(),
-        4500,
+        files,
         "each surviving candidate must reach ast-grep exactly once across split batches"
     );
     let sg_candidates: std::collections::HashSet<&[u8]> =
         sg_candidate_arguments.iter().copied().collect();
     assert_eq!(
         sg_candidates.len(),
-        4500,
+        files,
         "every candidate reached ast-grep once"
     );
 }
