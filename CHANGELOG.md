@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- The mod runs on cmod 1.5 and needs it. Its failures show in cmod 1.5's toasts with Retry, Report, and Hide, and a failed install retries on its own.
+
 ## 0.5.0
 
 - A hook and a shell `trace` call keep one session record whatever `TMPDIR` each sees, so a fact or a doc one of them showed Claude is not shown again by the other.
