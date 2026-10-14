@@ -19,6 +19,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@cmodjs/core": "^0.3.0"
+    "@cmodjs/core": "^1.5.0"
   }
 }
