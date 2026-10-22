@@ -50,7 +50,7 @@ pub(crate) fn edit_context(p: &Path, changed: &[(i64, i64)], delivery: &mut Deli
         return String::new();
     };
     let relative = cache::relative_to_root(p, &repo_root);
-    let _ = surface::delivered(&surface::rows(&facts, None), &relative, None, None, p, delivery);
+    let _ = surface::offered(&surface::rows(&facts, None), &relative, None, p, delivery);
     let shown = Facts::of(&facts, relations::ready(&repo_root).and_then(|index| index.module_counts(&relative)).as_ref());
     let mut out = summary::offer_facts(p, &shown, delivery);
     let mut callers = crate::calls::callers_of(&facts, &relative, changed, &repo_root);
@@ -101,6 +101,9 @@ fn file_mode_inner(
     };
 
     let window = lines.map(|(start, end)| (start as i64, end as i64));
+    // The lines the agent's Read returned, whose headers the rows need not
+    // repeat.
+    let held = window.filter(|_| record);
     let rows_for = |facts: &file_facts::FileFacts| surface::rows(facts, window);
     // Outside any git repository there is no history and no import graph, so
     // there are no facts to show — only the rows.
@@ -111,8 +114,8 @@ fn file_mode_inner(
             .unwrap_or_default();
         let file = p.to_string_lossy();
         let text = match once {
-            true => surface::delivered(&rows, &file, window, budget, p, &mut shown),
-            false => surface::render_within(&rows, &file, window, budget),
+            true => surface::delivered(&rows, &file, window, budget, p, &mut shown, held),
+            false => surface::render_within(&rows, &file, window, budget, held),
         };
         return Ok((text, None, rows, shown));
     };
@@ -146,8 +149,8 @@ fn file_mode_inner(
     let mut out = summary::front_matter_once(None, p, shown_facts.as_ref(), &map, &mut shown, once);
     let rows_budget = budget.map(|budget| budget.saturating_sub(out.len()));
     out.push_str(&match once {
-        true => surface::delivered(&rows, &relative, window, rows_budget, p, &mut shown),
-        false => surface::render_within(&rows, &relative, window, rows_budget),
+        true => surface::delivered(&rows, &relative, window, rows_budget, p, &mut shown, held),
+        false => surface::render_within(&rows, &relative, window, rows_budget, held),
     });
     let calls_budget = budget.map(|budget| budget.saturating_sub(out.len()));
     out.push_str(&crate::calls::render_calls("calls", &mut calls, &relative, calls_budget, once.then_some(&mut shown)));

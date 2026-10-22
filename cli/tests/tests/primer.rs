@@ -75,18 +75,20 @@ fn primer_emits_all_sections() {
 }
 
 #[test]
-fn primer_environment_reports_repo_and_git_user() {
+fn primer_environment_reports_only_what_claude_code_leaves_out() {
     let f = standard_repo();
     let r = f.trace(&["context"]);
     r.ok();
-    assert!(r.stdout.contains("repo root:"), "{}", r.stdout);
-    assert!(r.stdout.contains("git repository: yes"), "{}", r.stdout);
     // The hermetic fixture commits as "Tracer Test".
-    assert!(
-        r.stdout.contains("git user: Tracer Test"),
-        "primer did not surface fixture git user:\n{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("git user: Tracer Test <"), "primer did not surface fixture git user:\n{}", r.stdout);
+    for stated in ["cwd:", "repo root:", "git repository:", "worktree:", "platform:", "shell:", "os version:", "date:"] {
+        assert!(!r.stdout.contains(stated), "the primer repeats `{stated}` Claude Code states itself:\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("Files: "), "Identity repeats the footer's file count:\n{}", r.stdout);
+
+    let below = f.trace_in(&f.root.join("src"), ["context"], &[]);
+    below.ok();
+    assert!(below.stdout.contains(&format!("repo root: {}", f.root.canonicalize().unwrap().display())) || below.stdout.contains(&format!("repo root: {}", f.root.display())), "{}", below.stdout);
 }
 
 #[test]

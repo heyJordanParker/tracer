@@ -290,7 +290,7 @@ fn file_human(
     // The rows take at most half the budget; the digest and function table
     // below take the rest.
     let file = info["file"].as_str().unwrap_or("");
-    let rows = surface::delivered(&surface, file, None, budget.map(|b| b / 2), path, record);
+    let rows = surface::delivered(&surface, file, None, budget.map(|b| b / 2), path, record, None);
     // The table repeats functions the rows already name, so it is detail:
     // it keeps the most complex that fit what is left.
     let mut table_room = budget.map(|b| b.saturating_sub(front_matter.len() + rows.len() + 1_000));

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+- The mod runs on cmod 4.0.3 and every newer cmod, and needs at least 4.0.3.
+- A subagent's compaction re-sends that subagent's own rules into its own context. Before, it re-sent the main session's rules into the subagent's context.
+- A failing `trace hook` shows cmod's error toast, such as `The beforeSessionStart listener failed`, with `trace hook <event> exited <code>: <reason>` as its detail.
+- Claude no longer gets the same context twice:
+  - The primer leaves out what Claude Code already tells Claude: the working folder, git repository, worktree, platform, shell, operating system, date, the file count the `repo_context:` line carries, and the project rules Claude Code loaded. Its Environment keeps the repository root, when the working folder is below it, and the git user with their email.
+  - A compaction no longer re-sends the user rules with `paths:`, because Claude Code loads them back itself at the next file they match.
+  - A doc a `trace` command sent is not loaded again by Claude Code when Claude reads a file beside it.
+  - A declaration whose header Claude just read, through a Read or in `trace read`'s own lines, shows by line and name.
+  - A called function Claude already read whole shows as its file, line, and callers, without its header again.
+  - A command that pages a long doc names the docs queued behind it once per context, instead of on every call.
+
 ## 0.5.1
 
 - The mod runs on cmod 1.5 and needs it. Its failures show in cmod 1.5's toasts with Retry, Report, and Hide, and a failed install retries on its own.

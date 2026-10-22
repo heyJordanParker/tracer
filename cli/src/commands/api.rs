@@ -439,7 +439,7 @@ fn render(groups: &[Group], scope: &Scope, delivery: &mut crate::session::Delive
     };
     let rows = |at: usize, budget: Option<usize>| {
         let file = files[at].1;
-        surface::render_rows(&file.rows, &file.under, None, budget, surface::Fit::Whole)
+        surface::render_rows(&file.rows, &file.under, None, budget, surface::Fit::Whole, None)
     };
     let entry = |at: usize, stage: usize| format!("{}\n{}", head(at, stage), indented(at, &rows(at, None).text));
     let roots = |texts: &[String]| {

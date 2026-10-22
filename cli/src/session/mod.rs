@@ -25,7 +25,7 @@ mod record;
 pub use delivery::{Delivery, Kind, Offer};
 pub use directories::at_session_start;
 pub use record::{
-    compact, doc_states, has_read, kept, line_hashes, loaded_entries, loaded_paths, record_emission, reset,
+    doc_states, has_read, holds, line_hashes, loaded_entries, loaded_paths, record_emission, reset,
     DocState, Hunk, LoadedEntry,
 };
 

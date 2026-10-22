@@ -105,18 +105,20 @@ fn rows_from(extraction: &ExtractionResult, functions: &[FunctionFact], window: 
 /// the rest — while the budget holds. `None` renders every header whole.
 /// When even one `L<n> name()` per row overruns the budget, the names go one
 /// line per parent, and past that each parent with its count per kind, the
-/// same floor `output::fit_listing` gives a list of files.
+/// same floor `output::fit_listing` gives a list of files. A row whose header
+/// lies within `held`, lines the agent holds as they are, prints by name.
 pub fn render_within(
     rows: &[Row],
     file: &str,
     window: Option<(i64, i64)>,
     budget: Option<usize>,
+    held: Option<(i64, i64)>,
 ) -> String {
-    let whole = render_rows(rows, file, window, None, Fit::Names);
+    let whole = render_rows(rows, file, window, None, Fit::Names, held);
     match budget {
         Some(budget) if whole.text.len() > budget => {
             let closing = crate::output::shortened_line(whole.of, whole.of, "declarations").len() + 1;
-            let fitted = render_rows(rows, file, window, Some(budget.saturating_sub(closing)), Fit::Names);
+            let fitted = render_rows(rows, file, window, Some(budget.saturating_sub(closing)), Fit::Names, held);
             format!("{}{}\n", fitted.text, crate::output::shortened_line(fitted.cut, fitted.of, "declarations"))
         }
         _ => whole.text,
@@ -125,8 +127,7 @@ pub fn render_within(
 
 /// `render_within` for rows that are extra context: offered as `path`'s
 /// `Surface` through `delivery`, they print whole the first time, not at all
-/// while they stay the same, and after a change as their delta. A `window`
-/// offers only its rows, so it never removes the rows outside it.
+/// while they stay the same, and after a change as their delta.
 pub fn delivered(
     rows: &[Row],
     file: &str,
@@ -134,7 +135,14 @@ pub fn delivered(
     budget: Option<usize>,
     path: &Path,
     delivery: &mut Delivery,
+    held: Option<(i64, i64)>,
 ) -> String {
+    shown(&offered(rows, file, window, path, delivery), rows, file, window, budget, held)
+}
+
+/// The rows offered as `path`'s `Surface` through `delivery`. A `window`
+/// offers only its rows, so it never removes the rows outside it.
+pub fn offered(rows: &[Row], file: &str, window: Option<(i64, i64)>, path: &Path, delivery: &mut Delivery) -> Offer {
     let shown = distinct(rows);
     let keys = keys(rows, &shown);
     let mut printed = Map::new();
@@ -155,17 +163,26 @@ pub fn delivered(
         }
     };
     let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    match delivery.offer(Kind::Surface, &key.to_string_lossy(), &value) {
-        Offer::New => render_within(rows, file, window, budget),
+    delivery.offer(Kind::Surface, &key.to_string_lossy(), &value)
+}
+
+/// What `offer` prints of the rows: whole the first time, nothing while
+/// they stay the same, and after a change their delta.
+pub fn shown(offer: &Offer, rows: &[Row], file: &str, window: Option<(i64, i64)>, budget: Option<usize>, held: Option<(i64, i64)>) -> String {
+    match offer {
+        Offer::New => render_within(rows, file, window, budget, held),
         Offer::Same => String::new(),
-        Offer::Changed(lines) => delta(rows, &shown, &keys, &lines, file),
+        Offer::Changed(lines) => {
+            let shown = distinct(rows);
+            delta(rows, &shown, &keys(rows, &shown), lines, file, held)
+        }
     }
 }
 
 /// The rows a changed surface prints: each added or changed row whole, then
 /// the removed rows by name and kind, then each row that only moved with its
 /// new line. `lines` is `Offer::Changed`'s, from a whole offer or a window's.
-fn delta(rows: &[Row], shown: &[usize], keys: &[String], lines: &Map<String, Value>, file: &str) -> String {
+fn delta(rows: &[Row], shown: &[usize], keys: &[String], lines: &Map<String, Value>, file: &str, held: Option<(i64, i64)>) -> String {
     let changed = |group: &str, key: &str| {
         lines
             .get(group)
@@ -177,7 +194,7 @@ fn delta(rows: &[Row], shown: &[usize], keys: &[String], lines: &Map<String, Val
     let mut moved = Vec::new();
     for (&index, key) in shown.iter().zip(keys) {
         if changed("rows", key) {
-            out.push_str(&whole_row(rows, index, file));
+            out.push_str(&whole_row(rows, index, file, held));
         } else if changed("at", key) {
             moved.push(format!("{} L{}", called(&rows[index]), rows[index].line));
         }
@@ -253,10 +270,10 @@ pub enum Fit {
 
 /// One file's rows fitted to `budget` by `fit`, with no closing line, so a
 /// listing of many files closes once for all of them.
-pub fn render_rows(rows: &[Row], file: &str, window: Option<(i64, i64)>, budget: Option<usize>, fit: Fit) -> Fitted {
+pub fn render_rows(rows: &[Row], file: &str, window: Option<(i64, i64)>, budget: Option<usize>, fit: Fit, held: Option<(i64, i64)>) -> Fitted {
     let shown = distinct(rows);
     let of = shown.len();
-    let whole: Vec<String> = shown.iter().map(|&index| whole_row(rows, index, file)).collect();
+    let whole: Vec<String> = shown.iter().map(|&index| whole_row(rows, index, file, held)).collect();
     let Some(budget) = budget.filter(|&budget| whole.iter().map(String::len).sum::<usize>() > budget) else {
         return Fitted {
             text: whole.concat(),
@@ -384,8 +401,14 @@ fn header(row: &Row) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn whole_row(rows: &[Row], index: usize, file: &str) -> String {
+/// A row as it prints whole: its header, or its name alone when the agent
+/// holds the header's lines as they are, then its complexity.
+fn whole_row(rows: &[Row], index: usize, file: &str, held: Option<(i64, i64)>) -> String {
     let row = &rows[index];
+    let header_end = row.header_line + header(row).lines().count().max(1) as i64 - 1;
+    if held.is_some_and(|(start, end)| start <= row.header_line && header_end <= end) {
+        return format!("{}{}\n", short_row(rows, index).trim_end_matches('\n'), complexity_comment(row, file));
+    }
     let prefix = format!("L{:<5}{}", row.line, "  ".repeat(depth(index, rows)));
     let mut output = String::new();
     for (at, line) in header(row).lines().enumerate() {

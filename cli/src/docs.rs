@@ -69,7 +69,7 @@ pub fn deliver(
         return String::new();
     }
     let room = room.map_or(REACHED_ROOM, |room| room.min(REACHED_ROOM));
-    let fitted = fit(unread(docs), Some(room), again);
+    let fitted = fit(unread(docs), Some(room), again).once(delivery);
     fitted.record(delivery, source);
     fitted.text
 }
@@ -185,6 +185,10 @@ fn body_start(content: &str, total: usize) -> usize {
 pub struct Fitted {
     sent: Vec<(Unread, usize)>,
     pub text: String,
+    /// The queued docs' block at the end of `text`, and each queued doc's
+    /// line by name.
+    queue: String,
+    queued: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Nearest first. A doc's unread lines go whole while they fit; the first doc
@@ -222,13 +226,26 @@ pub fn fit(docs: Vec<Unread>, budget: Option<usize>, again: &str) -> Fitted {
         break;
     }
     let queued: Vec<Unread> = pending.into();
-    let mut text = sections.join("\n");
-    let room = budget.map(|budget| budget.saturating_sub(used));
-    text.push_str(&queue_block(&queued, again, room));
-    Fitted { sent, text }
+    let queue = queue_block(&queued, again, budget.map(|budget| budget.saturating_sub(used)));
+    Fitted {
+        sent,
+        text: sections.join("\n") + &queue,
+        queue,
+        queued: queued.iter().map(|doc| (doc.name.clone(), queue_line(doc).into())).collect(),
+    }
 }
 
 impl Fitted {
+    /// The text without the queue while the agent was last shown the same
+    /// queue: a command that pages a long doc names the docs behind it once.
+    pub fn once(mut self, delivery: &mut session::Delivery) -> Fitted {
+        let offered = serde_json::Value::Object(self.queued.clone());
+        if !self.queue.is_empty() && matches!(delivery.offer(session::Kind::Queue, "docs", &offered), session::Offer::Same) {
+            self.text.truncate(self.text.len() - self.queue.len());
+        }
+        self
+    }
+
     /// Queue what printed in `delivery`: a doc sent from its first line to
     /// its last as loaded, any other span as the lines seen, so a doc cut
     /// short is offered again from where it stopped.

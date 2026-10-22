@@ -195,17 +195,8 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 /// `~/.claude/rules`, the user-global rule files.
-pub fn user_rules_dir() -> Option<PathBuf> {
+fn user_rules_dir() -> Option<PathBuf> {
     Some(home_dir()?.join(".claude").join("rules"))
-}
-
-/// Whether `path` is a user-global rule file Claude Code loads only when a
-/// file its `paths:` matches is read, so never again after a compaction.
-pub fn conditional_user_rule(path: &Path) -> bool {
-    let under = user_rules_dir()
-        .and_then(|dir| dir.canonicalize().ok())
-        .is_some_and(|dir| path.starts_with(dir));
-    under && std::fs::read_to_string(path).is_ok_and(|content| extract_paths_frontmatter(&content).is_some())
 }
 
 pub fn try_load(

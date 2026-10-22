@@ -131,7 +131,7 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
     let blocks: Vec<String> = front_matters.iter().map(crate::summary::front_matter).collect();
     let wholes: Vec<String> = structures
         .iter()
-        .map(|structure| surface::render_within(&structure.rows, &structure.relative, None, None))
+        .map(|structure| surface::render_within(&structure.rows, &structure.relative, None, None, None))
         .collect();
     let entries: Vec<crate::output::Entry> = structures
         .iter()
@@ -141,7 +141,7 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
             let headline = structure.shown_facts.as_ref().map(|facts| facts.headline()).unwrap_or_default();
             let line = format!("{}  {headline}\n", structure.relative);
             let within = share.map(|share| share.saturating_sub(line.len()));
-            let cut = surface::render_rows(&structure.rows, &structure.relative, None, within, surface::Fit::Names).text;
+            let cut = surface::render_rows(&structure.rows, &structure.relative, None, within, surface::Fit::Names, None).text;
             crate::output::Entry {
                 rank: structure.facts.get("imported_by").and_then(Value::as_i64).unwrap_or(0),
                 levels: vec![

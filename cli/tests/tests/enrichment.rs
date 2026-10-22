@@ -3242,7 +3242,8 @@ fn a_repeated_read_window_carries_the_headline_instead_of_the_front_matter() {
         second.stdout
     );
     assert!(!second.stdout.contains("---"), "the repeat printed a front matter block:\n{}", second.stdout);
-    assert!(second.stdout.contains("def total(rows): …"), "the rows still print:\n{}", second.stdout);
+    assert!(second.stdout.contains("L6    total()  # complexity 1"), "the rows still print, by name under the lines that hold them:\n{}", second.stdout);
+    assert!(!second.stdout.contains("def total(rows): …"), "a row repeats the header its lines print:\n{}", second.stdout);
     assert!(second.stdout.contains("return sum(rows)"), "the content still prints:\n{}", second.stdout);
 }
 
@@ -4631,7 +4632,8 @@ fn a_windowed_read_lists_what_its_lines_call_and_who_else_calls_it() {
     f.trace_env(&["read", "ledger.php"], &session).ok();
     let after = f.trace_env(&["context", "checkout.php", "--offset", "6", "--limit", "1", "--no-record"], &session);
     after.ok();
-    assert!(after.stdout.contains("public function record(int $cents): int { … }"), "{}", after.stdout);
+    assert!(after.stdout.contains("L6 Ledger::record  ledger.php:3  {callers: 2}"), "{}", after.stdout);
+    assert!(!after.stdout.contains("public function record(int $cents): int"), "a read header is shown again: {}", after.stdout);
     assert!(!after.stdout.contains("return $cents;"), "a read body is shown again: {}", after.stdout);
 
     // A new caller prints alone; the callers already shown stay out.

@@ -1,10 +1,12 @@
 //! The event table: what `trace hook` does on each harness event.
 //!
-//! - SessionStart records the docs the harness loaded at start, re-sends
-//!   the rules a compaction dropped, and offers the primer. Codex also gets
-//!   the working folder's rules, which it never loads itself.
-//! - PreCompact forgets what the agent holds, keeping the rules to re-send.
-//! - SubagentStart and InstructionsLoaded record what the harness loaded.
+//! - SessionStart records the docs the harness loaded at start and offers
+//!   the primer. Codex also gets the working folder's rules, which it never
+//!   loads itself.
+//! - PreCompact forgets what the agent holds.
+//! - SubagentStart records what the harness loaded.
+//! - InstructionsLoaded refuses a doc the agent holds whole, and records any
+//!   other as loaded.
 //! - PreToolUse on a shell command names a Subagent in its `trace` calls and,
 //!   with `--tracer-only`, refuses raw code reads.
 //! - PostToolUse adds the context around what a tool returned or wrote.
@@ -14,29 +16,23 @@ use super::harness::{resolved, Tool};
 use super::{Answer, Harness, Input, BUDGET};
 use crate::commands::docs_prime::{self, Reason};
 use crate::commands::{context, find, grep};
-use crate::{docs, nested_memory};
+use crate::docs;
 use crate::session::{self, Delivery};
 use anyhow::Result;
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub fn answer(input: &Input, delivery: &mut Delivery) -> Result<Answer> {
     let context = match input.event.as_str() {
         "SessionStart" => session_start(input, delivery),
         "PreCompact" => {
-            session::compact(nested_memory::conditional_user_rule);
+            session::reset();
             String::new()
         }
         "SubagentStart" => {
             docs_prime::record_start(input.harness == Harness::Codex, Reason::SessionStart);
             String::new()
         }
-        "InstructionsLoaded" => {
-            if let Some(doc) = &input.loaded {
-                docs_prime::run(Reason::SessionStart, std::slice::from_ref(doc), true)?;
-            }
-            String::new()
-        }
+        "InstructionsLoaded" => return instructions_loaded(input),
         "PreToolUse" => return Ok(pre_tool_use(input)),
         "PostToolUse" => post_tool_use(input, false, delivery)?,
         "PostToolUseFailure" => post_tool_use(input, true, delivery)?,
@@ -46,44 +42,44 @@ pub fn answer(input: &Input, delivery: &mut Delivery) -> Result<Answer> {
 }
 
 /// The start docs recorded, then in one budget, kept whole in this order:
-/// the rules a compaction dropped, Codex's working-folder rules, and the
-/// primer, which is cut first.
+/// Codex's working-folder rules, and the primer, which is cut first.
 fn session_start(input: &Input, delivery: &mut Delivery) -> String {
     let codex = input.harness == Harness::Codex;
     if input.source == "clear" {
         session::reset();
     }
-    let compact = input.source == "compact";
-    docs_prime::record_start(codex, if compact { Reason::PostCompact } else { Reason::SessionStart });
-    // The room the hook left this answer, less the blank lines between its parts.
-    let room = crate::output::budget().unwrap_or(BUDGET).saturating_sub(SEPARATOR.len() * 2);
-    let rules = if compact { resent_rules(room, delivery) } else { String::new() };
+    docs_prime::record_start(codex, if input.source == "compact" { Reason::PostCompact } else { Reason::SessionStart });
+    // The room the hook left this answer, less the blank line between its parts.
+    let room = crate::output::budget().unwrap_or(BUDGET).saturating_sub(SEPARATOR.len());
     let folder = match codex {
-        true => docs::reached(std::slice::from_ref(&input.cwd), Some(room.saturating_sub(rules.len())), SOURCE, delivery),
+        true => docs::reached(std::slice::from_ref(&input.cwd), Some(room), SOURCE, delivery),
         false => String::new(),
     };
     let primer = crate::cache::worktree_root_for(&input.cwd)
-        .map(|root| crate::primer::delivered(&root, room.saturating_sub(rules.len() + folder.len()), delivery))
+        .map(|root| crate::primer::delivered(&root, room.saturating_sub(folder.len()), delivery))
         .unwrap_or_default();
-    [primer, folder, rules].iter().filter(|part| !part.trim().is_empty()).map(|part| part.trim_matches('\n')).collect::<Vec<_>>().join(SEPARATOR)
+    [primer, folder].iter().filter(|part| !part.trim().is_empty()).map(|part| part.trim_matches('\n')).collect::<Vec<_>>().join(SEPARATOR)
 }
 
 const SEPARATOR: &str = "\n\n";
 
 const SOURCE: &str = "tracer_session_start";
 
-/// The rule files the last compaction kept, sent again from their first line.
-fn resent_rules(room: usize, delivery: &mut Delivery) -> String {
-    let Some(boundary) = nested_memory::user_rules_dir() else {
-        return String::new();
+/// The refusal of a doc the harness is about to load that the agent already
+/// holds whole.
+const HELD: &str = "tracer already sent this doc whole.";
+
+/// A doc the harness is about to load: refused when the agent holds it
+/// whole and current, as a `trace` command sent it, else recorded as held.
+fn instructions_loaded(input: &Input) -> Result<Answer> {
+    let Some(doc) = &input.loaded else {
+        return Ok(Answer::default());
     };
-    let (mut pass, mut held) = (BTreeSet::new(), BTreeSet::new());
-    let rules: Vec<nested_memory::LoadedMemory> = session::kept()
-        .iter()
-        .filter_map(|path| nested_memory::try_load(Path::new(path), &boundary, "rule", &mut pass, &mut held))
-        .collect();
-    let again = format!("{} read", crate::output::trace_command());
-    docs::deliver(rules, Some(room), &again, "tracer_post_compact", delivery)
+    if session::holds(doc) {
+        return Ok(Answer { refusal: Some(HELD.to_string()), ..Answer::default() });
+    }
+    docs_prime::run(Reason::SessionStart, std::slice::from_ref(doc), true)?;
+    Ok(Answer::default())
 }
 
 fn pre_tool_use(input: &Input) -> Answer {

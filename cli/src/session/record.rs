@@ -26,10 +26,6 @@ pub(super) struct Record {
     /// Every file the agent was sent or read, keyed by absolute path.
     #[serde(default)]
     files: BTreeMap<String, Held>,
-    /// The user-global rule files the agent held when its context was
-    /// compacted, which the harness never loads back, to send again.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    kept: Vec<String>,
 }
 
 /// One file the agent holds lines of, at the content it got them from.
@@ -194,6 +190,12 @@ pub fn loaded_paths() -> BTreeSet<String> {
         .collect()
 }
 
+/// Whether the agent holds `path` whole, at its current content.
+pub fn holds(path: &Path) -> bool {
+    let key = key_of(path);
+    Record::snapshot().files.get(&key).is_some_and(|held| held.complete() && held.current(&key))
+}
+
 /// What the agent holds of a doc, at the content `hash` names.
 pub enum DocState {
     /// Some of its lines.
@@ -254,7 +256,6 @@ impl Record {
     /// first delivery's attribution.
     pub(super) fn sent(&mut self, memories: &[LoadedMemory], source: &str) {
         for memory in memories {
-            self.kept.retain(|path| *path != memory.path);
             let hash = super::content_hash(&memory.content);
             let held = self.files.entry(memory.path.clone()).or_default();
             held.whole = true;
@@ -391,26 +392,6 @@ pub fn reset() -> usize {
         cleared
     })
     .unwrap_or(0)
-}
-
-/// A compaction: forget everything the agent holds, keeping the files it
-/// held whole that `harness_drops` names, which the harness never loads
-/// back, to send again once it restarts.
-pub fn compact(harness_drops: impl Fn(&Path) -> bool) {
-    change(|record| {
-        let kept: Vec<String> = record
-            .files
-            .iter()
-            .filter(|(path, held)| held.complete() && harness_drops(Path::new(path)))
-            .map(|(path, _)| path.clone())
-            .collect();
-        *record = Record { kept, ..Record::default() };
-    });
-}
-
-/// The files the last compaction kept that are not sent again yet.
-pub fn kept() -> Vec<String> {
-    Record::snapshot().kept.clone()
 }
 
 /// One entry in "what the agent holds right now".

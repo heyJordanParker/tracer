@@ -100,23 +100,34 @@ fn session_start_clear_forgets_what_the_agent_held_and_sends_the_primer_again() 
 }
 
 #[test]
-fn a_compaction_sends_again_only_the_user_rules_claude_code_never_reloads() {
+fn a_compaction_forgets_every_rule_and_sends_none_because_claude_code_loads_them_back() {
     let f = shop();
-    let home = home_with_rules(
-        &f,
-        &[("rust.md", "---\npaths: [\"**/*.rs\"]\n---\n\nReturn early.\n"), ("always.md", "Short sentences.\n")],
-    );
+    let home = home_with_rules(&f, &[("rust.md", "---\npaths: [\"**/*.rs\"]\n---\n\nReturn early.\n")]);
     let env = [("HOME", home.as_str())];
     f.hook("SessionStart", "claude", &input(&f, json!({"source": "startup"})), &[], &env).ok();
-    let rule = format!("{home}/.claude/rules/rust.md");
-    f.hook("InstructionsLoaded", "claude", &input(&f, json!({"file_path": rule, "load_reason": "path_glob_match"})), &[], &env).ok();
+    let rule = input(&f, json!({"file_path": format!("{home}/.claude/rules/rust.md"), "load_reason": "path_glob_match"}));
+    f.hook("InstructionsLoaded", "claude", &rule, &[], &env).ok();
     f.hook("PreCompact", "claude", &input(&f, json!({"trigger": "auto"})), &[], &env).ok();
     let after = f.hook("SessionStart", "claude", &input(&f, json!({"source": "compact"})), &[], &env);
-    let context = after.context();
-    assert!(context.contains("## ~/.claude/rules/rust.md") && context.contains("Return early."), "{context}");
-    assert!(!context.contains("always.md"), "an unconditional rule is restored by Claude Code itself: {context}");
-    let again = f.hook("SessionStart", "claude", &input(&f, json!({"source": "compact"})), &[], &env);
-    assert!(!again.context().contains("rust.md"), "a rule sent again is sent once");
+    assert!(!after.context().contains("Return early."), "{}", after.context());
+    let reloaded = f.hook("InstructionsLoaded", "claude", &rule, &[], &env);
+    reloaded.ok();
+    assert_eq!(reloaded.stdout, "", "Claude Code's own reload of the rule goes through");
+}
+
+#[test]
+fn a_doc_the_agent_holds_whole_is_refused_when_claude_code_loads_it_again() {
+    let f = shop();
+    let doc = f.write("src/Claude.md", "# Source\n\nTotals round half up.\n");
+    let loaded = input(&f, json!({"file_path": doc.to_string_lossy(), "load_reason": "nested_traversal"}));
+    f.trace_env(&["read", "src/lib.rs"], &[("AGENT_SESSION_ID", SESSION)]).ok();
+    let refused = f.hook("InstructionsLoaded", "claude", &loaded, &[], &[]);
+    refused.ok();
+    assert_eq!(refused.json()["hookSpecificOutput"]["permissionDecision"], "deny", "{}", refused.stdout);
+    f.write("src/Claude.md", "# Source\n\nTotals round down.\n");
+    let changed = f.hook("InstructionsLoaded", "claude", &loaded, &[], &[]);
+    changed.ok();
+    assert_eq!(changed.stdout, "", "a doc changed since it was sent loads whole");
 }
 
 #[test]
@@ -322,6 +333,17 @@ fn a_read_the_tool_cut_short_holds_only_the_lines_it_returned() {
     let record = f.record(SESSION, "root").unwrap();
     let lib = record["files"].as_object().unwrap().iter().find(|(path, _)| path.ends_with("src/lib.rs")).unwrap().1;
     assert_eq!(lib["coverage"]["read"], json!([[1, 5]]), "{lib}");
+}
+
+/// A row whose header the Read returned shows by line and name.
+#[test]
+fn a_read_names_the_rows_whose_headers_it_returned() {
+    let f = shop();
+    let response = json!({"type": "text", "file": {"filePath": f.path("src/lib.rs"), "numLines": 5, "startLine": 1, "totalLines": 21}});
+    let read = input(&f, json!({"tool_name": "Read", "tool_input": {"file_path": f.path("src/lib.rs")}, "tool_response": response}));
+    let context = f.hook("PostToolUse", "claude", &read, &[], &[]).context();
+    assert!(context.contains("L3    total()  // complexity 1"), "{context}");
+    assert!(!context.contains("pub fn total(prices: &[u32]) -> u32"), "{context}");
 }
 
 /// A failure the hook reports reaches the agent in the answer, and the hook

@@ -872,25 +872,35 @@ fn render_one(
         std::slice::from_ref(&file_path),
     );
     let rows_budget = budget.map(|budget| budget.saturating_sub(front_matter_size) / 2);
-    // A read of part of the file offers only that part's rows.
-    let mut surface_text = match once && revision.is_none() {
-        true => surface::delivered(&surface_rows, &relative, windowed.then_some(window), rows_budget, &file_path, &mut shown),
-        false => surface::render_within(&surface_rows, &relative, Some(window), rows_budget),
+    // A read of part of the file offers only that part's rows. The budget is
+    // laid out with every row whole; the rows whose headers the printed lines
+    // hold then print by name, which only shortens them.
+    let offer = (once && revision.is_none())
+        .then(|| surface::offered(&surface_rows, &relative, windowed.then_some(window), &file_path, &mut shown));
+    let rows_text = |held: Option<(i64, i64)>| match &offer {
+        Some(offer) => surface::shown(offer, &surface_rows, &relative, windowed.then_some(window), rows_budget, held),
+        None => surface::render_within(&surface_rows, &relative, Some(window), rows_budget, held),
     };
+    let whole_rows = rows_text(None);
     let calls_share = budget.map(|budget| {
         let left = budget.saturating_sub(front_matter_size);
         let content_size: usize = rendered.iter().map(|(_, line)| crate::output::width(line)).sum();
         let docs_size = crate::output::width(&docs::fit(unread.clone(), None, &docs_command).text);
-        (left / 4).max(left.saturating_sub(surface_text.len() + content_size + docs_size + reserved))
+        (left / 4).max(left.saturating_sub(whole_rows.len() + content_size + docs_size + reserved))
     });
     let delivery = (once && revision.is_none()).then_some(&mut shown);
-    surface_text.push_str(&crate::calls::render_calls("calls", &mut calls, &relative, calls_share, delivery));
+    let calls_text = crate::calls::render_calls("calls", &mut calls, &relative, calls_share, delivery);
     let truncated = budget.is_some_and(|budget| {
         trim_to_budget(
             &mut rendered,
-            budget.saturating_sub(front_matter_size + surface_text.len() + reserved),
+            budget.saturating_sub(front_matter_size + whole_rows.len() + calls_text.len() + reserved),
         )
     });
+    let printed = match (binary, rendered.first(), rendered.last()) {
+        (None, Some((first, _)), Some((last, _))) => Some((*first as i64, *last as i64)),
+        _ => None,
+    };
+    let surface_text = rows_text(printed) + &calls_text;
     let shown_end = rendered
         .last()
         .map(|(number, _)| *number)
@@ -938,7 +948,10 @@ fn render_one(
         )
     });
     let docs_room = left.map_or(docs::REACHED_ROOM, |left| left.min(docs::REACHED_ROOM));
-    let docs = docs::fit(unread, Some(docs_room), &docs_command);
+    let docs = match once && revision.is_none() {
+        true => docs::fit(unread, Some(docs_room), &docs_command).once(&mut shown),
+        false => docs::fit(unread, Some(docs_room), &docs_command),
+    };
 
     let display_file = cache::relative_to_root(&file_path, &repo_root);
 

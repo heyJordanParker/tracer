@@ -31,12 +31,17 @@ pub enum Target {
         declared_at: i64,
         callers: usize,
         source: String,
+        /// The agent holds the target's whole source, so text leaves it out.
+        #[serde(skip)]
+        held: bool,
         also_called_from: Vec<CallSite>,
     },
     CallSitesPastBudget {
         file: String,
         declared_at: i64,
         source: String,
+        #[serde(skip)]
+        held: bool,
     },
     PastBudget {
         defined_in: usize,
@@ -115,14 +120,11 @@ pub fn calls(facts: &FileFacts, relative: &str, window: (i64, i64), repo_root: &
                 continue;
             }
             for (line, site) in resolved {
+                let (source, held) = target_source(site, &mut sources, repo_root);
                 out.push(Call {
                     line,
                     method: target_method(site),
-                    target: Target::CallSitesPastBudget {
-                        file: site.target_file.clone(),
-                        declared_at: site.target.line,
-                        source: target_source(site, &mut sources, repo_root),
-                    },
+                    target: Target::CallSitesPastBudget { file: site.target_file.clone(), declared_at: site.target.line, source, held },
                 });
             }
         }
@@ -138,7 +140,7 @@ pub fn calls(facts: &FileFacts, relative: &str, window: (i64, i64), repo_root: &
                     .filter(|other| other.target_file == site.target_file && other.target.line == target.line)
                     .collect();
                 callers.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
-                let source = target_source(site, &mut sources, repo_root);
+                let (source, held) = target_source(site, &mut sources, repo_root);
                 let also_called_from = callers
                     .iter()
                     .filter(|other| !(other.file == relative && within(other.line)))
@@ -165,6 +167,7 @@ pub fn calls(facts: &FileFacts, relative: &str, window: (i64, i64), repo_root: &
                         declared_at: target.line,
                         callers: callers.len(),
                         source,
+                        held,
                         also_called_from,
                     },
                 });
@@ -242,6 +245,7 @@ pub fn callers_of(facts: &FileFacts, relative: &str, changed: &[(i64, i64)], rep
                     declared_at: declaration.line,
                     callers: also_called_from.len(),
                     source: String::new(),
+                    held: false,
                     also_called_from,
                 },
             });
@@ -319,8 +323,8 @@ fn deliver(calls: &mut [Call], delivery: &mut session::Delivery) -> Vec<Option<S
 
 /// The function `site` resolves to as a call shows it: its whole source
 /// while the session has not read it and it spans at most
-/// `CALL_BODY_LINES`, else its header.
-fn target_source(site: &relations::UseSite, sources: &mut BTreeMap<String, Vec<String>>, repo_root: &Path) -> String {
+/// `CALL_BODY_LINES`, else its header, and whether the session read it.
+fn target_source(site: &relations::UseSite, sources: &mut BTreeMap<String, Vec<String>>, repo_root: &Path) -> (String, bool) {
     let target = &site.target;
     let lines = sources
         .entry(site.target_file.clone())
@@ -331,10 +335,9 @@ fn target_source(site: &relations::UseSite, sources: &mut BTreeMap<String, Vec<S
         target.header_line as usize,
         target.end_line as usize,
     );
-    if read || target.end_line - target.header_line + 1 > CALL_BODY_LINES {
-        target.header.clone()
-    } else {
-        excerpt(lines, target.header_line, target.end_line)
+    match read || target.end_line - target.header_line + 1 > CALL_BODY_LINES {
+        true => (target.header.clone(), read),
+        false => (excerpt(lines, target.header_line, target.end_line), false),
     }
 }
 
@@ -427,14 +430,14 @@ impl<'a> CallEntry<'a> {
         let (lines, method) = (lines.join(", "), &first.method);
         let trace = crate::output::trace_command();
         let (head, source, sites) = match &first.target {
-            Target::Resolved { file, declared_at, callers, source, also_called_from } => (
+            Target::Resolved { file, declared_at, callers, source, held, also_called_from } => (
                 format!("  {lines} {method}  {file}:{declared_at}  {{callers: {callers}}}\n"),
-                source.as_str(),
+                if *held { "" } else { source.as_str() },
                 also_called_from.as_slice(),
             ),
-            Target::CallSitesPastBudget { file, declared_at, source } => (
+            Target::CallSitesPastBudget { file, declared_at, source, held } => (
                 format!("  {lines} {method}  {file}:{declared_at} \u{2192} {trace} callers {method}\n"),
-                source.as_str(),
+                if *held { "" } else { source.as_str() },
                 &[][..],
             ),
             Target::PastBudget { defined_in } => (

@@ -401,7 +401,7 @@ pub fn run(
     if !surface.is_empty() {
         // The rows take at most half the budget; the blame regions take the rest.
         let budget = crate::output::budget().map(|budget| budget / 2);
-        answer.push_str(&surface::delivered(&surface, &display_file, line_range, budget, &path, &mut delivery));
+        answer.push_str(&surface::delivered(&surface, &display_file, line_range, budget, &path, &mut delivery, None));
     }
     answer.push_str(&format!("Regions: {}  Lines blamed: {}\n\n", regions.len(), blame_lines.len()));
     answer.push_str(&format!(

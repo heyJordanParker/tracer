@@ -17,7 +17,6 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -272,74 +271,17 @@ fn arrived<T>(receiver: mpsc::Receiver<T>, limit: Option<Instant>) -> Option<T> 
 
 // --- Section: Environment ----------------------------------------------
 
+/// What Claude Code's own environment block leaves out: the repository root
+/// when the working folder is below it, and the git user with their email.
 fn environment_section(repo_root: &Path) -> String {
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let is_git = repo_root.join(".git").exists();
-    let is_worktree = worktree(repo_root);
-    let shell = std::env::var("SHELL")
-        .ok()
-        .and_then(|s| s.rsplit('/').next().map(|x| x.to_string()))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "(unknown)".into());
-    // git_user spawns two `git config` reads; os_release spawns `uname`.
-    // Independent — run them concurrently.
-    let (git_user, os_release) = thread::scope(|scope| {
-        let git_user = scope.spawn(|| git_user(repo_root));
-        let os_release = scope.spawn(os_release);
-        (git_user.join().unwrap(), os_release.join().unwrap())
-    });
-    let date = unix_to_ymd(now_secs());
-
+    let below = std::env::current_dir().ok().and_then(|cwd| cwd.canonicalize().ok()) != repo_root.canonicalize().ok();
     let mut out = String::new();
     let _ = writeln!(out, "## Environment");
-    let _ = writeln!(out, "  cwd: {cwd}");
-    let _ = writeln!(out, "  repo root: {}", repo_root.to_string_lossy());
-    let _ = writeln!(
-        out,
-        "  git repository: {}",
-        if is_git { "yes" } else { "no" }
-    );
-    let _ = writeln!(
-        out,
-        "  worktree: {}",
-        if is_worktree { "yes" } else { "no" }
-    );
-    let _ = writeln!(out, "  platform: {}", os_system().to_lowercase());
-    let _ = writeln!(out, "  shell: {shell}");
-    let _ = writeln!(out, "  os version: {} {}", os_system(), os_release);
-    let _ = writeln!(out, "  git user: {git_user}");
-    let _ = writeln!(out, "  date: {date}");
+    if below {
+        let _ = writeln!(out, "  repo root: {}", repo_root.to_string_lossy());
+    }
+    let _ = writeln!(out, "  git user: {}", git_user(repo_root));
     out
-}
-
-/// Host OS name: "Darwin" / "Linux" / "Windows".
-fn os_system() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "Darwin",
-        "linux" => "Linux",
-        "windows" => "Windows",
-        other => other,
-    }
-}
-
-fn os_release() -> String {
-    crate::process::output(Command::new("uname").arg("-r"))
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
-fn worktree(repo_root: &Path) -> bool {
-    let git_path = repo_root.join(".git");
-    if !git_path.is_file() {
-        return false;
-    }
-    std::fs::read_to_string(&git_path)
-        .map(|c| c.contains("worktrees/"))
-        .unwrap_or(false)
 }
 
 fn git_user(repo_root: &Path) -> String {
@@ -371,12 +313,11 @@ fn identity_section(repo_root: &Path) -> String {
         let _ = writeln!(out, "  (scc unavailable or empty result)");
         return out;
     }
-    let total_files: i64 = languages.iter().map(|language| language.count).sum();
     let total_loc: i64 = languages.iter().map(|language| language.code).sum();
     let mut sorted = languages.clone();
     sorted.sort_by(|a, b| b.code.cmp(&a.code));
 
-    let _ = writeln!(out, "  Files: {total_files}  Lines of code: {total_loc}");
+    let _ = writeln!(out, "  Lines of code: {total_loc}");
     let _ = writeln!(out, "  Languages:");
     for lang in sorted.iter().take(PRIMER_LANGUAGE_LIMIT) {
         let facts = serde_json::json!({
@@ -1032,46 +973,40 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn unix_to_ymd(secs: i64) -> String {
-    let days = secs.div_euclid(86400);
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
 // --- Section: Rules -----------------------------------------------------
 
+/// The project rules the agent does not hold. Each `Claude.md` and each rule
+/// the harness loaded reaches the agent whole, so naming it here says
+/// nothing new; a rule that applies to the working tree's changes is named
+/// once, under them.
 fn rules_section(repo_root: &Path, tracked: &[String]) -> String {
-    // Each `Claude.md` reaches the agent when it reads a file under it, so a
-    // list of them here says nothing the agent can act on.
     let rules_files = collect_rules_dir(tracked);
+    if rules_files.is_empty() {
+        return "## Rules\n  (no .claude/rules/ found)\n".to_string();
+    }
+    let loaded = session::loaded_paths();
+    // Conditional rules whose `paths:` globs match a working-tree-dirty file
+    // but that aren't already in the session's context: the ones that govern
+    // the work the agent is about to touch, so a constraint is surfaced
+    // before it's violated rather than discovered by the violation. Capped so
+    // a repo of broad-glob rules can't flood the section.
+    let applicable = applicable_unloaded_rules(repo_root, &loaded);
+    let unloaded: Vec<&String> = rules_files
+        .iter()
+        .filter(|rel| !loaded.contains(&held_key(repo_root, rel)) && !applicable.iter().any(|(rule, _)| rule == *rel))
+        .collect();
+    if unloaded.is_empty() && applicable.is_empty() {
+        return String::new();
+    }
 
     let mut out = String::new();
     let _ = writeln!(out, "## Rules");
-    if !rules_files.is_empty() {
-        let _ = writeln!(out, "  Project rules ({}):", rules_files.len());
-        for rel in &rules_files {
+    if !unloaded.is_empty() {
+        let _ = writeln!(out, "  Project rules, not loaded ({}):", unloaded.len());
+        for rel in &unloaded {
             let _ = writeln!(out, "    {rel}");
         }
-    } else {
-        let _ = writeln!(out, "  (no .claude/rules/ found)");
     }
-
-    // Conditional rules whose `paths:` globs match a working-tree-dirty file
-    // but that aren't already in the session's context. The plain rules list
-    // above tells the agent these files exist; this tells it which ones govern
-    // the work it's about to touch, so a constraint is surfaced before it's
-    // violated rather than discovered by the violation. Capped so a repo of
-    // broad-glob rules can't flood the section.
-    let applicable = applicable_unloaded_rules(repo_root);
     if !applicable.is_empty() {
         let _ = writeln!(
             out,
@@ -1095,7 +1030,7 @@ fn rules_section(repo_root: &Path, tracked: &[String]) -> String {
 /// (its walk already parsed every rule's frontmatter); the dirty set from the
 /// working tree; the loaded set from the agent's record. The three join here at
 /// render time only.
-fn applicable_unloaded_rules(repo_root: &Path) -> Vec<(String, String)> {
+fn applicable_unloaded_rules(repo_root: &Path, loaded: &std::collections::BTreeSet<String>) -> Vec<(String, String)> {
     // The doc graph is its own walk, independent of code relationships. It
     // rode inside the architecture graph only because that entry was where
     // a built structure got stored; built directly it costs one doc-tree
@@ -1125,19 +1060,11 @@ fn applicable_unloaded_rules(repo_root: &Path) -> Vec<(String, String)> {
         return vec![];
     }
 
-    let loaded = session::loaded_paths();
-
     let mut out: Vec<(String, String)> = Vec::new();
     for node in conditional {
         // A rule already in context needs no surfacing — the agent has its
-        // text. Match against the record's canonical-path keys.
-        let rule_abs = repo_root.join(&node.path);
-        let canonical = rule_abs
-            .canonicalize()
-            .unwrap_or(rule_abs)
-            .to_string_lossy()
-            .to_string();
-        if loaded.contains(&canonical) {
+        // text.
+        if loaded.contains(&held_key(repo_root, &node.path)) {
             continue;
         }
         let globs = match &node.paths_globs {
@@ -1162,6 +1089,13 @@ fn applicable_unloaded_rules(repo_root: &Path) -> Vec<(String, String)> {
     out.sort();
     out.truncate(PRIMER_APPLICABLE_RULES_LIMIT);
     out
+}
+
+/// The key the agent's record holds a repository file under: its canonical
+/// path.
+fn held_key(repo_root: &Path, relative: &str) -> String {
+    let path = repo_root.join(relative);
+    path.canonicalize().unwrap_or(path).to_string_lossy().to_string()
 }
 
 fn collect_rules_dir(tracked: &[String]) -> Vec<String> {

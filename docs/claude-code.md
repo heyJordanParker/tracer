@@ -12,8 +12,8 @@ Every event runs `trace hook <event>`, which adds its context after the tool ans
 
 | Event | Claude gets |
 |---|---|
-| Session start, `/clear`, compaction | The repository primer: languages, layout, test and script folders, git state, and the most-depended-on code. A resume that holds it gets nothing, and a repository that changed since gets only the sections that changed. |
-| Read | The file's facts and declarations, and the source of each function the lines it read call |
+| Session start, `/clear`, compaction | The repository primer: languages, layout, test and script folders, git state, the rules that apply to your changes, and the most-depended-on code. It leaves out what Claude Code already tells Claude, such as the working folder, platform, and date. A resume that holds it gets nothing, and a repository that changed since gets only the sections that changed. |
+| Read | The file's facts and declarations, and the source of each function the lines it read call. A declaration whose header the Read returned shows by name. |
 | Edit, Write | The facts the edit changed and the callers of each function it changed, never the lines it wrote |
 | Grep | Each matching file's facts and its matches under the declarations that hold them. A Grep that printed its lines gets only the declarations. |
 | Glob | Each matched file's facts |
@@ -26,9 +26,10 @@ A file's facts arrive once per context. A later read of the same file carries on
 Claude Code loads `CLAUDE.md` files itself. tracer records every doc Claude Code loads, through `InstructionsLoaded`, and every doc it sends, so a doc never arrives twice:
 
 - A `trace` command sends the docs of each directory it reaches, nearest first, the first time it reaches them.
-- A doc too long for the message arrives in parts, each part continuing where the last one stopped.
+- A doc a `trace` command sent is not loaded again when Claude reads a file beside it.
+- A doc too long for the message arrives in parts, each part continuing where the last one stopped, and the docs queued behind it are named once.
 - A doc that changes after it arrived comes back as only its changed lines.
-- A compaction drops the docs from Claude's context, so tracer forgets them on `PreCompact` and sends them again when Claude's work reaches them. Claude Code never reloads a user rule with `paths:` after a compaction, so tracer sends each one Claude had loaded again when the session restarts.
+- A compaction drops the docs from Claude's context, so tracer forgets them on `PreCompact`. Claude Code loads each one back when Claude's work reaches it, and so does the next `trace` command that reaches it.
 
 ## Subagents
 
@@ -82,7 +83,7 @@ cmod asks for these when it installs tracer, and `/mods` turns each one off:
 
 ## When `trace` cannot run
 
-A Hook that cannot run `trace` adds nothing, and Claude's tool call goes ahead unchanged. On every other event cmod logs `tracer: the <event> hook failed: trace hook <event> exited <code>: <reason>`. A Hook that runs past its 9-second deadline ends there and records nothing, so its context arrives on a later call.
+A Hook that cannot run `trace` adds nothing, and Claude's tool call goes ahead unchanged. On every other event cmod shows an error toast, such as `The beforeSessionStart listener failed`, whose detail reads `trace hook <event> exited <code>: <reason>`. A Hook that runs past its 9-second deadline ends there and records nothing, so its context arrives on a later call.
 
 ## Develop the mod
 

@@ -23,8 +23,9 @@ use crate::nested_memory::LoadedMemory;
 /// repository; a search's definitions-and-mentions line, keyed by the
 /// repository and the word; the primer a session starts with, keyed by the
 /// repository; a native search's matches under their declarations, keyed by
-/// the file; and the notice that an index part was left out, keyed by the
-/// repository.
+/// the file; the notice that an index part was left out, keyed by the
+/// repository; and the docs queued behind a command's own docs, keyed by
+/// `docs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -37,6 +38,7 @@ pub enum Kind {
     Primer,
     Matches,
     IndexState,
+    Queue,
 }
 
 /// What an offered value is to the agent beside the value it was last shown.
