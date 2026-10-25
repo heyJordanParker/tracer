@@ -1,7 +1,7 @@
 class Tracer < Formula
   desc "Code intelligence for coding agents"
   homepage "https://github.com/heyJordanParker/tracer"
-  version "0.5.1"
+  version "0.6.0"
   license "MIT"
 
   depends_on "ast-grep"
@@ -11,23 +11,23 @@ class Tracer < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/heyJordanParker/tracer/releases/download/v0.5.1/trace-darwin-arm64"
-      sha256 "90c8eab17f79975ecd1e0977d9c09549d063796615f353b959d25f79cac24e53"
+      url "https://github.com/heyJordanParker/tracer/releases/download/v0.6.0/trace-darwin-arm64"
+      sha256 "ab0c95b90b05dde91c0be23e942a8df2ec300276c65f071e1aa3588a01424de2"
     end
     on_intel do
-      url "https://github.com/heyJordanParker/tracer/releases/download/v0.5.1/trace-darwin-x64"
-      sha256 "bb26d8c904aa0fa03d8f3b0c4d2bd3bd8cbd0f91777843fc79cbea8f1abfd80e"
+      url "https://github.com/heyJordanParker/tracer/releases/download/v0.6.0/trace-darwin-x64"
+      sha256 "817389b99a0da08e23fa02f578c941b7dff9c426392739995403f78cf730ee0e"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/heyJordanParker/tracer/releases/download/v0.5.1/trace-linux-arm64"
-      sha256 "05888a90a9d5750cc9b58adb37d08abbe239498dda8f7fb2332b1023f4d14e9f"
+      url "https://github.com/heyJordanParker/tracer/releases/download/v0.6.0/trace-linux-arm64"
+      sha256 "3bbb3cfa8f1afd1bbc786e78d18d317e29100292e652803c0bb124946bf3bd9a"
     end
     on_intel do
-      url "https://github.com/heyJordanParker/tracer/releases/download/v0.5.1/trace-linux-x64"
-      sha256 "57c33cbc17393847bf1579c194953ee0163b20117d37054b73c7bd498e3316ef"
+      url "https://github.com/heyJordanParker/tracer/releases/download/v0.6.0/trace-linux-x64"
+      sha256 "ef20052c0e0210bd17bdec06f56f525f685182cae7bdefa36c5d25d253a623d9"
     end
   end
 
