@@ -31,6 +31,11 @@ pub struct Command {
     /// Whether `xargs` runs it, adding arguments it reads from its input, so
     /// `argv` is not every argument the command gets.
     pub fed: bool,
+    /// Whether something other than the terminal takes its input, output,
+    /// or exit status: a redirect of its input or output, a command
+    /// substitution its output becomes, or a condition, `&&`, or `||` that
+    /// tests how it exits.
+    pub redirected: bool,
 }
 
 impl Command {
@@ -53,7 +58,7 @@ pub fn commands(line: &str) -> Vec<Command> {
     let Some(tree) = parser.parse(line, None) else {
         return Vec::new();
     };
-    let mut reader = Reader { line, commands: Vec::new(), folder: String::new() };
+    let mut reader = Reader { line, commands: Vec::new(), folder: String::new(), redirected: false };
     reader.walk(tree.root_node(), None);
     reader.commands
 }
@@ -103,6 +108,8 @@ struct Reader<'a> {
     line: &'a str,
     commands: Vec<Command>,
     folder: String,
+    /// Whether the commands read now are `Command::redirected`.
+    redirected: bool,
 }
 
 impl Reader<'_> {
@@ -111,6 +118,25 @@ impl Reader<'_> {
     fn walk(&mut self, node: Node, input: Option<usize>) {
         match node.kind() {
             "command" => self.command(node, input),
+            "redirected_statement" => self.marked(redirects_terminal(node, self.line), |reader| reader.children(node, input)),
+            "command_substitution" | "process_substitution" => self.marked(true, |reader| reader.children(node, None)),
+            "list" => {
+                let mut cursor = node.walk();
+                let operands: Vec<Node> = node.named_children(&mut cursor).collect();
+                let last = operands.len().saturating_sub(1);
+                for (index, operand) in operands.into_iter().enumerate() {
+                    self.marked(index < last, |reader| reader.walk(operand, if index == 0 { input } else { None }));
+                }
+            }
+            "if_statement" | "elif_clause" | "while_statement" => {
+                let mut cursor = node.walk();
+                let conditions: Vec<usize> = node.children_by_field_name("condition", &mut cursor).map(|condition| condition.id()).collect();
+                let mut cursor = node.walk();
+                let parts: Vec<Node> = node.named_children(&mut cursor).collect();
+                for part in parts {
+                    self.marked(conditions.contains(&part.id()), |reader| reader.walk(part, None));
+                }
+            }
             "pipeline" => {
                 let mut feeding = input;
                 let mut cursor = node.walk();
@@ -138,6 +164,14 @@ impl Reader<'_> {
         }
     }
 
+    /// Runs `read` with the commands it reads `redirected` when `mark` is.
+    fn marked(&mut self, mark: bool, read: impl FnOnce(&mut Self)) {
+        let outer = self.redirected;
+        self.redirected |= mark;
+        read(self);
+        self.redirected = outer;
+    }
+
     fn command(&mut self, node: Node, input: Option<usize>) {
         let Some(name) = node.child_by_field_name("name") else {
             return;
@@ -146,7 +180,9 @@ impl Reader<'_> {
         let words: Vec<Node> = std::iter::once(name).chain(node.children_by_field_name("argument", &mut cursor)).collect();
         let argv: Vec<String> = words.iter().map(|word| self.word(*word)).collect();
         let ends: Vec<usize> = words.iter().map(Node::end_byte).collect();
-        let command = Command { argv, name_end: name.end_byte(), folder: self.folder.clone(), input, scripted: false, fed: false };
+        // A here-string is the command's own redirect.
+        let redirected = self.redirected || redirects_terminal(node, self.line);
+        let command = Command { argv, name_end: name.end_byte(), folder: self.folder.clone(), input, scripted: false, fed: false, redirected };
         if command.program() == "cd" {
             if let Some(target) = command.args().iter().find(|arg| !arg.starts_with('-')) {
                 self.folder = match (self.folder.is_empty(), target.starts_with('/')) {
@@ -186,6 +222,7 @@ impl Reader<'_> {
             input: None,
             scripted: false,
             fed,
+            redirected: self.redirected,
         });
         self.nested(&argv[start..end], &ends[start..end], &words[start..end], fed)
     }
@@ -213,6 +250,7 @@ impl Reader<'_> {
             inner.input = inner.input.map(|at| base + at);
             inner.scripted = true;
             inner.fed |= fed;
+            inner.redirected |= self.redirected;
             inner.folder = match (self.folder.is_empty(), inner.folder.is_empty(), inner.folder.starts_with('/')) {
                 (_, true, _) => self.folder.clone(),
                 (true, _, _) | (_, _, true) => inner.folder,
@@ -226,7 +264,7 @@ impl Reader<'_> {
     fn substitutions(&mut self, node: Node) {
         if node.kind() == "command_substitution" || node.kind() == "process_substitution" {
             let folder = self.folder.clone();
-            self.children(node, None);
+            self.marked(true, |reader| reader.children(node, None));
             self.folder = folder;
             return;
         }
@@ -256,6 +294,25 @@ impl Reader<'_> {
 
 /// The shells whose `-c` script runs as a line of its own.
 const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash"];
+
+/// Whether a redirected statement or a command takes its input or output
+/// from the terminal: a here-document, a here-string, or a file redirect of standard
+/// input or output. A redirect of another descriptor, such as `2>/dev/null`,
+/// and a copy of one descriptor onto another, such as `>&2`, leave it.
+fn redirects_terminal(node: Node, line: &str) -> bool {
+    let mut cursor = node.walk();
+    let redirects: Vec<Node> = node.children_by_field_name("redirect", &mut cursor).collect();
+    redirects.into_iter().any(|redirect| match redirect.kind() {
+        "heredoc_redirect" | "herestring_redirect" => true,
+        "file_redirect" => {
+            let descriptor = redirect.child_by_field_name("descriptor").map(|descriptor| &line[descriptor.byte_range()]);
+            let mut cursor = redirect.walk();
+            let copies = redirect.children(&mut cursor).any(|part| !part.is_named() && matches!(part.kind(), ">&" | "<&" | ">&-" | "<&-"));
+            matches!(descriptor, None | Some("0" | "1")) && !copies
+        }
+        _ => false,
+    })
+}
 
 /// Where a shell's `-c` flag sits in its `argv`, among the options before
 /// its first other word: a `-c` after a script file is that script's own.
@@ -495,5 +552,23 @@ mod tests {
         let found = commands("bash -lc 'cd src && cat lib.rs'");
         let cat = found.iter().find(|command| command.program() == "cat").unwrap();
         assert_eq!((cat.argv.clone(), cat.folder.as_str()), (vec!["cat".to_string(), "lib.rs".to_string()], "src"));
+    }
+
+    #[test]
+    fn a_command_something_else_takes_the_input_output_or_exit_of_is_redirected() {
+        let redirected = |line: &str| -> Vec<(String, bool)> {
+            commands(line).iter().map(|command| (command.program().to_string(), command.redirected)).collect()
+        };
+        let pair = |program: &str, redirected: bool| (program.to_string(), redirected);
+        assert_eq!(redirected("cat a > b"), [pair("cat", true)]);
+        assert_eq!(redirected("rg x < a"), [pair("rg", true)]);
+        assert_eq!(redirected(r#"rg x <<< "$y""#), [pair("rg", true)]);
+        assert_eq!(redirected("n=$(grep -c x a)"), [pair("grep", true)]);
+        assert_eq!(redirected("grep -l x a || echo none"), [pair("grep", true), pair("echo", false)]);
+        assert_eq!(redirected("if grep -q x a; then cat a; fi"), [pair("grep", true), pair("cat", false)]);
+        assert_eq!(redirected("cd src && cat a"), [pair("cd", true), pair("cat", false)]);
+        assert_eq!(redirected("cat a 2>/dev/null"), [pair("cat", false)]);
+        assert_eq!(redirected("cat a >&2"), [pair("cat", false)]);
+        assert_eq!(redirected("cat a | head"), [pair("cat", false), pair("head", false)]);
     }
 }

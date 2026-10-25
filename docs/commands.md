@@ -31,7 +31,7 @@ Every path argument takes several paths, and a directory names the files under i
 
 | Command | Answers |
 |---|---|
-| `trace grep <pattern> [paths] [-i] [-t type] [-g glob] [-C n] [-U] [-l \| -c] [--revision REV]` | Text matches through ripgrep, each under the declarations that hold it. Takes ripgrep's own flags, and `-e <pattern>` for a pattern that starts with `-`. |
+| `trace grep <pattern> [paths] [-i] [-o] [-v] [-w] [-x] [-t type] [-g glob] [-C n] [-U] [-l \| -c] [--revision REV]` | Text matches through ripgrep, each under the declarations that hold it. Takes ripgrep's own flags, and `-e <pattern>` for a pattern that starts with `-`. `-o` prints each match alone, `-v` the lines that do not match, `-w` matches whole words, and `-x` whole lines. |
 | `trace pattern <pattern> -t <lang> [paths]` | Structural matches through ast-grep, grouped the same way. |
 | `trace find <pattern> [bases] [--type f\|d] [--sort complexity\|recent\|path]` | Files or directories by name or path glob, with their facts. |
 | `trace logs [<pattern>] [--path P] [--file GLOB] [--since WHEN] [--until WHEN] [--around N]` | Timestamped log entries, ignored files included, a stack trace kept whole, `.gz` rotations read. |

@@ -203,7 +203,7 @@ pub fn enrich<'a>(
     BTreeMap<String, Vec<surface::Row>>,
 ) {
     let mut ordered: Vec<&Match> = matches.iter().collect();
-    ordered.sort_by(|a, b| (&a.file, a.line, &a.snippet).cmp(&(&b.file, b.line, &b.snippet)));
+    ordered.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
 
     let mut unique: Vec<&str> = ordered.iter().map(|m| m.file.as_str()).collect();
     unique.dedup();
@@ -401,13 +401,14 @@ pub fn render_native(
 /// One file's lines under the declarations that enclose them: each such
 /// declaration once, a match on its own line standing in for it, every
 /// matched line marked `:` and every context line `-`, as grep marks them.
+/// Each match `-o` finds on a line prints on a line of its own.
 /// `declarations_only` keeps the declarations alone.
 fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str, declarations_only: bool) -> String {
-    // Source line → marker and text; a match outranks context on a line.
-    let mut lines: BTreeMap<i64, (char, &str)> = BTreeMap::new();
+    // Source line → marker and texts; a match outranks context on a line.
+    let mut lines: BTreeMap<i64, (char, Vec<&str>)> = BTreeMap::new();
     for found in group {
         for (text, line) in found.m.snippet.split('\n').zip(found.m.line..) {
-            lines.insert(line, (':', text.trim_end()));
+            lines.entry(line).or_insert((':', Vec::new())).1.push(text.trim_end());
         }
     }
     for found in group {
@@ -415,7 +416,7 @@ fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str, dec
         let before = found.m.line - found.m.before.len() as i64;
         let context = found.m.before.iter().zip(before..).chain(found.m.after.iter().zip(after..));
         for (text, line) in context {
-            lines.entry(line).or_insert(('-', text.trim_end()));
+            lines.entry(line).or_insert(('-', vec![text.trim_end()]));
         }
     }
     let mut shown: Vec<usize> = Vec::new();
@@ -445,19 +446,21 @@ fn grouped_lines(group: &[EnrichedMatch], rows: &[surface::Row], file: &str, dec
     }
     let mut source: Vec<(i64, Option<usize>, usize, char, &str)> = Vec::new();
     let mut least: HashMap<Option<usize>, usize> = HashMap::new();
-    for (line, (marker, text)) in lines {
+    for (line, (marker, texts)) in lines {
         let enclosing: Vec<usize> = shown
             .iter()
             .copied()
             .filter(|&index| rows[index].line < line && line <= rows[index].end_line)
             .collect();
         let owner = enclosing.last().copied();
-        let code = text.trim_start_matches([' ', '\t']);
-        if !code.is_empty() {
-            let indent = least.entry(owner).or_insert(usize::MAX);
-            *indent = (*indent).min(text.len() - code.len());
+        for text in texts {
+            let code = text.trim_start_matches([' ', '\t']);
+            if !code.is_empty() {
+                let indent = least.entry(owner).or_insert(usize::MAX);
+                *indent = (*indent).min(text.len() - code.len());
+            }
+            source.push((line, owner, enclosing.len(), marker, text));
         }
-        source.push((line, owner, enclosing.len(), marker, text));
     }
     for (line, owner, depth, marker, text) in source {
         let cut = least.get(&owner).copied().unwrap_or(0).min(text.len());

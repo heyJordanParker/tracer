@@ -78,13 +78,13 @@ test('a session start answers what trace hook prints as its note', async () => {
 
 test('the tracer-only option turns on the refusal', async () => {
   const tested = testMod(tracer, { projectRoot: ROOT, options: { tracerOnly: true } })
-  const refusal = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: "tracer: Claude reads this project's code only through tracer.\nRun this instead: trace read a.ts" } }
+  const refusal = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'tracer: Claude reads files only through tracer.\nRun this instead: trace read a.ts' } }
   const ran = fakeTrace(tested, () => ({ stdout: JSON.stringify(refusal) }))
 
   const answer = await tested.raise.beforeToolCall({ name: 'Bash', input: { command: 'cat a.ts' } })
 
   expect(ran[0]?.argv.at(-1)).toBe('--tracer-only')
-  expect(answer).toEqual({ refuse: "tracer: Claude reads this project's code only through tracer.\nRun this instead: trace read a.ts" })
+  expect(answer).toEqual({ refuse: 'tracer: Claude reads files only through tracer.\nRun this instead: trace read a.ts' })
 })
 
 test('a doc trace already sent whole never loads again', async () => {

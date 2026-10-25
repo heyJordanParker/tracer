@@ -1,6 +1,6 @@
 //! `trace grep` — text search with rich per-match context.
-//! Wraps `rg --json` and takes ripgrep's own flags (`-i`, `-l`, `-c`, `-C`,
-//! `-A`, `-B`, `-n`, `-U`, `-t`, `-g`); each match is enriched with per-file facts and grouped
+//! Wraps `rg --json` and takes ripgrep's own flags (`-i`, `-o`, `-v`, `-w`,
+//! `-x`, `-l`, `-c`, `-C`, `-A`, `-B`, `-n`, `-U`, `-t`, `-g`); each match is enriched with per-file facts and grouped
 //! under the declarations that enclose it.
 //!
 //! ripgrep's output is consumed as it is written rather than through
@@ -24,6 +24,14 @@ use std::thread;
 #[derive(Default)]
 pub struct Options {
     pub ignore_case: bool,
+    /// `-o`: each match alone, one per match, instead of its line.
+    pub only_matching: bool,
+    /// `-v`: the lines that do not match.
+    pub invert_match: bool,
+    /// `-w`: matches of whole words only.
+    pub word_regexp: bool,
+    /// `-x`: matches of whole lines only.
+    pub line_regexp: bool,
     /// `-l` and `-c`: each matching file once, with its facts and match count.
     pub files_only: bool,
     /// `-B` and `-A`, both `-C` when unset: lines shown before and after each match.
@@ -112,7 +120,9 @@ struct Event {
     file: String,
     line: i64,
     text: String,
-    match_start: Option<usize>,
+    /// A match's submatches, each its byte start and text: none under `-v`,
+    /// whose lines match nothing. `None` for a context line.
+    submatches: Option<Vec<(usize, String)>>,
 }
 
 fn parse_event(line: &str) -> Result<Option<Event>> {
@@ -130,17 +140,24 @@ fn parse_event(line: &str) -> Result<Option<Event>> {
     else {
         return if is_match { Err(anyhow!("ripgrep match is missing line text")) } else { Ok(None) };
     };
-    let match_start = if is_match {
-        Some(
+    let submatches = match is_match {
+        true => Some(
             data.get("submatches")
                 .and_then(Value::as_array)
-                .and_then(|matches| matches.first())
-                .and_then(|matched| matched.get("start"))
-                .and_then(Value::as_u64)
-                .context("ripgrep match is missing a submatch start")? as usize,
-        )
-    } else {
-        None
+                .context("ripgrep match is missing its submatches")?
+                .iter()
+                .map(|matched| {
+                    let start = matched.get("start").and_then(Value::as_u64).context("ripgrep match is missing a submatch start")?;
+                    let text = matched
+                        .get("match")
+                        .and_then(|found| found.get("text"))
+                        .and_then(Value::as_str)
+                        .context("ripgrep match is missing a submatch text")?;
+                    Ok((start as usize, text.to_string()))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        false => None,
     };
     let file = data
         .get("path")
@@ -155,7 +172,7 @@ fn parse_event(line: &str) -> Result<Option<Event>> {
         file: file.to_string(),
         line,
         text: text.trim_end_matches('\n').to_string(),
-        match_start,
+        submatches,
     }))
 }
 
@@ -178,11 +195,16 @@ fn ripgrep(pattern: &str, paths: &[String], options: &Options, types: &[String])
     let mut cmd = Command::new("rg");
     cmd.args(["--json", "--threads", &rayon::current_num_threads().to_string()]);
     cmd.args(crate::lang::RIPGREP_SCOPE);
-    if options.ignore_case {
-        cmd.arg("--ignore-case");
-    }
-    if options.multiline {
-        cmd.arg("--multiline");
+    for (given, flag) in [
+        (options.ignore_case, "--ignore-case"),
+        (options.invert_match, "--invert-match"),
+        (options.word_regexp, "--word-regexp"),
+        (options.line_regexp, "--line-regexp"),
+        (options.multiline, "--multiline"),
+    ] {
+        if given {
+            cmd.arg(flag);
+        }
     }
     let with_context = options.before + options.after > 0;
     if with_context {
@@ -204,6 +226,9 @@ fn ripgrep(pattern: &str, paths: &[String], options: &Options, types: &[String])
     let stderr = stderr_reader(child.stderr.take().expect("piped ripgrep stderr"));
     let mut matches = Vec::new();
     let mut lines = Lines::new();
+    // Two path arguments that reach one file, such as a folder and a file
+    // in it, make ripgrep report its matches twice.
+    let mut reported = std::collections::HashSet::new();
     let mut parse_result = Ok(());
     for line in std::io::BufReader::new(child.stdout.take().expect("piped ripgrep stdout")).lines()
     {
@@ -215,14 +240,26 @@ fn ripgrep(pattern: &str, paths: &[String], options: &Options, types: &[String])
                 if with_context {
                     keep_lines(&mut lines, &event.file, event.line, &event.text);
                 }
-                if let Some(start) = event.match_start {
-                    matches.push(Match {
-                        snippet: snippet(&event.text, start),
-                        file: event.file,
-                        line: event.line,
-                        ..Match::default()
-                    });
+                let Some(submatches) = event.submatches else {
+                    continue;
+                };
+                if !reported.insert((event.file.clone(), event.line)) {
+                    continue;
                 }
+                // `-o` makes one match per submatch, on the line it starts on.
+                let found: Vec<(i64, String)> = match options.only_matching && !submatches.is_empty() {
+                    true => submatches
+                        .into_iter()
+                        .map(|(start, text)| (event.line + event.text.get(..start).map_or(0, |before| before.matches('\n').count()) as i64, text))
+                        .collect(),
+                    false => vec![(event.line, snippet(&event.text, submatches.first().map_or(0, |(start, _)| *start)))],
+                };
+                matches.extend(found.into_iter().map(|(line, snippet)| Match {
+                    snippet,
+                    file: event.file.clone(),
+                    line,
+                    ..Match::default()
+                }));
             }
             Ok(None) => {}
             Err(error) => {
@@ -285,10 +322,19 @@ fn git_grep(
         !types.matched(file, false).is_ignore() && globbed(file)
     };
     let mut args = vec!["grep", "-z", "--text", "-n", "--no-color", "--perl-regexp"];
-    if options.ignore_case {
-        args.push("--ignore-case");
+    for (given, flag) in [
+        (options.ignore_case, "--ignore-case"),
+        (options.only_matching, "--only-matching"),
+        (options.invert_match, "--invert-match"),
+        (options.word_regexp, "--word-regexp"),
+    ] {
+        if given {
+            args.push(flag);
+        }
     }
-    args.extend(["-e", pattern, revision, "--"]);
+    // git grep has no `-x`; ripgrep's is the pattern anchored at both ends.
+    let anchored = format!("^(?:{pattern})$");
+    args.extend(["-e", if options.line_regexp { &anchored } else { pattern }, revision, "--"]);
     args.extend(scope.iter().map(|(_, within)| within.as_str()));
     let mut matches = crate::git_activity::git_command(repo_root, args, |command| {
         let mut child = crate::process::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
@@ -348,7 +394,10 @@ fn git_grep(
                 Match {
                     file: shown(&file, scope),
                     line,
-                    snippet: window_snippet(&text, text.find(pattern).unwrap_or(0)),
+                    snippet: match options.only_matching {
+                        true => text.into_owned(),
+                        false => window_snippet(&text, text.find(pattern).unwrap_or(0)),
+                    },
                     ..Match::default()
                 },
             ));
@@ -579,6 +628,10 @@ pub fn run(
             "type": options.types,
             "glob": options.globs,
             "ignore_case": options.ignore_case,
+            "only_matching": options.only_matching,
+            "invert_match": options.invert_match,
+            "word_regexp": options.word_regexp,
+            "line_regexp": options.line_regexp,
             "multiline": options.multiline,
             "before_context": options.before,
             "after_context": options.after,

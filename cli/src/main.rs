@@ -148,6 +148,18 @@ enum Command {
         /// Match case-insensitively.
         #[arg(short = 'i', long)]
         ignore_case: bool,
+        /// Each match alone, without the rest of its line.
+        #[arg(short = 'o', long)]
+        only_matching: bool,
+        /// The lines that do not match.
+        #[arg(short = 'v', long)]
+        invert_match: bool,
+        /// Match whole words only.
+        #[arg(short = 'w', long)]
+        word_regexp: bool,
+        /// Match whole lines only.
+        #[arg(short = 'x', long)]
+        line_regexp: bool,
         /// Each matching file once, with its facts.
         #[arg(short = 'l', long)]
         files_with_matches: bool,
@@ -341,7 +353,7 @@ enum Command {
         /// away, so nothing is recorded as shown and the process ends.
         #[arg(long, value_name = "MS")]
         deadline_ms: u64,
-        /// Refuse shell commands that read this project's code without tracer.
+        /// Refuse shell commands that read files without tracer when tracer gives the same answer.
         #[arg(long)]
         tracer_only: bool,
     },
@@ -591,6 +603,10 @@ fn run() -> Result<()> {
             pattern,
             regexp,
             ignore_case,
+            only_matching,
+            invert_match,
+            word_regexp,
+            line_regexp,
             files_with_matches,
             count,
             context,
@@ -613,6 +629,10 @@ fn run() -> Result<()> {
             }
             let options = commands::grep::Options {
                 ignore_case,
+                only_matching,
+                invert_match,
+                word_regexp,
+                line_regexp,
                 files_only: files_with_matches || count,
                 before: before_context.unwrap_or(context),
                 after: after_context.unwrap_or(context),

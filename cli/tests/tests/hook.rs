@@ -182,22 +182,118 @@ fn a_subagents_trace_calls_carry_its_agent_and_a_quoted_trace_stays_text() {
     assert_eq!(call(None).stdout, "", "the main agent's commands are left alone");
 }
 
+/// The `trace` command a tracer-only hook names for `command`, `None` when
+/// it lets the command run.
+fn instead(f: &Fixture, command: &str) -> Option<String> {
+    let run = f.hook("PreToolUse", "claude", &input(f, json!({"tool_name": "Bash", "tool_input": {"command": command}})), &["--tracer-only"], &[]);
+    run.ok();
+    if run.stdout.is_empty() {
+        return None;
+    }
+    let answer = run.json();
+    assert_eq!(answer["hookSpecificOutput"]["permissionDecision"], "deny", "{}", run.stdout);
+    let reason = answer["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+    let run = reason.strip_prefix("tracer: Claude reads files only through tracer.\nRun this instead: ").unwrap_or_else(|| panic!("{reason}"));
+    Some(run.to_string())
+}
+
 #[test]
-fn tracer_only_refuses_a_raw_read_of_project_code_and_names_the_trace_command() {
+fn tracer_only_refuses_a_raw_read_of_any_file_and_names_the_trace_command() {
     let f = shop();
-    let bash = |command: &str, flags: &[&str]| {
-        f.hook("PreToolUse", "claude", &input(&f, json!({"tool_name": "Bash", "tool_input": {"command": command}})), flags, &[])
-    };
-    let refused = bash("cd src && cat lib.rs | head -5", &["--tracer-only"]).json();
-    assert_eq!(refused["hookSpecificOutput"]["permissionDecision"], "deny");
-    assert_eq!(
-        refused["hookSpecificOutput"]["permissionDecisionReason"],
-        "tracer: Claude reads this project's code only through tracer.\nRun this instead: trace read lib.rs"
-    );
-    let filtered = bash("trace grep total --json | jq .counts", &["--tracer-only"]).json();
-    assert!(filtered["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap().ends_with("trace grep total --json --filter .counts"));
-    assert_eq!(bash("cat /etc/hosts && sed -i s/a/b/ src/lib.rs", &["--tracer-only"]).stdout, "", "outside paths and writes pass");
-    assert_eq!(bash("cat src/lib.rs", &[]).stdout, "", "without --tracer-only nothing is refused");
+    let other = Fixture::new();
+    other.write("ledger.rs", "fn total() {}\n");
+    other.commit("other");
+    let notes = f.tmp.join("notes.md");
+    std::fs::write(&notes, "# Notes\n").unwrap();
+    let (notes, tmp, clone) = (notes.to_string_lossy(), f.tmp.to_string_lossy(), other.root.to_string_lossy());
+
+    assert_eq!(instead(&f, "bat src/lib.rs").as_deref(), Some("trace read src/lib.rs --raw"));
+    assert_eq!(instead(&f, &format!("cat {notes}")), Some(format!("trace read {notes} --raw")), "a file outside every repository");
+    assert_eq!(instead(&f, &format!("grep -rn total {clone}")), Some(format!("trace grep total {clone}")), "another repository");
+    assert_eq!(instead(&f, &format!("eza -la {tmp}")), Some(format!("trace list {tmp} --all")));
+    assert_eq!(instead(&f, &format!("eza --tree {tmp}")), Some(format!("trace tree {tmp}")));
+    assert_eq!(instead(&f, "trace grep total --json | jq .counts").as_deref(), Some("trace grep total --json --filter .counts"));
+    let bash = input(&f, json!({"tool_name": "Bash", "tool_input": {"command": "cat src/lib.rs"}}));
+    assert_eq!(f.hook("PreToolUse", "claude", &bash, &[], &[]).stdout, "", "without --tracer-only nothing is refused");
+}
+
+#[test]
+fn tracer_only_names_the_trace_command_that_gives_the_same_answer() {
+    let f = shop();
+    let lib = std::fs::canonicalize(f.path("src/lib.rs")).unwrap().to_string_lossy().into_owned();
+    for (command, run) in [
+        ("grep -oE 'id.{0,4}' src/lib.rs", "trace grep -o 'id.{0,4}' src/lib.rs".to_string()),
+        ("grep -o 'id.{0,4}' src/lib.rs", r"trace grep -o 'id.\{0,4\}' src/lib.rs".into()),
+        ("grep -vi TODO src/lib.rs", "trace grep -v -i TODO src/lib.rs".into()),
+        ("grep -co total src/lib.rs", "trace grep -c total src/lib.rs".into()),
+        ("grep -rwn --include='*.rs' total .", "trace grep -w -g '*.rs' total .".into()),
+        (r"grep 'total\|cents(' src/lib.rs", r"trace grep 'total|cents\(' src/lib.rs".into()),
+        ("grep -rn '*const' src", r"trace grep '\*const' src".into()),
+        ("grep -F 'a.b' src/lib.rs", r"trace grep 'a\.b' src/lib.rs".into()),
+        ("rg -S total", "trace grep -i total .".into()),
+        (r"rg -S '\Wtotal' src", r"trace grep -i '\Wtotal' src".into()),
+        ("cat src/lib.rs | grep total", "trace grep total src/lib.rs".into()),
+        ("cd src && cat lib.rs | head -5", "trace read lib.rs --raw --lines 1:5".into()),
+        ("head -20 src/lib.rs", "trace read src/lib.rs --raw --lines 1:20".into()),
+        ("sed -n '3,5p' src/lib.rs", "trace read src/lib.rs --raw --lines 3:5".into()),
+        ("ls -la src", "trace list src --all".into()),
+        ("tree -L 1 src", "trace list src".into()),
+        ("tree src", "trace tree src".into()),
+        ("find src -name '*.rs' -type f", "trace find '*.rs' src".into()),
+        ("git blame -L 2,4 src/lib.rs", "trace blame src/lib.rs --lines 2:4".into()),
+        ("git show HEAD:src/lib.rs", format!("trace read {lib} --revision HEAD")),
+        ("git log -S total", "trace history --contains total".into()),
+        ("git log --oneline -n 5 -- src/lib.rs", "trace history src/lib.rs".into()),
+        ("git show HEAD~1", "trace history --commit 'HEAD~1'".into()),
+    ] {
+        assert_eq!(instead(&f, command), Some(run), "{command}");
+    }
+}
+
+#[test]
+fn tracer_only_lets_a_command_tracer_cannot_answer_the_same_run() {
+    let f = shop();
+    f.write(".gitignore", "build/\n");
+    f.write("build/out.txt", "built\n");
+    f.write("vendor/kept.txt", "kept\n");
+    for command in [
+        "tail -f src/lib.rs",
+        "tail -n 2 src/lib.rs",
+        "grep -m 1 total src/lib.rs",
+        "grep -R total src",
+        r"grep '\(t\)\1' src/lib.rs",
+        "grep -P total src/lib.rs",
+        "awk '{print $1}' src/lib.rs",
+        "sed 's/a/b/' src/lib.rs",
+        "sed -i s/a/b/ src/lib.rs",
+        "sed -n '2,+3p' src/lib.rs",
+        "head -c 10 src/lib.rs",
+        "cat /dev/null",
+        "cat src/lib.rs > copy.rs",
+        "cat src/lib.rs | jq .",
+        "grep -rl zzqq src || echo none",
+        "n=$(grep -c total src/lib.rs)",
+        "rg total < src/lib.rs",
+        r#"rg total <<< "$x""#,
+        "echo total | grep total",
+        "echo total | rg total",
+        "ls src/lib.rs",
+        "ls -R src",
+        "ls -t src",
+        "ls",
+        "tree build",
+        "tree -L 2 src",
+        "find src -name '*.rs'",
+        "find src -mtime 1",
+        "git blame -L 2,+3 src/lib.rs",
+        "git grep total -- '*.rs'",
+        "git show :src/lib.rs",
+        "git show HEAD:src",
+        "git diff --name-status",
+        "git log",
+    ] {
+        assert_eq!(instead(&f, command), None, "{command}");
+    }
 }
 
 #[test]

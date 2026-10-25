@@ -1299,7 +1299,7 @@ fn search_backends_disclose_parse_cleanup_and_bounded_diagnostics() {
         result.stderr
     );
 
-    let path = backend_path(&f, "rg-partial-status", "rg", "#!/bin/sh\necho '{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"src/util.py\"},\"lines\":{\"text\":\"helper\"},\"line_number\":1,\"submatches\":[{\"start\":0}]}}'\necho partial-status >&2\nexit 7\n");
+    let path = backend_path(&f, "rg-partial-status", "rg", "#!/bin/sh\necho '{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"src/util.py\"},\"lines\":{\"text\":\"helper\"},\"line_number\":1,\"submatches\":[{\"match\":{\"text\":\"helper\"},\"start\":0,\"end\":6}]}}'\necho partial-status >&2\nexit 7\n");
     let result = f.trace_env(
         &["grep", "helper", ".", "--json"],
         &[("PATH", &path)],
@@ -2796,6 +2796,39 @@ fn grep_takes_ripgreps_flags() {
     let r = f.trace(&["grep", "needle", "-U", "--revision", "HEAD", "."]);
     r.code_is(1);
     assert!(r.combined().contains("-U"), "{}", r.combined());
+
+    // -o prints each match alone, two on one line in the order they occur;
+    // -v the lines that do not match; -w whole words; -x whole lines.
+    f.write("src/d.txt", "needle haystack needle\nneedles\nreturn;\n");
+    f.commit("words");
+    for at in [None, Some("HEAD")] {
+        let grep = |args: &[&str]| {
+            let mut all = vec!["grep"];
+            all.extend_from_slice(args);
+            all.push("src/d.txt");
+            if let Some(revision) = at {
+                all.extend_from_slice(&["--revision", revision]);
+            }
+            let r = f.trace(&all);
+            r.ok();
+            file_block(&r.stdout, "src/d.txt")
+        };
+        assert_eq!(grep(&["-o", "needle|haystack"]), vec!["  L1:   needle", "  L1:   haystack", "  L1:   needle", "  L2:   needle"], "{at:?}");
+        assert_eq!(grep(&["-v", "needle"]), vec!["  L3:   return;"], "{at:?}");
+        assert_eq!(grep(&["-w", "needle"]), vec!["  L1:   needle haystack needle"], "{at:?}");
+        assert_eq!(grep(&["-x", "needles"]), vec!["  L2:   needles"], "{at:?}");
+    }
+
+    // -U -o numbers each match by the line it starts on, though ripgrep
+    // reports both in one event from line 1.
+    let r = f.trace(&["grep", "-U", "-o", r"haystack needle\nneedles|ret", "src/d.txt"]);
+    r.ok();
+    assert_eq!(file_block(&r.stdout, "src/d.txt"), vec!["  L1:   haystack needle", "  L2:   needles", "  L3:   ret"], "{}", r.stdout);
+
+    // A file two path arguments reach prints its matches once.
+    let r = f.trace(&["grep", "needles", "src", "src/d.txt"]);
+    r.ok();
+    assert_eq!(file_block(&r.stdout, "src/d.txt"), vec!["  L2:   needles"], "{}", r.stdout);
 
     // An unknown type is refused by name, never answered with silence.
     let r = f.trace(&["grep", "needle", "-t", "nosuchtype", "."]);

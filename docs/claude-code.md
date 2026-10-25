@@ -40,30 +40,38 @@ Every Subagent keeps its own record, so a Subagent gets the facts and docs its o
 tracer has one setting, in Claude Code's `/config` under tracer:
 
 ```text
-Claude reads code only through tracer                    [ off ]
-Claude can't read or search this project with grep, cat, find,
-or git blame. It uses tracer instead, so every read comes with
-the file's callers, history, and docs.
+Claude reads files only through tracer                   [ off ]
+Claude can't read, search, or list files with grep, cat, ls,
+find, or git blame when tracer gives the same answer. It uses
+tracer instead, so every read comes with what tracer knows
+about the file.
 ```
 
-With it on, a Bash command that reads the project's code without `trace` is refused, and Claude runs the `trace` command the refusal names:
+With it on, a Bash command that reads, searches, or lists a file or folder without `trace` is refused when a `trace` command gives the same answer, wherever the file is: in the project, in another repository or worktree, or outside every repository. Claude runs the `trace` command the refusal names:
 
 ```text
 ● Bash(grep -rn "Cart" src)
-  ⎿ tracer: Claude reads this project's code only through tracer.
+  ⎿ tracer: Claude reads files only through tracer.
     Run this instead: trace grep Cart src
 ```
 
-| Claude runs, on a file in the project | The refusal names |
+| Claude runs | The refusal names |
 |---|---|
-| `grep -r`, `rg` | `trace grep` |
-| `cat`, `head`, `tail`, `sed`, `awk` | `trace read` |
-| `find` | `trace find` |
-| `ls`, `tree` | `trace list`, `trace tree` |
-| `git blame`, `git grep`, `git show <ref>:<path>`, `git log <file>`, `git log -S` | `trace blame`, `trace grep`, `trace read --revision`, `trace history` |
+| `grep`, `egrep`, `fgrep`, `rg`, `git grep`, with `-i`, `-o`, `-v`, `-w`, `-x`, `-l`, `-c`, `-A`, `-B`, `-C`, `-F`, `-g`, `-t`, `--include`, or `--exclude` | `trace grep` with the same flags |
+| `cat`, `bat`, `head -n N`, `sed -n 'A,Bp'`, and `cat <file>` piped into one of them or a search | `trace read --raw`, with `--lines` for the lines they print, or `trace grep` |
+| `find` with `-name` and `-type f` or `-type d` | `trace find` |
+| `ls`, `eza`, `tree -L 1` | `trace list`, with `--all` for `-a` |
+| `tree`, `eza --tree` | `trace tree` |
+| `git blame`, `git show <ref>:<file>`, `git show <ref>`, `git log <file>`, `git log -S`, `git log -G` | `trace blame`, `trace read --revision`, `trace history --commit`, `trace history` |
 | A `trace` command piped into `head`, `grep`, `sed`, `wc`, `jq`, or another filter | The `trace` command alone, or with `--json --filter <expression>` in place of `jq` |
 
-Read, Grep, and Glob stay allowed, because tracer adds its facts to each of them. A command that changes files, such as `sed -i` or `find -delete`, runs, and so does every read outside the project and every git command `trace` has no answer for, such as `git status` or `git log -p`.
+Read, Grep, and Glob stay allowed, because tracer adds its facts to each of them. A command tracer can't answer the same way runs:
+
+- one with a flag no `trace` command matches, such as `tail`, `grep -m 1`, `grep -R`, `ls -t`, `tree -L 2`, or `find` without `-type`
+- an `awk` program, or a `sed` script that changes the text
+- one whose output or exit status goes somewhere other than Claude: into a file, another program, a variable, or a test such as `||` or `if`, and one that reads its input from a redirect
+- a read of a device such as `/dev/null`, `tree` on a folder git ignores, and `ls` on a folder holding one `trace list` leaves out, such as `vendor/`
+- every git command `trace` has no answer for, such as `git status`, `git diff`, or `git log -p`
 
 A repository turns it on for everyone working in it with `.claude/cmods/tracer/options.json`, committed with the repository:
 
