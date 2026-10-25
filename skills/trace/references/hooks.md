@@ -18,24 +18,25 @@ Use this Reference when diagnosing tracer's Hooks, docs injection, identity prop
 ### SessionStart records the start docs and offers the primer
 - It records the docs the Harness loaded at start. Claude Code loads its user-global doc, the doc chain from the repository root to the working folder, and every rule file with no `paths:`. Codex loads its own discovery: `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`, then per folder the first of `AGENTS.override.md`, `AGENTS.md`, and the config's `project_doc_fallback_filenames`, within `project_doc_max_bytes`.
 - It offers the primer once per context: a resume that holds it gets nothing, and a repository that changed gets only the sections that changed.
-- `clear` forgets the record first. `compact` sends again the user rules the compaction dropped.
+- `clear` forgets the record first.
+- The primer leaves out what Claude Code already tells Claude: the working folder, git repository, worktree, platform, shell, operating system, date, and the rules it loaded.
 - The primer answers before the deadline with every section ready by then. The sections that need no relations index are read beside its build. When the index is not ready, the Spine and the import counts and complexity it stores are left out.
 - Any Hook that leaves the relations index out starts `trace cache build` in the background after it answers. One build runs per user at a time, and it ends when it finishes or when the Claude Code session in `CLAUDE_PID` ends.
 - On Codex it also sends the working folder's docs and rules Codex never loads itself.
 
 ### PreCompact forgets the record
-A compaction drops what the Agent held. The user-global rule files with `paths:` it had loaded are kept to send again at the next SessionStart `compact`, because Claude Code never reloads them.
+A compaction drops what the Agent held. Claude Code loads every doc and rule back itself when the Agent's work reaches it.
 
 ### SubagentStart and InstructionsLoaded record what the Harness loaded
 - `SubagentStart` records the start docs under the Subagent's agent id.
-- `InstructionsLoaded` records each doc Claude Code loads, under the agent id in the input.
+- `InstructionsLoaded` records each doc Claude Code loads, under the agent id in the input. A doc the Agent holds whole, as a `trace` command sent it, is refused, so Claude Code does not load it again.
 
 ### PreToolUse on a shell command names the Subagent and refuses raw reads
 - Inside a Subagent it writes `--agent <agent_id>` after each `trace` program word through `updatedInput`, because the Subagent's shell carries no agent id. `cli/src/shell.rs` reads the command's structure, so a `trace` inside a quoted argument stays text, and a `trace` that `bash -c`, `xargs`, `find -exec`, `env`, `timeout`, `nice`, `nohup`, `command`, or `exec` runs gets the flag too.
-- With `--tracer-only`, a command that reads the project's code with `grep -r`, `rg`, `cat`, `head`, `tail`, `sed`, `awk`, `find`, `ls`, `tree`, `git blame`, `git grep`, `git show <ref>:<path>`, or `git log <file>`/`-S` is refused, and so is a `trace` command piped into a filter such as `head`, `grep`, `wc`, or `jq`. The refusal reads `tracer: Claude reads this project's code only through tracer.` and names the `trace` command that answers it. Run that command.
+- With `--tracer-only`, a command that reads, searches, or lists any file or folder with `grep`, `rg`, `git grep`, `cat`, `bat`, `head`, `sed -n`, `find`, `ls`, `eza`, `tree`, `git blame`, `git show`, or `git log <file>`/`-S`/`-G` is refused when a `trace` command gives the same answer, and so is a `trace` command piped into a filter such as `head`, `grep`, `wc`, or `jq`. The refusal reads `tracer: Claude reads files only through tracer.` and names the `trace` command that answers it. Run that command. A command with a flag no `trace` command matches, such as `grep -m 1`, runs, and so does one whose output goes to a file, a variable, another program, or a test.
 
 ### PostToolUse adds the context around what a tool returned or wrote
-- Read: the file's facts, its declaration rows, and the calls in the lines read, once per context. The lines read are recorded as seen. A Read refused for its size still gets the context, with nothing seen.
+- Read: the file's facts, its declaration rows, and the calls in the lines read, once per context. A row whose header the Read returned shows as its line and name. The lines read are recorded as seen. A Read refused for its size still gets the context, with nothing seen.
 - Grep: each matching file's facts and its matches under their declarations. In `content` mode, whose lines the Grep printed, only the declarations.
 - Glob: each returned file's facts.
 - Edit, MultiEdit, Write, NotebookEdit, and Codex's `apply_patch`: the Agent's own edit. Its lines are seen and its rows recorded as shown, so nothing it wrote comes back. Facts the edit changed print, and so do the callers of each function it changed.

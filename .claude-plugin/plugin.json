@@ -1,6 +1,6 @@
 {
   "name": "tracer",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
   "author": {
     "name": "Jordan Parker",
@@ -21,14 +21,14 @@
   "dependencies": [
     {
       "name": "cmod",
-      "version": "^1.5.0"
+      "version": ">=4.1.1"
     }
   ],
   "userConfig": {
     "tracerOnly": {
       "type": "boolean",
-      "title": "Claude reads code only through tracer",
-      "description": "Claude can't read or search this project with grep, cat, find, or git blame. It uses tracer instead, so every read comes with the file's callers, history, and docs.",
+      "title": "Claude reads files only through tracer",
+      "description": "Claude can't read, search, or list files with grep, cat, ls, find, or git blame when tracer gives the same answer. It uses tracer instead, so every read comes with what tracer knows about the file.",
       "default": false
     }
   }

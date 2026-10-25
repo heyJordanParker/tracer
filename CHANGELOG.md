@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0
+
+- The mod runs on cmod 4.1.1 and every newer cmod, and needs at least 4.1.1. Since 4.1.0, cmod keeps the notes tracer sends after a compaction out of the conversation you see.
+- "Claude reads code only through tracer" is now "Claude reads files only through tracer". It refuses a raw read, search, or listing of any file or folder, in another repository or worktree or outside every repository, not only in the project. It refuses a command only when a `trace` command gives the same answer, and the refusal names that command with the flags that match. A command tracer has no answer for now runs instead of being sent to a command that answers something else: one with a flag such as `tail -f` or `grep -m 1`, an `awk` program, a `sed` substitution, and one whose output goes to a file, a variable, another program, or a test. `eza` and `bat` are refused like `ls` and `cat`, and `cat <file> | grep` like `grep` on the file.
+- `trace grep` takes `-o`, each match alone, `-v`, the lines that do not match, `-w`, whole words, and `-x`, whole lines, on the working tree and with `--revision`.
+- A subagent's compaction re-sends that subagent's own rules into its own context. Before, it re-sent the main session's rules into the subagent's context.
+- A failing `trace hook` shows cmod's error toast, such as `The beforeSessionStart listener failed`, with `trace hook <event> exited <code>: <reason>` as its detail.
+- Claude no longer gets the same context twice:
+  - The primer leaves out what Claude Code already tells Claude: the working folder, git repository, worktree, platform, shell, operating system, date, the file count the `repo_context:` line carries, and the project rules Claude Code loaded. Its Environment keeps the repository root, when the working folder is below it, and the git user with their email.
+  - A compaction no longer re-sends the user rules with `paths:`, because Claude Code loads them back itself at the next file they match.
+  - A doc a `trace` command sent is not loaded again by Claude Code when Claude reads a file beside it.
+  - A declaration whose header Claude just read, through a Read or in `trace read`'s own lines, shows by line and name.
+  - A called function Claude already read whole shows as its file, line, and callers, without its header again.
+  - A command that pages a long doc names the docs queued behind it once per context, instead of on every call.
+
 ## 0.5.1
 
 - The mod runs on cmod 1.5 and needs it. Its failures show in cmod 1.5's toasts with Retry, Report, and Hide, and a failed install retries on its own.
