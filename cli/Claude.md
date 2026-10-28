@@ -120,6 +120,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `header` is the declaration's own source text, sliced by the extractor from byte ranges of the file: attributes, decorators, modifiers, kind keyword, name, generics, parameters, return type, heritage, and initializer, with every body elided at its AST node.
 - `header_line` is the first line of the header and `line` is the name's line, so a window holding only the attribute above a method still selects that method.
 - `parent` is the index of the lexical parent row in the same file's declaration list.
+- A ctags row's parent is the nearest earlier row whose full scoped name is its scope, else whose bare name is, so a parent always comes before its child and no parent chain loops, even when a heading repeats its chapter's name.
 - A property is never a reference target, so `defines` answers for it while `callers` and `usages` exit 2.
 - The extractors are the one declaration parser; `signatures.rs` is deleted and no command reparses a file to render a row.
 - `extraction::extract` falls back to `universal-ctags` for a language no tree-sitter extractor covers: it writes the bytes to a temporary file under `<root>/.tracer-cache/tmp/` and runs `ctags --output-format=json --language-force=<lang>` on it at cache build or update, and for a file at a revision that `surface::rows_at`, `history --contains`, or `api --revision` reads.

@@ -994,19 +994,23 @@ fn ctags_declarations(source: &[u8], language: &str, tags: &str) -> Option<Extra
             .map(|next| next.line - 1)
             .unwrap_or(last_line);
     }
-    let mut parents = HashMap::new();
-    for (index, declaration) in declarations.iter().enumerate() {
-        parents.insert(declaration.name.clone(), index as u32);
-        if let Some(scope) = declaration.container.as_deref() {
-            parents.insert(format!("{scope}::{}", declaration.name), index as u32);
-            parents.insert(format!("{scope}\"\"{}", declaration.name), index as u32);
-        }
-    }
-    for declaration in &mut declarations {
+    let mut qualified = HashMap::new();
+    let mut bare = HashMap::new();
+    for (index, declaration) in declarations.iter_mut().enumerate() {
         declaration.parent = declaration
             .container
             .as_ref()
-            .and_then(|scope| parents.get(scope).copied());
+            .and_then(|scope| qualified.get(scope).or_else(|| bare.get(scope)).copied());
+        bare.insert(declaration.name.clone(), index as u32);
+        match declaration.container.as_deref() {
+            Some(scope) => {
+                qualified.insert(format!("{scope}::{}", declaration.name), index as u32);
+                qualified.insert(format!("{scope}\"\"{}", declaration.name), index as u32);
+            }
+            None => {
+                qualified.insert(declaration.name.clone(), index as u32);
+            }
+        }
     }
     Some(ExtractionResult {
         language: language.to_lowercase(),

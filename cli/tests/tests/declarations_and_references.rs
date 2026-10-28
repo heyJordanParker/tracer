@@ -6576,3 +6576,29 @@ fn ctags_rows_keep_their_body_extent_and_qualified_scope() {
         context.stdout
     );
 }
+
+#[test]
+fn a_heading_named_like_its_chapter_nests_under_the_chapter() {
+    let f = Fixture::new();
+    f.write("usage.md", "# Usage\n\n## Usage\n\nIntro.\n\n## Settings\n\nText.\n");
+    f.commit("a section named like its chapter");
+
+    let read = std::process::Command::new("/bin/sh")
+        .args(["-c", "ulimit -S -t 5; exec \"$0\" read usage.md", &tracer_cli_tests::trace_bin()])
+        .current_dir(&f.root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&read.stdout);
+    assert_eq!(read.status.code(), Some(0), "read stopped: {}", String::from_utf8_lossy(&read.stderr));
+    assert!(stdout.contains("L9: Text."), "{stdout}");
+
+    let headings = f.trace(&["structure", "usage.md"]);
+    headings.ok();
+    assert!(
+        headings.stdout.contains("L1    # Usage")
+            && headings.stdout.contains("L3      ## Usage")
+            && headings.stdout.contains("L7      ## Settings"),
+        "both sections nest under the chapter:\n{}",
+        headings.stdout
+    );
+}

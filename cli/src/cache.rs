@@ -121,7 +121,7 @@ pub fn sweep(repo_root: &Path) {
 /// Bump whenever extraction, the `FileFacts` shape, or a repo-wide index
 /// shape changes — a new schema writes into its own directory, so old
 /// entries become unreachable automatically.
-pub const SCHEMA_VERSION: u32 = 54;
+pub const SCHEMA_VERSION: u32 = 55;
 
 /// A build in use writes its schema's git-activity key at least once a day,
 /// because that key carries the date, so a week without a write means no build
