@@ -412,7 +412,7 @@ fn grafts(repo_root: &Path) -> HashSet<String> {
     }
 }
 
-fn historical(commits: &Commits, cutoff_30d: &str) -> (HashMap<String, GitActivity>, bool) {
+fn historical(commits: &Commits, cutoff_30d: &str) -> HashMap<String, GitActivity> {
     let history = walk_history(commits, cutoff_30d);
     let mut out: HashMap<String, GitActivity> = HashMap::new();
     for (path, info) in &history.entries {
@@ -438,7 +438,7 @@ fn historical(commits: &Commits, cutoff_30d: &str) -> (HashMap<String, GitActivi
             },
         );
     }
-    (out, history.finished)
+    out
 }
 
 fn activity_for(
@@ -590,8 +590,9 @@ struct ActivityIndex<'a> {
 #[serde(transparent)]
 struct Activity {
     map: HashMap<String, GitActivity>,
+    /// Built from a walk git could not start, so never stored.
     #[serde(skip)]
-    incomplete: bool,
+    unstarted: bool,
 }
 
 impl cache::Index for ActivityIndex<'_> {
@@ -614,15 +615,14 @@ impl cache::Index for ActivityIndex<'_> {
 
     fn apply(&self, _stored: Option<Activity>, _change: ()) -> Option<Activity> {
         let commits = self.commits.get_or_init(|| commits(self.repo_root));
-        let (map, finished) = historical(commits, &self.cutoff);
         Some(Activity {
-            map,
-            incomplete: !finished,
+            map: historical(commits, &self.cutoff),
+            unstarted: commits.unstarted,
         })
     }
 
     fn complete(&self, stored: &Activity) -> bool {
-        !stored.incomplete
+        !stored.unstarted
     }
 }
 
@@ -633,8 +633,15 @@ pub struct Commits {
     pub commits: HashMap<String, Commit>,
     grafts: Vec<String>,
     pub binary: BTreeSet<String>,
-    #[serde(skip)]
+    /// Whether git stopped before it walked every commit, as it does in a
+    /// partial clone that lacks a tree. Stored with the walk, so every call
+    /// reads the same floor until HEAD moves instead of walking again.
+    #[serde(default)]
     incomplete: bool,
+    /// Whether git could not start the walk, which a later call may; such a
+    /// walk is never stored.
+    #[serde(skip)]
+    unstarted: bool,
 }
 
 impl Commits {
@@ -713,7 +720,7 @@ impl cache::Index for CommitIndex<'_> {
     }
 
     fn complete(&self, stored: &Commits) -> bool {
-        !stored.incomplete
+        !stored.unstarted
     }
 }
 
@@ -739,17 +746,22 @@ impl CommitIndex<'_> {
             .collect();
         if !missing.is_empty() {
             let grafted: HashSet<&str> = commits.grafts.iter().map(String::as_str).collect();
-            let (mut walked, mut finished) = walk_commits(self.repo_root, &missing, &grafted, "-M");
+            let mut walked = walk_commits(self.repo_root, &missing, &grafted, "-M");
             // A clone filtered of its file contents lacks the old contents a
             // rename with edits is matched by, and the walk never fetches
             // them; object ids alone still match a rename with unchanged
             // contents. A clone filtered of its trees can't walk either way.
             let blobless = || partial_clone(self.repo_root).is_some_and(|(_, filter)| filter.starts_with("blob:"));
-            if !finished && blobless() {
-                (walked, finished) = walk_commits(self.repo_root, &missing, &grafted, "-M100%");
+            if walked.as_ref().is_some_and(|(_, finished)| !finished) && blobless() {
+                walked = walk_commits(self.repo_root, &missing, &grafted, "-M100%");
             }
-            commits.commits.extend(walked);
-            commits.incomplete = !finished;
+            match walked {
+                Some((walked, finished)) => {
+                    commits.commits.extend(walked);
+                    commits.incomplete = !finished;
+                }
+                None => commits.unstarted = true,
+            }
         }
         let held: HashSet<&str> = commits
             .commits
@@ -765,8 +777,9 @@ impl CommitIndex<'_> {
 }
 
 /// The commits `ids` name with every file each changed, renames matched by
-/// `renames`, git's `-M` option, and whether git walked them all.
-fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>, renames: &str) -> (HashMap<String, Commit>, bool) {
+/// `renames`, git's `-M` option, and whether git walked them all; `None`
+/// when git could not start.
+fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>, renames: &str) -> Option<(HashMap<String, Commit>, bool)> {
     let request = ids.join("\n").into_bytes();
     let walked = piped(
         repo_root,
@@ -792,9 +805,7 @@ fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>, renames
             Ok(read)
         },
     );
-    let Ok((stdout, finished)) = walked else {
-        return (HashMap::new(), false);
-    };
+    let (stdout, finished) = walked.ok()?;
     let mut commits: HashMap<String, Commit> = HashMap::new();
     let mut current: Option<String> = None;
     let fields: Vec<&[u8]> = stdout.split(|byte| *byte == 0).collect();
@@ -852,7 +863,7 @@ fn walk_commits(repo_root: &Path, ids: &[&str], grafted: &HashSet<&str>, renames
             });
         }
     }
-    (commits, finished)
+    Some((commits, finished))
 }
 
 #[derive(Default, Clone)]
@@ -868,14 +879,13 @@ struct HistoryEntry {
     co_changed: Vec<(String, i64)>,
 }
 
-/// Result of the bounded history walk: the per-file entries, whether the walk
-/// stopped before reaching the first commit (in which case every entry's
-/// `commit_count` / `first_seen` is a floor), and whether git finished it.
+/// Result of the bounded history walk: the per-file entries, and whether the
+/// walk stopped before reaching the first commit, in which case every entry's
+/// `commit_count` / `first_seen` is a floor.
 #[derive(Default)]
 struct History {
     entries: BTreeMap<String, HistoryEntry>,
     truncated: bool,
-    finished: bool,
 }
 
 fn walk_history(commits: &Commits, cutoff_30d: &str) -> History {
@@ -1006,7 +1016,6 @@ fn walk_history(commits: &Commits, cutoff_30d: &str) -> History {
     History {
         entries: out,
         truncated: commits.truncated(),
-        finished: !commits.incomplete,
     }
 }
 

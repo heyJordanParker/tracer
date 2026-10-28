@@ -15,9 +15,11 @@
 //!   leaves that shell, trace's parent, alive and its stdout a file:
 //!   `CLAUDE_PID` is the one condition that sees it. A detached `trace cache
 //!   build` watches `CLAUDE_PID` alone.
+//! - Every trace stops, with its children, once it spends `CPU_LIMIT` of CPU
+//!   time, so no call runs away whoever waits on it.
 //!
 //! `detach` starts the one child that outlives its call: a hook's background
-//! index build, at most one per user at a time.
+//! index build, at most one per user at a time, at the lowest priority.
 //!
 //! The registry is a fixed array of atomic process ids, because a signal
 //! handler may only do async-signal-safe work: it reads the array and calls
@@ -209,10 +211,37 @@ extern "C" fn on_signal(signal: libc::c_int) {
     abandon(128 + signal)
 }
 
+/// The CPU time one trace process may spend, every thread counted. A cold
+/// build of a 9,000-file repository spends under a minute, so only a call
+/// that went wrong reaches it.
+const CPU_LIMIT: Duration = Duration::from_secs(600);
+
+/// Lowers the soft `RLIMIT_CPU` to `CPU_LIMIT`, or keeps a lower limit the
+/// caller set, so the kernel sends `SIGXCPU` once trace spends it.
+fn limit_cpu() {
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    if unsafe { libc::getrlimit(libc::RLIMIT_CPU, &mut limit) } != 0 {
+        return;
+    }
+    limit.rlim_cur = limit.rlim_cur.min(CPU_LIMIT.as_secs() as libc::rlim_t);
+    unsafe {
+        libc::setrlimit(libc::RLIMIT_CPU, &limit);
+    }
+}
+
+extern "C" fn on_cpu_limit(signal: libc::c_int) {
+    const STOPPED: &[u8] = b"trace: stopped, because it spent its limit of CPU time\n";
+    unsafe {
+        libc::write(libc::STDERR_FILENO, STOPPED.as_ptr().cast(), STOPPED.len());
+    }
+    abandon(128 + signal)
+}
+
 /// Marks every descriptor inherited above stderr close-on-exec, installs the
-/// signal handlers and the panic hook, and starts the watchdog. `trace cache
-/// build` passes `watch_caller` false, because a person or a hook detaches it
-/// on purpose, so only the end of its Claude Code session ends it.
+/// signal handlers and the panic hook, limits the CPU time, and starts the
+/// watchdog. `trace cache build` passes `watch_caller` false, because a
+/// person or a hook detaches it on purpose, so only the end of its Claude
+/// Code session ends it.
 pub fn guard(watch_caller: bool) {
     STARTED.get_or_init(Instant::now);
     close_inherited_on_exec();
@@ -221,6 +250,10 @@ pub fn guard(watch_caller: bool) {
             libc::signal(signal, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
         }
     }
+    unsafe {
+        libc::signal(libc::SIGXCPU, on_cpu_limit as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+    limit_cpu();
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if cfg!(panic = "abort") {
@@ -275,11 +308,17 @@ fn watch(watch_caller: bool) {
     });
 }
 
+/// The niceness of a detached command: the lowest scheduling priority, so it
+/// runs on the CPU nothing else is waiting for. macOS's background band
+/// would also coalesce its timers and stall the watchdog that ends it.
+const LOWEST_PRIORITY: libc::c_int = 19;
+
 /// Starts `command` apart from this call: in its own process group, with no
 /// stdio and no registry slot, so it outlives this call and no signal sent to
 /// this call reaches it. The child takes `lock`'s exclusive `flock` before it
 /// runs and holds it to its end, so one lock file runs one such command at a
-/// time; a start that finds it held fails with `WouldBlock`.
+/// time; a start that finds it held fails with `WouldBlock`. It runs at
+/// `LOWEST_PRIORITY`, which every process it starts inherits.
 pub fn detach(command: &mut Command, lock: &std::path::Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::CommandExt;
@@ -290,14 +329,15 @@ pub fn detach(command: &mut Command, lock: &std::path::Path) -> io::Result<()> {
         .stderr(std::process::Stdio::null())
         .process_group(0);
     // Between fork and exec only async-signal-safe calls run: `open` and
-    // `flock` on a path prepared before the fork. The descriptor is not
-    // close-on-exec, so the command holds the lock.
+    // `flock` on a path prepared before the fork, and `setpriority`. The
+    // descriptor is not close-on-exec, so the command holds the lock.
     unsafe {
         command.pre_exec(move || {
             let fd = libc::open(lock.as_ptr(), libc::O_RDWR | libc::O_CREAT, 0o600);
             if fd < 0 || libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) != 0 {
                 return Err(io::Error::last_os_error());
             }
+            libc::setpriority(libc::PRIO_PROCESS, 0, LOWEST_PRIORITY);
             Ok(())
         });
     }

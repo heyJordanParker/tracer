@@ -31,7 +31,9 @@ Context, such as the facts a read or a search hit carries, waits about a second 
 
 A session's first answer, the primer, builds the index until shortly before its hook deadline, while every section that needs no index is read beside it. In a large repository whose index is not ready by then, the primer arrives without the parts that need it: the most-depended-on files, and the import counts and complexity of the dirty files and top-level folders.
 
-A hook that leaves the index out starts `trace cache build` in the background once it has answered, so a later event finds the index built. One build runs per user at a time, and it ends when it finishes or when its Claude Code session ends, whichever comes first.
+A hook that leaves the index out starts `trace cache build` in the background once it has answered, so a later event finds the index built. One build runs per user at a time, at the lowest priority, so it takes only the CPU nothing else is waiting for. It ends when it finishes or when its Claude Code session ends, whichever comes first.
+
+Every `trace` call, a background build included, stops once it has spent 10 minutes of CPU time and says so on stderr. A cold build of a 9,000-file repository spends under a minute.
 
 ## Resolving a symbol
 

@@ -37,6 +37,30 @@ fn file_facts(v: &serde_json::Value) -> &serde_json::Value {
         .unwrap_or_else(|| panic!("no file facts in {v:#}"))
 }
 
+/// A trace that spends its CPU limit stops and says why, whatever it was
+/// doing. The caller sets a one-second limit, which trace keeps because it
+/// is lower than its own.
+#[test]
+fn a_trace_that_spends_its_cpu_limit_stops_and_says_so() {
+    let f = Fixture::new();
+    for module in 0..3000 {
+        let functions: String = (0..8)
+            .map(|function| format!("def step_{function}(value):\n    if value > {function}:\n        return value - {function}\n    return helper_{module}(value)\n\n"))
+            .collect();
+        f.write(&format!("src/module_{module}.py"), &format!("from src.base import helper_{module}\n\n{functions}"));
+    }
+    f.commit("modules");
+
+    let run = Command::new("/bin/sh")
+        .args(["-c", "ulimit -S -t 1; exec \"$0\" cache build", &tracer_cli_tests::trace_bin()])
+        .current_dir(&f.root)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(run.status.code(), Some(128 + 24), "trace stopped on SIGXCPU: {stderr}");
+    assert!(stderr.contains("trace: stopped, because it spent its limit of CPU time"), "{stderr}");
+}
+
 #[test]
 fn typescript_import_bindings_are_cached_without_changing_structure_output() {
     let f = Fixture::new();

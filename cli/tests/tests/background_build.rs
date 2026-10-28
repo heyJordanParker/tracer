@@ -51,6 +51,14 @@ fn start_build(f: &Fixture, env: &[(&str, &str)]) {
     });
 }
 
+/// Whether the running build has the lowest scheduling priority, niceness 19.
+fn at_lowest_priority(f: &Fixture) -> bool {
+    let found = Command::new("pgrep").args(["-f", &f.build_pattern()]).output().unwrap();
+    let pid = String::from_utf8(found.stdout).unwrap().lines().next().expect("a build is running").to_string();
+    let shown = Command::new("ps").args(["-o", "ni=", "-p", &pid]).output().unwrap();
+    String::from_utf8(shown.stdout).unwrap().trim() == "19"
+}
+
 fn eventually(within: Duration, what: &str, condition: impl Fn() -> bool) {
     let until = Instant::now() + within;
     while !condition() {
@@ -67,6 +75,7 @@ fn a_hook_that_leaves_the_relations_out_starts_one_build_that_ends_with_its_sess
     let index = schema_directory(&f.root, PUBLISHED_SCHEMA_VERSION).join("relations_edges_v1.json");
     let relations = hold_index_lock(&f.root, "relations_edges");
     start_build(&f, &[]);
+    assert!(at_lowest_priority(&f), "the build runs at the lowest priority");
     drop(relations);
     eventually(Duration::from_secs(60), "the build stores the relations index", || index.is_file());
     eventually(Duration::from_secs(30), "the build ends", || !f.building());

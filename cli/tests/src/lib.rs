@@ -533,7 +533,8 @@ impl Fixture {
         Command::new("pgrep").args(["-f", &self.build_pattern()]).output().unwrap().status.success()
     }
 
-    fn build_pattern(&self) -> String {
+    /// What `pgrep -f` finds a build of this repository by.
+    pub fn build_pattern(&self) -> String {
         format!("{} cache build", self.root.file_name().unwrap().to_string_lossy())
     }
 }

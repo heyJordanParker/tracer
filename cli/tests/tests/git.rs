@@ -1984,11 +1984,11 @@ fn partial_clone_answers_without_fetching_and_still_reads_old_versions() {
         .filter_map(Result::ok)
         .filter(|entry| entry.file_name().to_string_lossy().starts_with("git_activity_v2__"))
         .count();
-    assert_eq!(stored_history, 0, "an unfinished history walk was stored");
-    let walked = trace_env(&clone, ["info", "app.py"], &[("TRACE_TIMING", "1")]);
-    walked.ok();
-    let walks = walked.stderr.lines().filter(|line| line.starts_with("timing git log")).count();
-    assert_eq!(walks, 1, "a clone without trees walks once, never again by object id: {}", walked.stderr);
+    assert_eq!(stored_history, 1, "the walk git ended early is stored as a floor");
+    let warm = trace_env(&clone, ["info", "app.py"], &[("TRACE_TIMING", "1")]);
+    warm.ok();
+    let walks = warm.stderr.lines().filter(|line| line.starts_with("timing git log")).count();
+    assert_eq!(walks, 0, "a clone without trees walks once per HEAD, never on every call: {}", warm.stderr);
 
     let old = trace(&clone, &["read", "app.py", "--revision", "HEAD~1", "--raw"]);
     old.ok();
