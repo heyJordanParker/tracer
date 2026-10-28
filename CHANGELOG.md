@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1
+
+- The mod runs on cmod 4.3.0 and every newer cmod, and needs at least 4.3.0. Since 4.3.0, a session reloads tracer by itself after an update, once its running turn ends.
+- Every `trace` call stops once it has spent 10 minutes of CPU time, and says so on stderr. A cold build of a 9,000-file repository spends under a minute.
+- The index build a hook starts in the background runs at the lowest priority, so it takes only the CPU nothing else is waiting for.
+- In a clone that lacks part of its history, such as a partial clone missing a tree, `trace` walks the history once per HEAD instead of on every call. In one 9,000-file partial clone, that took 2.7 seconds off every call.
+
 ## 0.6.0
 
 - The mod runs on cmod 4.1.1 and every newer cmod, and needs at least 4.1.1. Since 4.1.0, cmod keeps the notes tracer sends after a compaction out of the conversation you see.
