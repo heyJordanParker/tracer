@@ -10726,7 +10726,7 @@ function defineMod(definition) {
   return definition;
 }
 
-// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-J6afo5/release/src/mod.ts
+// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-GTnVg9/release/src/mod.ts
 var options = {
   tracerOnly: option.toggle({
     title: "Claude reads files only through tracer",
@@ -10777,7 +10777,7 @@ async function hook(mod, event, { deadline }, input) {
 `).at(-1) ?? ""}`);
 }
 
-// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-J6afo5/release/hooks/register.ts
+// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-GTnVg9/release/hooks/register.ts
 function register(addHook, options2) {
   registerMod(addHook, tracer, options2);
 }

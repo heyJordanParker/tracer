@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.2
+
+- Reading a Markdown file whose heading repeats its chapter's name, such as `## Usage` under `# Usage`, no longer runs until the CPU limit stops it. It reads at once, with every section under the chapter.
+
 ## 0.6.1
 
 - The mod runs on cmod 4.3.0 and every newer cmod, and needs at least 4.3.0. Since 4.3.0, a session reloads tracer by itself after an update, once its running turn ends.
