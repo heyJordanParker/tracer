@@ -1,6 +1,6 @@
 {
   "name": "tracer",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
   "author": {
     "name": "Jordan Parker",
@@ -21,7 +21,7 @@
   "dependencies": [
     {
       "name": "cmod",
-      "version": ">=4.3.0"
+      "version": ">=5.0.0"
     }
   ],
   "userConfig": {
