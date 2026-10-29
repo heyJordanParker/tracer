@@ -51,7 +51,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           npm install -g @cmodjs/cli
 
-      - name: Check the mod's layout, permissions, types, lint, and tests
+      - name: Check the mod's layout, types, lint, and tests
         run: cmod check .
 
   formula:

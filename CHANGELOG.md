@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3
+
+- The mod runs on cmod 5.0.0 and every newer cmod, and needs at least 5.0.0. Installing or updating tracer asks you to grant nothing, because cmod 5.0 has no permissions. tracer does the same work as before.
+- tracer installs on a computer without a GitHub SSH key. Its marketplace lists cmod by its HTTPS address, so Claude Code no longer fails with `Dependency "cmod@tracer" has no git tag satisfying >=5.0.0`.
+
 ## 0.6.2
 
 - Reading a Markdown file whose heading repeats its chapter's name, such as `## Usage` under `# Usage`, no longer runs until the CPU limit stops it. It reads at once, with every section under the chapter.

@@ -79,16 +79,6 @@ A repository turns it on for everyone working in it with `.claude/cmods/tracer/o
 { "tracerOnly": true }
 ```
 
-## Permissions
-
-cmod asks for these when it installs tracer, and `/mods` turns each one off:
-
-| Permission | What tracer does with it |
-|---|---|
-| Run `trace` | Every Hook runs `trace hook`. |
-| Add text Claude reads | Every fact, primer, and project doc tracer sends. |
-| Change Claude's tool calls | Writes `--agent <id>` into a Subagent's `trace` commands. |
-
 ## When `trace` cannot run
 
 A Hook that cannot run `trace` adds nothing, and Claude's tool call goes ahead unchanged. On every other event cmod shows an error toast, such as `The beforeSessionStart listener failed`, whose detail reads `trace hook <event> exited <code>: <reason>`. A Hook that runs past its 9-second deadline ends there and records nothing, so its context arrives on a later call.

@@ -8,7 +8,6 @@ tracer gives coding agents code intelligence in one call: the `trace` program an
 - The repository root is a cmod mod: `src/mod.ts` is the `defineMod`, `hooks/register.ts` only registers it, and `tests/` holds its `bun test` suite.
 - The mod is a pass-through: on each event it handles it runs `trace hook <event> --harness claude`, the input on stdin, and answers what `trace hook` prints. Hook behavior lives in `cli/src/hook/`, never in `src/`.
 - `package.json` `cmod.program` names `trace`, so installing the mod downloads the `trace` release for the machine into cmod's programs folder, which Claude Code's Bash and `process.run` from `mod.js` find before macOS's `/usr/bin/trace`.
-- `package.json` `cmod.permissions` declares what the mod does: run `trace`, add context, and rewrite tool input. cmod drops any hook answer the person did not grant.
 - The mod's one setting, `tracerOnly`, is a cmod option in `src/mod.ts`, which people set in `/config` and a repository in `.claude/cmods/tracer/options.json`. A new setting is a user-facing API change and needs the Architect's approval.
 - `cli/Cargo.toml` `[package.metadata.cmod]` names `cargo xtask dist` as the build `cmod publish` and `cmod link` run.
 - `.claude-plugin/plugin.json` and `cli/Cargo.toml` carry the same version.
