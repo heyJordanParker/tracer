@@ -10,16 +10,16 @@
       "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
       "source": {
         "source": "archive",
-        "url": "https://github.com/heyJordanParker/tracer/releases/download/v0.6.2/tracer-0.6.2.zip",
-        "sha256": "7ae20ed7691c0da039defef91be09c373f5529b7050abdbb865e0c46e025910a"
+        "url": "https://github.com/heyJordanParker/tracer/releases/download/v0.6.3/tracer-0.6.3.zip",
+        "sha256": "b57e8faffe5c221e86470233cb9eb594d0e8e7638709e3ccf2cbf1df1e40bf85"
       }
     },
     {
       "name": "cmod",
       "description": "Claude Mod Manager: runs the uninstall step of each mod Claude Code removes",
       "source": {
-        "source": "github",
-        "repo": "heyJordanParker/cmod",
+        "source": "url",
+        "url": "https://github.com/heyJordanParker/cmod.git",
         "ref": "release"
       }
     }
