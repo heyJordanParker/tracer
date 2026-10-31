@@ -58,10 +58,10 @@ When a session id is set, `AGENT_SESSION_ID`, Codex's `CODEX_THREAD_ID`, or Clau
 
 ## The budget
 
-Every text answer fits `--budget`, 30,000 characters by default, the longest Bash result Claude Code shows whole. The budget cuts detail, never coverage:
+Every text answer fits 30,000 characters, the longest Bash result Claude Code shows whole. No flag changes the number, so an agent never guesses how much of an answer it needs. The budget cuts detail, never coverage:
 
 1. The files the fewest others import lose detail first.
 2. A declaration keeps at least `L<line> name`.
 3. A listing too long even for bare paths prints one line per directory, and names how many directories it left out.
 
-A cut answer ends with the command that prints the rest.
+A cut answer ends with the command that prints the rest, the same command with `--whole`.

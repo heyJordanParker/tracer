@@ -165,7 +165,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `surface::delivered` offers the rows of `context <file>`, `read`, file `info`, and `blame <file> <symbol>` as the file's `Surface` in text output: whole the first time, nothing while unchanged, and after a change each added or changed row whole, one `removed:` line of kinds and names, and one `moved:` line of rows that only shifted. A row's key is its parents' kinds and names, its own kind and name, and its order among rows with that chain. A whole file offers `rows` and `at` as mappings, so a gone row is removed; a window offers `rows.<key>` lines, so it never removes the rows outside it. `structure` and `--json` print the rows whole.
 - A row whose header lies within the lines the agent holds as they are prints as `L<line> name()` and its complexity: after a native Read, the lines it returned, and in `read`, the lines it prints, which `surface::shown` renders once the content is trimmed to the budget the whole rows laid out.
 - A command that pages a doc names the docs queued behind it once per agent context, through `docs::Fitted::once`, offered as `Queue`; `trace docs` names them every time.
-- The surface prints fitted to `--budget`: every row keeps at least `L<line> name`, and past that the names go one line per parent, then one count per kind per parent.
+- The surface prints fitted to the budget: every row keeps at least `L<line> name`, and past that the names go one line per parent, then one count per kind per parent.
 - `context.files[<path>].surface[]` carries `header_line`, `line`, `end_line`, `kind`, `name`, `container`, `parent`, `header`, `annotations`, and `cyclomatic_complexity`.
 - A windowed `read` (`--method`, `--lines`, `--between`) and `context --offset/--limit` print a `calls:` block after the rows, built by `calls::calls` from the window's references through `relations::use_sites`.
 - Each `calls:` entry is one function a window line resolves to without ambiguity, the one site of that line that is not `AMBIGUOUS`: its source when the session has not read it and it spans at most 12 lines, nothing when the session read it whole, else its header, and every other call site with its calling declaration and line.
@@ -267,10 +267,10 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - User-global `$HOME/.claude/rules/*.md` files are included in the `trace docs` walk.
 - Directory-scoped `trace docs` calls surface unconditional user-global Rules.
 - File-scoped `trace docs` calls surface conditional user-global Rules matched against that file.
-- `trace docs <paths>` sends each doc the agent does not hold whole from its first unread line, below its frontmatter, nearest first; the first doc that does not fit `--budget` is cut at a whole line with `read`'s trim marker, and the docs after it are named under the `trace docs` command that sends them.
+- `trace docs <paths>` sends each doc the agent does not hold whole from its first unread line, below its frontmatter, nearest first; the first doc that does not fit the budget is cut at a whole line with `read`'s trim marker, and the docs after it are named under the `trace docs` command that sends them.
 - The record keeps one 8-hex hash per line of each doc sent whole, and `session::loaded_paths` counts such a doc as held only while its file still has the content sent. `docs::unread` sends a doc that changed since as `## <path> (changed since sent: <n> lines, <m> removed)` and its added or changed lines as `L<n>: <text>`, each sent line matching one line once; the doc goes whole or queued, never cut, and once it prints it is held whole at its new content.
 - A doc is loaded once it was sent whole or read to its last line; `session::loaded_paths` applies that rule for `docs`, `docs status`, and every command's docs.
-- Under a session every command that takes paths sends the docs its paths reach in text through `docs::reached`, after its answer, in what the answer left of `--budget` and at most `docs::REACHED_ROOM`, 10,000 characters; the rest are named under the `trace docs` command that sends them. They are offered through the command's `Delivery` and committed with its answer; `docs::print_with_docs` prints a text answer and its docs, flushes, then commits. `read` sends them through its own `docs::fit`, and `--docs` sends them with no session too. `--json` carries none, except `read --docs --json`'s `nested_memories`.
+- Under a session every command that takes paths sends the docs its paths reach in text through `docs::reached`, after its answer, in what the answer left of the budget and at most `docs::REACHED_ROOM`, 10,000 characters; the rest are named under the `trace docs` command that sends them. They are offered through the command's `Delivery` and committed with its answer; `docs::print_with_docs` prints a text answer and its docs, flushes, then commits. `read` sends them through its own `docs::fit`, and `--docs` sends them with no session too. `--json` carries none, except `read --docs --json`'s `nested_memories`.
 - `digest::nearest_doc` names only the docs no command sends under a session, README and ARCHITECTURE files; with no session it names the `Claude.md` files first.
 - `trace docs` and the commands that send docs hold the Agent's lock from reading what it holds to recording what was sent, `docs::reached` through `Delivery::hold`, so calls running side by side never send the same lines. Taking the lock drops the process's shared read of the record, so what it reads under the lock is current.
 - `trace docs` and `read` record a doc as sent only after their output is flushed, and record nothing under `--filter`, whose projection may drop it.
@@ -280,23 +280,24 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `output::trace_command` is the head of every follow-up command an output names, `trace -C <dir>` after a `-C` call, so the agent's next call reaches the same repository.
 - `commands::logs` reads log files directly, so a gitignored or untracked log is searchable.
 - `commands::logs` frames one entry per line and attaches an untimestamped line to the entry above it.
-- `read` fits each file's rendered content to its share of `--budget`, after the front matter and the rows.
+- `read` fits each file's rendered content to its share of the budget, after the front matter and the rows.
 - `read` names a file it cannot answer, such as a missing `--method` or `--between` anchor, on stderr, prints every other file, and exits 2; the failed file passes no gate.
 - `read` cleans code only; Markdown prints verbatim with its `L<n>: ` prefixes.
 - The content is cut at a whole line; only a first line longer than the whole budget is cut inside itself, and the `L<n>: ` format holds either way.
 - A cut read ends with an inline `[trimmed at L<n> of <total> …]` marker naming the command for the next window.
 - The marker survives `--raw`.
-- `--all` returns the whole selection with no cap and no marker.
+- `--whole` returns the whole selection with no cap and no marker.
 - The `read` payload carries `truncated`, `shown_lines`, and `total_lines` on every read.
 - Every `--json` result is the one document `{query, context, results, counts}`, built by `output::document`.
 - Per-file enrichment lives at `context.files[<path>]`, never inside a result row.
-- `--budget <chars>` sizes every text output, 0 unbounded; `--json` is never cut except `read`'s content.
-- The default budget is 30,000, the longest Bash result Claude Code shows whole, and sizes are counted in UTF-16 units as Claude Code counts them.
+- Every text output fits one budget, `output::DEFAULT_BUDGET`, 30,000, the longest Bash result Claude Code shows whole; `--json` is never cut except `read`'s content.
+- No flag sizes the budget, so an agent never guesses how much of an answer it needs. The global `--whole` alone lifts it, and `TRACER_BUDGET` sets it for the test suite, which no agent-facing doc names.
+- Sizes are counted in UTF-16 units as Claude Code counts them.
 - `output::fit` gives every file its levels from whole to its path and cuts the least-imported file's detail first, so the budget cuts detail and never a file. It returns each file's chosen level beside its text, so a caller gates on the level and never parses the text.
 - `output::fit_listing` is `fit` for a listing of paths, where a path ending in `/` is a directory: when bare paths still overrun, it names the entries one line per directory, then each directory with its directory and file counts, then the first of those the budget holds and `… N more directories`.
 - `grep`, `pattern`, `find`, `list`, `tree`, `status`, `diff`, `stats`, and the relations commands fit their text through `fit_listing`; `history` and `logs` through `fit`.
 - The `status` and `diff` directory block takes at most half the budget.
-- A cut output's last line names the same command with `--budget 0`; `output::closing_room` measures the room that line needs, so no command guesses it.
+- A cut output's last line names the same command with `--whole`; `output::closing_room` measures the room that line needs, so no command guesses it.
 - `output::within` runs one part of a several-path command inside its share of the budget.
 - `pathval::files_under` expands every path argument, a directory into the repository's own listing, else, for a directory the listing holds no file of, such as one git ignores, into the files ripgrep searches when given it: the directory is searched because it was named, each file under it is still judged by the ignore rules, and a nested repository stays out; a missing path is reported through `process::report`, the rest still answer, and the run exits 2.
 - `main` builds rayon's global pool with at most `THREADS` threads; the file-stamping workers, ripgrep's `--threads`, and ast-grep's `--threads` read the count back from `rayon::current_num_threads()`.
@@ -329,14 +330,14 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `pattern` prefilters candidate files through ripgrep and reports a multi-line match at its anchor line.
 - `diff` reports the worktree by default and takes `--base <REV>`, which diffs against the merge base.
 - `diff` runs in the repository that holds its paths; paths from more than one repository exit 2.
-- `diff` rows carry their changed lines, fitted to `--budget`.
+- `diff` rows carry their changed lines, fitted to the budget.
 - `history --commit <REV>` returns one commit's full body.
 - `history --contains` finds the commits, merges left out, that changed how often a string occurs in a file, the rule of `git log -S`. It counts the string once per distinct blob of the commit index, in parallel through `git_activity::blobs`.
 - A blob with a zero byte in its first 8,000 bytes is binary, the way git reads it: it is never counted, and the commit index records it.
 - `history --contains --regex` keeps the changes where either side matches and the blobs differ, then confirms them through `git log -G --no-walk=unsorted --stdin`.
-- `history --contains` shows the newest 29 commits, a line naming how many fall between, and the oldest; `--all` shows every one.
+- `history --contains` shows the newest 29 commits, a line naming how many fall between, and the oldest; `--whole` shows every one.
 - `history --contains` gives each matched file an `added` row and a `removed` row for the changed lines that hold the string, read from git's own `-U0` diff of the shown commits in one `git log -p`, each with its count, its first line, and that line's enclosing declaration from its own side of the change. It reads them within `ANNOTATED_FILES`, 200 files of whole commits, the oldest commit first; a file past it takes its direction from the counts alone.
-- `history --commit` fits each file's changed lines to `--budget`.
+- `history --commit` fits each file's changed lines to the budget.
 - `status` rows carry a staging word: `staged`, `unstaged`, or `partly staged`.
 - `status` text prints one heading per state, the files most others import first under it.
 - `list --recent` orders directories and files newest first, and `--limit N` keeps the first N of both, the way `ls -t | head` does.

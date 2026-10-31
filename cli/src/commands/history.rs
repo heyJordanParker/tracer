@@ -711,10 +711,10 @@ fn annotate(shown: &[&Found], matcher: Option<&Regex>, counts: Option<&Counts>, 
         .collect()
 }
 
-fn pickaxe_payload(pattern: &str, regex: bool, all: bool, repo_root: &Path) -> Result<Value> {
+fn pickaxe_payload(pattern: &str, regex: bool, whole: bool, repo_root: &Path) -> Result<Value> {
     let commits = git_activity::commits(repo_root);
     let (found, counts) = pickaxe(pattern, regex, &commits, repo_root)?;
-    let shown: Vec<&Found> = if all || found.len() <= NEWEST_SHOWN + 1 {
+    let shown: Vec<&Found> = if whole || found.len() <= NEWEST_SHOWN + 1 {
         found.iter().collect()
     } else {
         found[..NEWEST_SHOWN].iter().chain(found.last()).collect()
@@ -781,7 +781,7 @@ fn render_pickaxe(p: &Value) {
             }
         })
         .collect();
-    let gap = (between > 0).then(|| format!("… {between} commits between: {} --all\n", crate::output::this_command()));
+    let gap = (between > 0).then(|| format!("… {between} commits between: {} --whole\n", crate::output::this_command()));
     let fixed = head.len() + gap.as_ref().map_or(0, |gap| gap.len() + 1) + crate::output::closing_room(entries.len(), "commits");
     let (chosen, shortened) = crate::output::fit(&entries, fixed);
     print!("{head}");
@@ -938,7 +938,6 @@ pub fn run(
     symbol: Option<&str>,
     contains: Option<&str>,
     regex: bool,
-    all: bool,
     commit: Option<&str>,
     as_json: bool,
 ) -> Result<Value> {
@@ -974,12 +973,13 @@ pub fn run(
         }
         let here = Path::new(".");
         let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
-        let payload = pickaxe_payload(pattern, regex, all, &repo_root)?;
+        let whole = crate::output::budget().is_none();
+        let payload = pickaxe_payload(pattern, regex, whole, &repo_root)?;
         if !as_json {
             render_pickaxe(&payload);
         }
         return Ok(crate::output::document(
-            json!({"mode": "contains", "pattern": pattern, "regex": regex, "all": all}),
+            json!({"mode": "contains", "pattern": pattern, "regex": regex, "whole": whole}),
             json!({
                 "repo_root": repo_root.to_string_lossy(),
                 "searched_commits": payload["searched"],

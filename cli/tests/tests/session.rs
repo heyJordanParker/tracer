@@ -448,9 +448,9 @@ fn docs_after_an_answer_fit_what_the_budget_leaves_and_name_the_rest() {
     let f = docs_repo();
     f.write("sub/Claude.md", &format!("# Sub rules\n\n{}", "A long rule line.\n".repeat(200)));
     f.commit("long doc");
-    let env = [("AGENT_SESSION_ID", SESSION)];
+    let env = [("AGENT_SESSION_ID", SESSION), ("TRACER_BUDGET", "1500")];
 
-    let small = f.trace_env(&["tree", "sub", "--budget", "1500"], &env);
+    let small = f.trace_env(&["tree", "sub"], &env);
     small.ok();
     assert!(small.stdout.len() < 1_800, "the docs stay inside the budget: {}", small.stdout.len());
     assert!(small.stdout.contains(" docs "), "the rest is named under the command that sends it: {}", small.stdout);

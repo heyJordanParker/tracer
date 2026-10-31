@@ -683,7 +683,6 @@ fn render_one(
     between: Option<(&str, &str)>,
     revision: Option<&str>,
     raw: bool,
-    all: bool,
     as_diff: bool,
     docs_on: bool,
     session_dedupe: &mut std::collections::BTreeSet<String>,
@@ -864,7 +863,6 @@ fn render_one(
     // calls in what the content and its docs leave, at least a quarter, then
     // the content in the rest. The `# <file>` header, the blank line after
     // the rows, and the trim marker naming `file_arg` also count.
-    let budget = if all { None } else { budget };
     let front_matter_size = head.len().saturating_sub(header.len() + 1);
     let reserved = relative.len() + file_arg.len() + 100;
     let docs_command = docs::shell_command(
@@ -1067,7 +1065,6 @@ pub fn run(
     method_flag: Option<&str>,
     as_json: bool,
     raw: bool,
-    all: bool,
     revision: Option<&str>,
     lines_arg: Option<&str>,
     between: Option<(String, String)>,
@@ -1126,7 +1123,6 @@ pub fn run(
             between_ref,
             revision,
             raw,
-            all,
             as_diff,
             docs_on,
             &mut session_dedupe,
@@ -1194,7 +1190,7 @@ pub fn run(
             "between": between.as_ref().map(|(a, b)| vec![a.clone(), b.clone()]),
             "ref": revision,
             "raw": raw,
-            "all": all,
+            "whole": crate::output::budget().is_none(),
             "diff": as_diff,
         }),
         json!({"files": Value::Object(context)}),

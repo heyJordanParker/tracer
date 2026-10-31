@@ -2557,7 +2557,7 @@ fn crowded_search_repo() -> Fixture {
 #[test]
 fn grep_over_budget_names_every_file_and_the_command_for_the_rest() {
     let f = crowded_search_repo();
-    let r = f.trace(&["grep", "needle", ".", "--budget", "3000"]);
+    let r = f.trace_env(&["grep", "needle", "."], &[("TRACER_BUDGET", "3000")]);
     r.ok();
     let size = r.stdout.chars().count();
     assert!(size <= 3000, "grep spent {size} characters of a 3000 budget:\n{}", r.stdout);
@@ -2568,25 +2568,24 @@ fn grep_over_budget_names_every_file_and_the_command_for_the_rest() {
     assert!(r.stdout.contains("needle_19 = 19"), "the most-imported file lost its detail first:\n{}", r.stdout);
     let last = r.stdout.lines().last().unwrap_or("");
     assert!(
-        last.contains("shortened to fit --budget 3000")
-            && last.contains("trace grep needle . --budget 0"),
+        last.contains("shortened to fit — whole: trace grep needle . --whole]"),
         "the last line must name the command for the rest: {last}"
     );
 
-    let whole = f.trace(&["grep", "needle", ".", "--budget", "0"]);
+    let whole = f.trace(&["grep", "needle", ".", "--whole"]);
     whole.ok();
-    assert!(!whole.stdout.contains("shortened"), "--budget 0 is unbounded:\n{}", whole.stdout);
+    assert!(!whole.stdout.contains("shortened"), "--whole is uncut:\n{}", whole.stdout);
 }
 
 #[test]
 fn find_over_budget_names_every_file() {
     let f = crowded_search_repo();
-    let r = f.trace(&["find", "*.py", ".", "--budget", "600"]);
+    let r = f.trace_env(&["find", "*.py", "."], &[("TRACER_BUDGET", "600")]);
     r.ok();
     for index in 0..30 {
         assert!(r.stdout.contains(&format!("  m{index:02}.py")), "m{index:02}.py is unnamed:\n{}", r.stdout);
     }
-    assert!(r.stdout.contains("shortened to fit --budget 600"), "{}", r.stdout);
+    assert!(r.stdout.contains("shortened to fit — whole: "), "{}", r.stdout);
 }
 
 /// The lines of a human search after its file header, up to the blank line
@@ -2919,13 +2918,11 @@ fn listings_name_every_file_by_directory_when_paths_alone_overrun() {
     }
     f.commit("eighty files");
     for command in ["grep", "find"] {
-        let args = |budget: &'static str| -> Vec<&'static str> {
-            match command {
-                "grep" => vec!["grep", "needle", "src", "--budget", budget],
-                _ => vec!["find", "*.py", "src", "--budget", budget],
-            }
+        let args: Vec<&str> = match command {
+            "grep" => vec!["grep", "needle", "src"],
+            _ => vec!["find", "*.py", "src"],
         };
-        let named = f.trace(&args("1600"));
+        let named = f.trace_env(&args, &[("TRACER_BUDGET", "1600")]);
         named.ok();
         assert!(named.stdout.len() <= 1600, "{command}: {} chars\n{}", named.stdout.len(), named.stdout);
         for directory in ["alpha", "beta"] {
@@ -2937,7 +2934,7 @@ fn listings_name_every_file_by_directory_when_paths_alone_overrun() {
             assert_eq!(line.matches("module_").count(), 40, "{command}: {line}");
         }
 
-        let counted = f.trace(&args("400"));
+        let counted = f.trace_env(&args, &[("TRACER_BUDGET", "400")]);
         counted.ok();
         assert!(
             counted.stdout.contains("src/alpha/: 40 files") && counted.stdout.contains("src/beta/: 40 files"),
@@ -2957,7 +2954,7 @@ fn a_listing_of_more_directories_than_the_budget_holds_names_how_many_are_left()
     }
     f.commit("sixty directories");
     for args in [["grep", "needle", "src"], ["find", "*.py", "src"]] {
-        let r = f.trace(&[args[0], args[1], args[2], "--budget", "500"]);
+        let r = f.trace_env(&args, &[("TRACER_BUDGET", "500")]);
         r.ok();
         assert!(r.stdout.chars().count() <= 500, "{}: {} chars\n{}", args[0], r.stdout.chars().count(), r.stdout);
         assert!(r.stdout.contains("src/directory_00/: 2 files"), "{}: the first directories stay\n{}", args[0], r.stdout);

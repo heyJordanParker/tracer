@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0
+
+- Claude no longer guesses how much of an answer to read. Every text answer fits the 30,000 characters Claude Code shows whole, and `--budget` is gone, so a `trace` command reads like a `grep`, with no size to choose.
+- `--whole` prints any command's answer uncut, and every cut answer ends with the same command with `--whole`. It replaces `--budget 0`, `read --all`, and `history --contains --all`. `list --all` and `cache clear --all` keep their meaning.
+
 ## 0.6.3
 
 - The mod runs on cmod 5.0.0 and every newer cmod, and needs at least 5.0.0. Installing or updating tracer asks you to grant nothing, because cmod 5.0 has no permissions. tracer does the same work as before.

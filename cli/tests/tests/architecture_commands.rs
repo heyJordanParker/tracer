@@ -1721,7 +1721,7 @@ fn api_from_head_matches_the_clean_working_tree() {
     assert_eq!(std::fs::read_to_string(f.root.join("head.txt")).unwrap(), tree);
     assert!(tree.contains("src/cloud.rs") && tree.contains("src/cloud/drive.rs"), "{tree}");
     assert_eq!(tree.matches("pub fn up()").count(), 1, "a link lists nothing the file it names doesn't: {tree}");
-    let cut = f.trace(&["api", "src", "--revision", "HEAD", "--budget", "150"]);
+    let cut = f.trace_env(&["api", "src", "--revision", "HEAD"], &[("TRACER_BUDGET", "150")]);
     cut.ok();
     assert!(cut.stdout.contains("--revision HEAD"), "a collapsed file keeps its revision: {}", cut.stdout);
 }
@@ -1926,17 +1926,17 @@ fn api_collapses_the_least_imported_files_first_and_keeps_headers_whole() {
     f.commit("chain");
     let mut collapsed_any = false;
     for budget in (300..4000).step_by(100) {
-        let out = f.trace(&["api", ".", "--budget", &budget.to_string()]);
+        let out = f.trace_env(&["api", "."], &[("TRACER_BUDGET", &budget.to_string())]);
         out.ok();
         let collapsed = |file: &str| out.stdout.lines().any(|line| line.contains(&format!(" {file}  … ")) && line.contains("→ trace api"));
         for line in out.stdout.lines().filter(|line| line.trim_start().starts_with('L')) {
-            assert!(line.ends_with("{ … }  // complexity 1"), "a header was cut at --budget {budget}: {line}\n{}", out.stdout);
+            assert!(line.ends_with("{ … }  // complexity 1"), "a header was cut at budget {budget}: {line}\n{}", out.stdout);
         }
         if collapsed("core.ts") {
-            assert!(collapsed("mid.ts") && collapsed("leaf.ts"), "core.ts collapsed before less-imported files at --budget {budget}:\n{}", out.stdout);
+            assert!(collapsed("mid.ts") && collapsed("leaf.ts"), "core.ts collapsed before less-imported files at budget {budget}:\n{}", out.stdout);
         }
         if collapsed("mid.ts") {
-            assert!(collapsed("leaf.ts"), "mid.ts collapsed before leaf.ts at --budget {budget}:\n{}", out.stdout);
+            assert!(collapsed("leaf.ts"), "mid.ts collapsed before leaf.ts at budget {budget}:\n{}", out.stdout);
         }
         collapsed_any |= collapsed("leaf.ts");
     }

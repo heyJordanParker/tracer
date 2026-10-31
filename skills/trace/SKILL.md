@@ -36,18 +36,18 @@ A search piped into `sort` or `uniq` holds its whole output in memory. Count wit
 `trace list` lists the filesystem, so gitignored artifact directories (test runs, logs, builds) list too. `--recent` orders newest-first by mtime, `--limit N` caps the rows, and `entries=N` always carries the full count.
 Example: `trace list tests/.runs --recent --limit 5` replaces `ls -t tests/.runs | head -5`.
 
-## 2. Read an output cut to its budget
+## 2. Read an output cut to fit
 
 ### Expect every file and declaration, with less detail
-Text output fits `--budget <chars>`, 30,000 by default, the longest Bash result Claude Code shows whole. The budget cuts detail, never coverage: the files the fewest others import lose their detail first, down to their path, and a listing too long even for bare paths names its files one line per directory (`dir/: a.php, b.php`).
+Text output fits 30,000 characters, the longest Bash result Claude Code shows whole. The fit cuts detail, never coverage: the files the fewest others import lose their detail first, down to their path, and a listing too long even for bare paths names its files one line per directory (`dir/: a.php, b.php`).
 A window's `calls:` block keeps a share of the budget and leaves the rest to the code: past one head per call it prints one head per function with every line that calls it (`L52, L60 Ledger::record  ledger.php:3`), then one line per file the calls reach (`ledger.php  {calls: 12}`).
 
 IF a `calls:` line ends in `→ trace callers <name>`:
 ### Run the `trace callers` command it names
-A window resolves a name only while it fits a fixed work budget, spent on the cheapest names first. A name too many files mention still names the function its line calls, with its source, but no `callers` count and no other call sites: `L4 nextTestSetup  test/lib/e2e-utils/index.ts:315 → trace callers nextTestSetup`. A name too many files declare prints `{defined_in: N}`, the number of files that declare it, and no file or source. `--budget 0` resolves neither.
+A window resolves a name only while it fits a fixed work budget, spent on the cheapest names first. A name too many files mention still names the function its line calls, with its source, but no `callers` count and no other call sites: `L4 nextTestSetup  test/lib/e2e-utils/index.ts:315 → trace callers nextTestSetup`. A name too many files declare prints `{defined_in: N}`, the number of files that declare it, and no file or source. `--whole` resolves neither.
 
 ### Run the command the last line names for the rest
-A cut output ends with `[N of M files shortened to fit --budget B — whole: <command> --budget 0]`. Run that command, or narrow the paths, when the cut detail is what you need.
+A cut output ends with `[N of M files shortened to fit — whole: <command> --whole]`. Run that command, or narrow the paths, when the cut detail is what you need.
 
 ## 3. Orient before deep reads
 
@@ -106,13 +106,13 @@ Template:
   trace diff [paths...] [--base <rev>] [--symbols]
   trace status
   trace history [<file>] [<symbol>]
-  trace history --contains <pattern> [--regex] [--all]
+  trace history --contains <pattern> [--regex] [--whole]
   trace history --commit <rev>
   trace blame <file> [<symbol>] [--lines L1:L2]
   ```
 
 ### Find when code entered or left with `trace history --contains`
-It lists the newest 29 commits that added or removed the string, then the oldest one, where it entered; `--all` lists every commit between them. Each file shows `+` for the lines a commit added and `-` for the lines it removed, with the first line and its declaration. `trace history --commit <sha>` then gives that commit's reason.
+It lists the newest 29 commits that added or removed the string, then the oldest one, where it entered; `--whole` lists every commit between them. Each file shows `+` for the lines a commit added and `-` for the lines it removed, with the first line and its declaration. `trace history --commit <sha>` then gives that commit's reason.
 
 ### Read a commit's full body with `trace history --commit`
 The subject says what changed and the body says why. `--commit <rev>` returns the message, author, parents, changed files, and changed lines in one call.
@@ -132,7 +132,7 @@ Template:
   trace read <file> --revision <rev>
   trace read <file> --revision <rev> --diff
   trace read <file> --docs
-  trace read <file> --all
+  trace read <file> --whole
   ```
 
 IF `--method` names a function the file does not declare:
@@ -140,8 +140,8 @@ IF `--method` names a function the file does not declare:
 The refusal lists the lines where the word appears and the `trace read <file> --lines a:b` command for them.
 
 ### Scope the read by `lines:` before reading a whole file
-Every file's facts carry `lines:`. `trace read` fits the file to `--budget`: it keeps every declaration row and cuts the content at a whole line, ending with `[trimmed at L<n> of <total> — continue: trace read <file> --lines <n+1>:<end>]`. A trimmed read still costs a second call, so scope the first one: read the rows, then `--method <name>` or `--lines L1:L2`.
-Never: `--all` to skim a large file. It returns every line and takes the whole cost.
+Every file's facts carry `lines:`. `trace read` fits the file to 30,000 characters: it keeps every declaration row and cuts the content at a whole line, ending with `[trimmed at L<n> of <total> — continue: trace read <file> --lines <n+1>:<end>]`. A trimmed read still costs a second call, so scope the first one: read the rows, then `--method <name>` or `--lines L1:L2`.
+Never: `--whole` to skim a large file. It returns every line and takes the whole cost.
 
 ### Calibrate read depth by complexity
 Use `trace stats` for the complexity distribution. Read whole the files past the repository's p95. Skim uniformly-low files only when the task does not need every line.

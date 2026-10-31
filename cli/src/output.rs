@@ -31,9 +31,11 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::sync::OnceLock;
 
-/// `--budget`'s default: the longest Bash result Claude Code shows whole. It
-/// saves anything longer to a file and shows the Agent a 2,000-character
-/// preview.
+/// The characters text output fits in: the longest Bash result Claude Code
+/// shows whole. It saves anything longer to a file and shows the Agent a
+/// 2,000-character preview. No flag changes it, so an agent never guesses
+/// how much of an answer it needs. `TRACER_BUDGET` sets it for the test
+/// suite alone, so a small fixture still overruns it.
 pub const DEFAULT_BUDGET: usize = 30_000;
 
 /// The length Claude Code measures text by: JavaScript's, in UTF-16 units.
@@ -56,9 +58,13 @@ pub fn clip(text: &str, room: usize) -> &str {
 static BUDGET: OnceLock<Option<usize>> = OnceLock::new();
 static DIRECTORY: OnceLock<String> = OnceLock::new();
 
-/// Set the characters text output fits in, once, from `--budget`; 0 means
-/// unbounded.
-pub fn set_budget(chars: usize) {
+/// Fit text output to `DEFAULT_BUDGET`, once, or leave it uncut for
+/// `--whole`. A `TRACER_BUDGET` of 0 leaves it uncut too.
+pub fn set_whole(whole: bool) {
+    let chars = match whole {
+        true => 0,
+        false => std::env::var("TRACER_BUDGET").ok().and_then(|chars| chars.parse().ok()).unwrap_or(DEFAULT_BUDGET),
+    };
     let _ = BUDGET.set((chars > 0).then_some(chars));
 }
 
@@ -216,8 +222,7 @@ pub fn counted(n: usize, one: &str, many: &str) -> String {
 /// The last line of an output the budget shortened: what was cut, and the
 /// command that returns it whole.
 pub fn shortened_line(shortened: usize, of: usize, unit: &str) -> String {
-    let budget = budget().unwrap_or(0);
-    format!("[{shortened} of {of} {unit} shortened to fit --budget {budget} — whole: {} --budget 0]", this_command())
+    format!("[{shortened} of {of} {unit} shortened to fit — whole: {} --whole]", this_command())
 }
 
 pub fn closing_room(of: usize, unit: &str) -> usize {
@@ -243,24 +248,15 @@ pub fn set_command(command: String) {
     let _ = COMMAND.set(command);
 }
 
-/// This invocation as a shell command, without its own `--budget`.
+/// This invocation as a shell command.
 pub fn this_command() -> String {
     if let Some(command) = COMMAND.get() {
         return command.clone();
     }
-    let mut words = vec!["trace".to_string()];
-    let mut arguments = std::env::args().skip(1);
-    while let Some(argument) = arguments.next() {
-        if argument == "--budget" {
-            arguments.next();
-            continue;
-        }
-        if argument.starts_with("--budget=") {
-            continue;
-        }
-        words.push(crate::shell::quote(&argument));
-    }
-    words.join(" ")
+    std::iter::once("trace".to_string())
+        .chain(std::env::args().skip(1).map(|argument| crate::shell::quote(&argument)))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The one document shape. Every `--json` result carries the same four
@@ -327,7 +323,7 @@ pub fn trim_marker(file: &str, flags: &str, last_line: usize, selection_end: usi
     let trace = trace_command();
     // The selection's last line was reached, so the trim cut that line.
     if last_line >= selection_end {
-        return format!("\n[trimmed at L{last_line} of {total_lines} — whole: {trace} read {quoted} --all{flags}]\n");
+        return format!("\n[trimmed at L{last_line} of {total_lines} — whole: {trace} read {quoted} --whole{flags}]\n");
     }
     format!(
         "\n[trimmed at L{last_line} of {total_lines} — continue: {trace} read {quoted} --lines {}:{}{flags}]\n",

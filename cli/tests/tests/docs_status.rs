@@ -959,7 +959,7 @@ fn source_edit_after_output_starts_keeps_the_captured_hash() {
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
     let mut child = f
-        .command(&f.root, ["read", "large.txt", "--all", "--json"], &env)
+        .command(&f.root, ["read", "large.txt", "--whole", "--json"], &env)
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn trace");

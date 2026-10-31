@@ -59,11 +59,11 @@ struct Cli {
     #[arg(long, global = true, value_name = "JQ")]
     filter: Option<String>,
 
-    /// Characters the text output fits in; detail is cut, never a file or
-    /// declaration, and the last line names the command for the rest.
-    /// 0 is unbounded.
-    #[arg(long, global = true, value_name = "CHARS", default_value_t = output::DEFAULT_BUDGET)]
-    budget: usize,
+    /// Print the whole answer, uncut. Text output otherwise fits the
+    /// 30,000 characters Claude Code shows whole: detail is cut, never a
+    /// file or declaration, and the last line names this flag.
+    #[arg(long, global = true)]
+    whole: bool,
 
     /// The agent whose session record this call reads and writes, in place
     /// of `TRACER_AGENT_ID`.
@@ -416,9 +416,6 @@ enum Command {
         json: bool,
         #[arg(long)]
         raw: bool,
-        /// Return the whole selection with no size budget and no trim marker.
-        #[arg(long = "all")]
-        all: bool,
         /// Read the files at a commit, branch, or tag instead of the working
         /// tree.
         #[arg(long, value_name = "REV")]
@@ -452,9 +449,6 @@ enum Command {
         /// Read `--contains` as a regular expression instead of literal text.
         #[arg(long)]
         regex: bool,
-        /// Every commit `--contains` finds, not the newest 29 and the oldest.
-        #[arg(long)]
-        all: bool,
         /// One commit in full: message, author, parents, changed files and
         /// the changed lines.
         #[arg(long = "commit", value_name = "REV")]
@@ -563,7 +557,7 @@ fn run() -> Result<()> {
         }
         output::set_directory(dir.to_string_lossy().into_owned());
     }
-    output::set_budget(cli.budget);
+    output::set_whole(cli.whole);
     if let Some(agent) = cli.agent {
         session::set_agent(agent);
     }
@@ -816,7 +810,6 @@ fn run() -> Result<()> {
             method,
             json,
             raw,
-            all,
             revision,
             lines,
             between,
@@ -829,7 +822,6 @@ fn run() -> Result<()> {
                 method.as_deref(),
                 json,
                 raw,
-                all,
                 revision.as_deref(),
                 lines.as_deref(),
                 between.map(|v| (v[0].clone(), v[1].clone())),
@@ -852,7 +844,6 @@ fn run() -> Result<()> {
             symbol,
             contains,
             regex,
-            all,
             commit,
             json,
         } => output::run_value(json, filter, || {
@@ -861,7 +852,6 @@ fn run() -> Result<()> {
                 symbol.as_deref(),
                 contains.as_deref(),
                 regex,
-                all,
                 commit.as_deref(),
                 json,
             )

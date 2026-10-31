@@ -45,13 +45,13 @@ fn concurrent_doc_deliveries_never_send_the_same_lines_twice() {
     fixture.write("Claude.md", &format!("# Rules\n{rules}"));
     fixture.write("x.py", "x = 1\n");
     fixture.commit("long doc");
-    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-docs")];
+    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-docs"), ("TRACER_BUDGET", "2000")];
 
     let mut sent: Vec<usize> = Vec::new();
     for _ in 0..4 {
         let runs = thread::scope(|scope| {
             let calls: Vec<_> = (0..6)
-                .map(|_| scope.spawn(|| fixture.trace_env(&["docs", "x.py", "--budget", "2000"], &env)))
+                .map(|_| scope.spawn(|| fixture.trace_env(&["docs", "x.py"], &env)))
                 .collect();
             calls.into_iter().map(|call| call.join().unwrap()).collect::<Vec<_>>()
         });
@@ -83,13 +83,13 @@ fn concurrent_commands_never_send_the_same_doc_lines_twice() {
     fixture.write("Claude.md", &format!("# Rules\n{rules}"));
     fixture.write("x.py", "x = 1\n");
     fixture.commit("long doc");
-    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-command-docs")];
+    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-command-docs"), ("TRACER_BUDGET", "2000")];
 
     let mut sent: Vec<usize> = Vec::new();
     for _ in 0..4 {
         let runs = thread::scope(|scope| {
             let calls: Vec<_> = (0..6)
-                .map(|_| scope.spawn(|| fixture.trace_env(&["history", "x.py", "--budget", "2000"], &env)))
+                .map(|_| scope.spawn(|| fixture.trace_env(&["history", "x.py"], &env)))
                 .collect();
             calls.into_iter().map(|call| call.join().unwrap()).collect::<Vec<_>>()
         });

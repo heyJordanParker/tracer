@@ -7,7 +7,7 @@
 | Option | What it does |
 |---|---|
 | `-C <dir>` | Runs as if `trace` started in `<dir>`, the way `git -C` does. It goes before the command, because `trace grep -C <n>` is ripgrep's context. |
-| `--budget <chars>` | The characters the text output fits in, 30,000 by default. The budget cuts detail, never a file or a declaration, and the last line names the command for the rest. `0` is unbounded. |
+| `--whole` | Prints the whole answer, uncut. Text output otherwise fits 30,000 characters, the longest Bash result Claude Code shows whole: the fit cuts detail, never a file or a declaration, and the last line names the command with `--whole`. |
 | `--json` | One JSON document, `{query, context, results, counts}`: rows in `results`, each file's facts in `context.files`, totals in `counts`. |
 | `--filter <jq>` | Runs a jq program over the `--json` output, in-process, in place of piping into `jq`. |
 | `--agent <id>` | The agent whose session record the call reads and writes, in place of `TRACER_AGENT_ID`. |
@@ -53,12 +53,12 @@ If A imports B, B is a dependency of A, and A is a usage of B.
 
 | Command | Answers |
 |---|---|
-| `trace read <paths>` | Whole files, cleaned, with line numbers, fitted to the budget. A cut read ends with the command for the next window. |
+| `trace read <paths>` | Whole files, cleaned, with line numbers, fitted to 30,000 characters. A cut read ends with the command for the next window. |
 | `trace read <file> --method <name>` | One function or method. |
 | `trace read <file> --lines L1:L2` | A line range. |
 | `trace read <file> --between START END` | The section between two anchors. |
 | `trace read <file> --revision <REV> [--diff]` | The file at a commit, or its difference from that commit. |
-| `trace read <file> --all` | Every line, with no budget. |
+| `trace read <file> --whole` | Every line, uncut. |
 
 A windowed read adds a `calls:` block: each function the window calls, with its source when it is short and the session has not read it, and its other call sites.
 
@@ -69,13 +69,13 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 | `trace status [--state added\|renamed\|modified\|deleted\|untracked]` | The working tree's changed files, the most-imported first. |
 | `trace diff [paths] [--base REV] [--symbols]` | What changed as lines, with the declarations each change touched: `changed`, `removed`, `added`, and `touches`. |
 | `trace history <file> [<symbol>]` | A file's commits, or one function's line history. |
-| `trace history --contains <text> [--regex] [--all]` | Every commit that added or removed the text, with the lines and the declaration each one changed. |
+| `trace history --contains <text> [--regex] [--whole]` | The newest 29 commits that added or removed the text, then the oldest, each with the lines and the declaration it changed. `--whole` lists every commit. |
 | `trace history --commit <REV>` | One commit in full: message, author, parents, files, and changed lines. |
 | `trace blame <file> [<symbol>] [--lines L1:L2]` | Blame collapsed into regions, each with its commit subject. |
 
 ## Project docs
 
-`trace docs` serves the `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/` files that govern a path, and records what it sent, so a doc reaches an agent's context once. In a session, every command that takes paths also prints those docs after its answer, in what the answer leaves of `--budget`, at most 10,000 characters, and names the rest under the `trace docs` command that sends them. `--json` carries no docs.
+`trace docs` serves the `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/` files that govern a path, and records what it sent, so a doc reaches an agent's context once. In a session, every command that takes paths also prints those docs after its answer, in what the answer leaves of its 30,000 characters, at most 10,000 characters, and names the rest under the `trace docs` command that sends them. `--json` carries no docs.
 
 | Command | Answers |
 |---|---|

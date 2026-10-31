@@ -422,12 +422,23 @@ fn read_under_budget_carries_no_marker() {
 }
 
 #[test]
-fn read_all_flag_returns_the_whole_file() {
+fn no_flag_sizes_the_output() {
     let f = standard_repo();
     f.write("big.py", &oversized_python(2000));
     f.commit("add big.py");
 
-    let r = f.trace(&["read", "big.py", "--all", "--json"]);
+    let r = f.trace(&["read", "big.py", "--budget", "500"]);
+    r.code_is(2);
+    assert!(r.stderr.contains("unexpected argument '--budget'"), "{}", r.stderr);
+}
+
+#[test]
+fn read_whole_flag_returns_the_whole_file() {
+    let f = standard_repo();
+    f.write("big.py", &oversized_python(2000));
+    f.commit("add big.py");
+
+    let r = f.trace(&["read", "big.py", "--whole", "--json"]);
     r.ok();
     let v = r.view();
     assert_eq!(v["results"][0]["truncated"], false);
@@ -435,11 +446,11 @@ fn read_all_flag_returns_the_whole_file() {
     let content = v["results"][0]["content"].as_str().unwrap();
     assert!(
         trim_marker_of(content).is_none(),
-        "--all must not mark a trim"
+        "--whole must not mark a trim"
     );
     assert!(
         content.contains("value_2000 = "),
-        "--all must return the last line"
+        "--whole must return the last line"
     );
 }
 
@@ -501,18 +512,18 @@ fn read_cuts_a_line_longer_than_the_budget() {
     let content = v["results"][0]["content"].as_str().unwrap();
     assert!(content.starts_with("L1: var x = \"yyy"), "{}", &content[..80]);
     assert!(
-        content.contains("[trimmed at L1 of 1 — whole: trace read bundle.js --all]"),
+        content.contains("[trimmed at L1 of 1 — whole: trace read bundle.js --whole]"),
         "the cut must name the command for the whole line"
     );
 
-    let text = f.trace(&["read", "bundle.js", "--budget", "3000"]);
+    let text = f.trace_env(&["read", "bundle.js"], &[("TRACER_BUDGET", "3000")]);
     text.ok();
     let size = text.stdout.chars().count();
     assert!(size <= 3000, "read spent {size} characters of a 3000 budget");
 
-    let whole = f.trace(&["read", "bundle.js", "--all"]);
+    let whole = f.trace(&["read", "bundle.js", "--whole"]);
     whole.ok();
-    assert!(whole.stdout.contains(&"y".repeat(40_000)), "--all returns the whole line");
+    assert!(whole.stdout.contains(&"y".repeat(40_000)), "--whole returns the whole line");
 }
 
 #[test]
@@ -1189,7 +1200,7 @@ fn read_preserves_mixed_line_source_identity_across_modes() {
     f.write("mixed.rs", &source);
     f.commit("add mixed line source");
 
-    let whole = f.trace(&["read", "mixed.rs", "--all", "--json"]);
+    let whole = f.trace(&["read", "mixed.rs", "--whole", "--json"]);
     whole.ok();
     let whole_content = whole.json()["results"][0]["content"]
         .as_str()
@@ -1250,7 +1261,7 @@ fn read_preserves_mixed_line_source_identity_across_modes() {
         serde_json::json!([2, 5])
     );
 
-    let raw = f.trace(&["read", "mixed.rs", "--raw", "--all", "--json"]);
+    let raw = f.trace(&["read", "mixed.rs", "--raw", "--whole", "--json"]);
     raw.ok();
     assert_eq!(raw.json()["results"][0]["content"], source);
 
@@ -2344,11 +2355,11 @@ fn list_fits_the_budget() {
     for index in 0..400 {
         std::fs::create_dir_all(f.path(&format!("runs/session-{index:04}"))).unwrap();
     }
-    let r = f.trace(&["list", "runs", "--budget", "2000"]);
+    let r = f.trace_env(&["list", "runs"], &[("TRACER_BUDGET", "2000")]);
     r.ok();
     assert!(r.stdout.chars().count() <= 2000, "{} characters:\n{}", r.stdout.chars().count(), r.stdout);
     assert!(r.stdout.contains("./: 400 directories"), "{}", r.stdout);
-    assert!(r.stdout.contains("--budget 0]"), "{}", r.stdout);
+    assert!(r.stdout.contains("--whole]"), "{}", r.stdout);
 }
 
 #[test]
@@ -2365,13 +2376,10 @@ fn status_and_stats_fit_the_budget() {
         f.write(&format!("area_{}/module_{index:03}.py", index % 5), "value = 2\n");
     }
     for (command, budget) in [(vec!["status"], 3000), (vec!["stats", "."], 3000)] {
-        let mut args = command.clone();
-        let budget_arg = budget.to_string();
-        args.extend(["--budget", budget_arg.as_str()]);
-        let r = f.trace(&args);
+        let r = f.trace_env(&command, &[("TRACER_BUDGET", &budget.to_string())]);
         r.ok();
         assert!(r.stdout.chars().count() <= budget, "{command:?}: {} characters:\n{}", r.stdout.chars().count(), r.stdout);
-        assert!(r.stdout.contains("--budget 0]"), "{command:?}:\n{}", r.stdout);
+        assert!(r.stdout.contains("--whole]"), "{command:?}:\n{}", r.stdout);
     }
 }
 
@@ -2663,9 +2671,9 @@ fn a_doc_longer_than_the_budget_arrives_in_parts() {
     f.write("sub/Claude.md", &long_rules());
     f.commit("long sub rules");
     let sid = fresh_session_id("docs-parts");
-    let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
+    let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str()), ("TRACER_BUDGET", "2000")];
 
-    let first = f.trace_env(&["docs", "sub/util.py", "--budget", "2000"], &env);
+    let first = f.trace_env(&["docs", "sub/util.py"], &env);
     first.ok();
     assert!(
         first.stdout.starts_with("## sub/Claude.md (L1-L")
@@ -2679,7 +2687,7 @@ fn a_doc_longer_than_the_budget_arrives_in_parts() {
     let mut seen = rule_numbers(&first.stdout);
     let mut calls = 1;
     loop {
-        let r = f.trace_env(&["docs", "sub/util.py", "--budget", "2000"], &env);
+        let r = f.trace_env(&["docs", "sub/util.py"], &env);
         r.ok();
         assert!(r.stdout.encode_utf16().count() <= 2000, "{}", r.stdout);
         if r.stdout.is_empty() {
@@ -2707,7 +2715,7 @@ fn a_doc_read_in_part_continues_where_the_read_stopped() {
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
     f.trace_env(&["read", "sub/Claude.md", "--lines", "1:100"], &env).ok();
-    let next = f.trace_env(&["docs", "sub/util.py", "--budget", "0"], &env);
+    let next = f.trace_env(&["docs", "sub/util.py", "--whole"], &env);
     next.ok();
     assert!(
         next.stdout.contains("## sub/Claude.md (L101-L301 of 301)")
@@ -2730,7 +2738,7 @@ fn a_doc_read_whole_is_loaded_though_cleaning_dropped_lines() {
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
     f.trace_env(&["read", "sub/Claude.md"], &env).ok();
-    let docs = f.trace_env(&["docs", "sub/util.py", "--budget", "0"], &env);
+    let docs = f.trace_env(&["docs", "sub/util.py", "--whole"], &env);
     docs.ok();
     assert!(!docs.stdout.contains("## sub/Claude.md"), "{}", docs.stdout);
     let status = f.trace_env(&["docs", "status", "sub/util.py", "--json"], &env);
@@ -4372,7 +4380,7 @@ fn structure_shows_whole_facts_again_for_a_file_the_budget_cut_to_its_path() {
     let sid = fresh_session_id("structure-cut");
     let env = [("AGENT_SESSION_ID", sid.as_str())];
 
-    let cut = f.trace_env(&["structure", "alpha.py", "beta.py", "--budget", "650"], &env);
+    let cut = f.trace_env(&["structure", "alpha.py", "beta.py"], &[env[0], ("TRACER_BUDGET", "650")]);
     cut.ok();
     assert!(cut.stdout.contains("---\nfile: alpha.py\nlines: 6\n"), "alpha keeps its facts:\n{}", cut.stdout);
     assert!(
@@ -4382,7 +4390,7 @@ fn structure_shows_whole_facts_again_for_a_file_the_budget_cut_to_its_path() {
     );
     assert!(!cut.stdout.contains("file: beta.py"), "beta's block was printed:\n{}", cut.stdout);
 
-    let whole = f.trace_env(&["structure", "alpha.py", "beta.py", "--budget", "0"], &env);
+    let whole = f.trace_env(&["structure", "alpha.py", "beta.py", "--whole"], &env);
     whole.ok();
     assert!(
         whole.stdout.contains("---\nfile: beta.py\nlines: 5\n"),
@@ -4403,10 +4411,10 @@ fn structure_names_the_whole_command_once_for_every_file_it_cut() {
     }
     f.commit("four modules");
 
-    let cut = f.trace(&["structure", ".", "--budget", "2000"]);
+    let cut = f.trace_env(&["structure", "."], &[("TRACER_BUDGET", "2000")]);
     cut.ok();
     assert_eq!(cut.stdout.matches("shortened to fit").count(), 1, "one closing line:\n{}", cut.stdout);
-    assert!(cut.stdout.trim_end().ends_with("--budget 0]"), "the closing line comes last:\n{}", cut.stdout);
+    assert!(cut.stdout.trim_end().ends_with("--whole]"), "the closing line comes last:\n{}", cut.stdout);
     for module in ["one", "two", "three", "four"] {
         assert!(cut.stdout.contains(&format!("{module}_function_0")), "{module} keeps its declarations:\n{}", cut.stdout);
     }
@@ -4699,17 +4707,17 @@ fn a_call_whose_other_call_sites_overrun_the_budget_is_still_named() {
     f.commit("many callers");
     let session = [("AGENT_SESSION_ID", "calls-overrun")];
 
-    let read = f.trace_env(&["read", "checkout.php", "--lines", "6:6", "--budget", "3000"], &session);
+    let read = f.trace_env(&["read", "checkout.php", "--lines", "6:6"], &[session[0], ("TRACER_BUDGET", "3000")]);
     read.ok();
     for expected in [
         "L6 Ledger::record  ledger.php:3  {callers: 43}",
         "return $cents;",
-        "[1 of 1 calls shortened to fit --budget 3000",
+        "[1 of 1 calls shortened to fit — whole: ",
     ] {
         assert!(read.stdout.contains(expected), "missing {expected:?} in {}", read.stdout);
     }
 
-    let twice = f.trace_env(&["read", "split.php", "--lines", "5:6", "--budget", "0"], &session);
+    let twice = f.trace_env(&["read", "split.php", "--lines", "5:6", "--whole"], &session);
     twice.ok();
     assert!(twice.stdout.contains("L5 Ledger::record") && twice.stdout.contains("L6 Ledger::record"), "{}", twice.stdout);
     assert_eq!(twice.stdout.matches("return $cents;").count(), 1, "{}", twice.stdout);
@@ -4735,7 +4743,7 @@ fn a_window_whose_call_heads_overrun_their_share_still_prints_code_within_the_bu
     book_calling_ledger(&f, 80);
     f.commit("eighty calls");
 
-    let read = f.trace(&["read", "book.php", "--lines", "6:85", "--budget", "4000"]);
+    let read = f.trace_env(&["read", "book.php", "--lines", "6:85"], &[("TRACER_BUDGET", "4000")]);
     read.ok();
     let size = read.stdout.chars().count();
     assert!(size <= 4000, "read spent {size} characters of a 4000 budget:\n{}", read.stdout);
@@ -4747,7 +4755,7 @@ fn a_window_whose_call_heads_overrun_their_share_still_prints_code_within_the_bu
         assert!(read.stdout.contains(expected), "missing {expected:?} in {}", read.stdout);
     }
 
-    let context = f.trace(&["context", "book.php", "--offset", "6", "--limit", "80", "--no-record", "--budget", "2500"]);
+    let context = f.trace_env(&["context", "book.php", "--offset", "6", "--limit", "80", "--no-record"], &[("TRACER_BUDGET", "2500")]);
     context.ok();
     let size = context.stdout.chars().count();
     assert!(size <= 2500, "context spent {size} characters of a 2500 budget:\n{}", context.stdout);
@@ -4768,7 +4776,7 @@ fn repeat_calls_to_one_target_print_one_head_with_all_their_lines() {
     );
     f.commit("sixty calls to one function");
 
-    let read = f.trace(&["read", "checkout.php", "--lines", "6:65", "--budget", "4000"]);
+    let read = f.trace_env(&["read", "checkout.php", "--lines", "6:65"], &[("TRACER_BUDGET", "4000")]);
     read.ok();
     let size = read.stdout.chars().count();
     assert!(size <= 4000, "read spent {size} characters of a 4000 budget:\n{}", read.stdout);
@@ -4784,7 +4792,7 @@ fn a_trimmed_window_continues_past_the_lines_it_printed() {
     book_calling_ledger(&f, 200);
     f.commit("two hundred calls");
 
-    let read = f.trace(&["read", "book.php", "--lines", "6:205", "--budget", "4000"]);
+    let read = f.trace_env(&["read", "book.php", "--lines", "6:205"], &[("TRACER_BUDGET", "4000")]);
     read.ok();
     let marker = "— continue: trace read book.php --lines ";
     let next: usize = read
@@ -4820,7 +4828,7 @@ fn calls_into_other_files_list_their_call_sites_before_calls_into_the_reading_fi
     );
     f.commit("one call into this file, one into another");
 
-    let read = f.trace(&["read", "checkout.php", "--lines", "6:7", "--budget", "2250"]);
+    let read = f.trace_env(&["read", "checkout.php", "--lines", "6:7"], &[("TRACER_BUDGET", "2250")]);
     read.ok();
     for expected in ["refund0.php:5  back", "refund3.php:5  back", "L6 Checkout::note  checkout.php:9"] {
         assert!(read.stdout.contains(expected), "missing {expected:?} in {}", read.stdout);
@@ -5084,7 +5092,7 @@ fn read_fits_the_budget_and_names_every_declaration() {
     f.write("crowded.py", &crowded_python());
     f.commit("crowded file");
 
-    let r = f.trace(&["read", "crowded.py", "--budget", "4000"]);
+    let r = f.trace_env(&["read", "crowded.py"], &[("TRACER_BUDGET", "4000")]);
     r.ok();
     let size = r.stdout.chars().count();
     assert!(size <= 4000, "read spent {size} characters of a 4000 budget:\n{}", r.stdout);
@@ -5095,9 +5103,9 @@ fn read_fits_the_budget_and_names_every_declaration() {
     }
     assert!(r.stdout.contains("[trimmed at L"), "the cut must say where it landed:\n{}", r.stdout);
 
-    let whole = f.trace(&["read", "crowded.py", "--budget", "0"]);
+    let whole = f.trace(&["read", "crowded.py", "--whole"]);
     whole.ok();
-    assert!(!whole.stdout.contains("[trimmed at L"), "--budget 0 is unbounded:\n{}", whole.stdout);
+    assert!(!whole.stdout.contains("[trimmed at L"), "--whole is uncut:\n{}", whole.stdout);
     assert!(whole.stdout.contains("L299:     return third_argument"), "{}", whole.stdout);
 }
 
@@ -5107,14 +5115,14 @@ fn context_names_every_declaration_within_the_budget() {
     f.write("crowded.py", &crowded_python());
     f.commit("crowded file");
 
-    let r = f.trace(&["context", "crowded.py", "--no-record", "--budget", "2500"]);
+    let r = f.trace_env(&["context", "crowded.py", "--no-record"], &[("TRACER_BUDGET", "2500")]);
     r.ok();
     let size = r.stdout.chars().count();
     assert!(size <= 2500, "context spent {size} characters of a 2500 budget:\n{}", r.stdout);
     for n in 0..60 {
         assert!(r.stdout.contains(&format!("function_{n:02}")), "function_{n:02} is unnamed:\n{}", r.stdout);
     }
-    assert!(r.stdout.contains("--budget 0]"), "shortened rows must name the whole command:\n{}", r.stdout);
+    assert!(r.stdout.contains("--whole]"), "shortened rows must name the whole command:\n{}", r.stdout);
 }
 
 /// A file with more declarations than even one name per row can fit still
@@ -5127,20 +5135,18 @@ fn a_file_too_large_for_its_names_fits_the_budget_by_parent() {
     f.commit("generated");
 
     for (command, budget) in [(vec!["context", "generated.py", "--no-record"], 3000), (vec!["info", "generated.py"], 6000)] {
-        let mut args = command.clone();
-        args.extend(["--budget", if budget == 3000 { "3000" } else { "6000" }]);
-        let r = f.trace(&args);
+        let r = f.trace_env(&command, &[("TRACER_BUDGET", &budget.to_string())]);
         r.ok();
         let size = r.stdout.chars().count();
         assert!(size <= budget, "{command:?} spent {size} characters of a {budget} budget");
         assert!(r.stdout.contains("top level: 3000 functions"), "{command:?}:\n{}", r.stdout);
-        assert!(r.stdout.contains("--budget 0]"), "{command:?} must name the whole command:\n{}", r.stdout);
+        assert!(r.stdout.contains("--whole]"), "{command:?} must name the whole command:\n{}", r.stdout);
     }
 
     let properties: String = (0..3000).map(|n| format!("  field_{n} = {n};\n")).collect();
     f.write("holder.ts", &format!("class Holder {{\n{properties}}}\n"));
     f.commit("holder");
-    let r = f.trace(&["context", "holder.ts", "--no-record", "--budget", "3000"]);
+    let r = f.trace_env(&["context", "holder.ts", "--no-record"], &[("TRACER_BUDGET", "3000")]);
     r.ok();
     assert!(r.stdout.contains("L1 Holder: 3000 properties"), "{}", r.stdout);
 }
@@ -5270,13 +5276,13 @@ fn callers_fit_the_budget_and_name_each_caller_once() {
     assert_eq!(whole.stdout.matches("def run(): …").count(), 60, "{}", whole.stdout);
     assert!(whole.stdout.contains("@ L4, L5, L6"), "{}", whole.stdout);
 
-    let r = f.trace(&["callers", "helper", "--budget", "2500"]);
+    let r = f.trace_env(&["callers", "helper"], &[("TRACER_BUDGET", "2500")]);
     r.ok();
     assert!(r.stdout.chars().count() <= 2500, "{} characters:\n{}", r.stdout.chars().count(), r.stdout);
     for index in 0..60 {
         assert!(r.stdout.contains(&format!("use_{index:02}.py")), "use_{index:02}.py unnamed:\n{}", r.stdout);
     }
-    assert!(r.stdout.contains("--budget 0]"), "{}", r.stdout);
+    assert!(r.stdout.contains("--whole]"), "{}", r.stdout);
 }
 
 #[test]
