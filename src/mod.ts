@@ -62,8 +62,9 @@ function refusalOf(printed: Printed | undefined): { readonly refuse: string } | 
 async function hook(mod: TracerMod, event: Event, { deadline }: ListenerTime, input: Input): Promise<Printed | undefined> {
   const timeoutMs = Math.max(deadline - Date.now(), MARGIN_MS)
   const argv = ['trace', 'hook', event, '--harness', 'claude', '--deadline-ms', String(timeoutMs - MARGIN_MS), ...(mod.options.tracerOnly ? ['--tracer-only'] : [])]
-  const traced = await process.run(argv, { cwd: input.cwd, stdin: JSON.stringify(input), timeoutMs }).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: messageOf(error) }))
-  if (traced.exitCode === 0) return traced.stdout.trim() === '' ? undefined : (JSON.parse(traced.stdout) as Printed)
+  const traced = await process.run(argv, { cwd: input.cwd, stdin: JSON.stringify(input), timeoutMs }).catch((error: unknown) => new Error(`trace hook ${event}: ${messageOf(error)}`))
+  if (!(traced instanceof Error) && traced.exitCode === 0) return traced.stdout.trim() === '' ? undefined : (JSON.parse(traced.stdout) as Printed)
   if (event === 'PreToolUse') return undefined
+  if (traced instanceof Error) throw traced
   throw new Error(`trace hook ${event} exited ${traced.exitCode}: ${traced.stderr.trim().split('\n').at(-1) ?? ''}`)
 }

@@ -446,14 +446,14 @@ fn every_command_that_takes_paths_sends_the_docs_they_reach_once() {
 #[test]
 fn docs_after_an_answer_fit_what_the_budget_leaves_and_name_the_rest() {
     let f = docs_repo();
-    f.write("sub/Claude.md", &format!("# Sub rules\n\n{}", "A long rule line.\n".repeat(200)));
+    f.write("sub/Claude.md", &format!("# Sub rules\n\n{}", "A long rule line.\n".repeat(3000)));
     f.commit("long doc");
-    let env = [("AGENT_SESSION_ID", SESSION), ("TRACER_BUDGET", "1500")];
+    let env = [("AGENT_SESSION_ID", SESSION)];
 
     let small = f.trace_env(&["tree", "sub"], &env);
     small.ok();
-    assert!(small.stdout.len() < 1_800, "the docs stay inside the budget: {}", small.stdout.len());
-    assert!(small.stdout.contains(" docs "), "the rest is named under the command that sends it: {}", small.stdout);
+    assert!(small.stdout.len() < 30_300, "the docs stay inside the budget: {}", small.stdout.len());
+    assert!(small.stdout.contains(" docs "), "the rest is named under the command that sends it: {}", small.stdout.lines().last().unwrap_or(""));
 }
 
 #[test]

@@ -475,7 +475,7 @@ fn render(groups: &[Group], scope: &Scope, delivery: &mut crate::session::Delive
             "{}\n{head}\n{}\n{}\n",
             group.root,
             indented(0, &fitted.text),
-            output::shortened_line(fitted.cut, fitted.of, "declarations")
+            output::trimmed_line(fitted.cut, fitted.of, "declarations")
         );
     }
     let entries: Vec<output::Entry> = (0..files.len())
@@ -496,12 +496,12 @@ fn render(groups: &[Group], scope: &Scope, delivery: &mut crate::session::Delive
         })
         .collect();
     let named: Vec<&str> = files.iter().map(|(_, file)| file.named.as_str()).collect();
-    let output::Fitted { texts, shortened, levels } = output::fit_listing(&entries, &named, fixed);
+    let output::Fitted { texts, trimmed, levels } = output::fit_listing(&entries, &named, fixed);
     let listing = match levels.contains(&usize::MAX) {
         true => texts.iter().map(|text| format!("{text}\n")).collect(),
         false => roots(&texts),
     };
-    format!("{listing}{}\n", output::shortened_line(shortened, files.len(), "files"))
+    format!("{listing}{}\n", output::trimmed_line(trimmed, files.len(), "files"))
 }
 
 /// The `--json` document: one result per listed row, in `surface`'s row

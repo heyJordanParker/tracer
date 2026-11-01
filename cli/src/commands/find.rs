@@ -310,7 +310,7 @@ pub fn run(
         .collect();
     let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
     let fixed = header.len() + 1 + more.as_ref().map_or(0, |line| line.len() + 1) + crate::output::closing_room(rows.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&rows, &paths, fixed);
     crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
     let mut answer = format!("{header}\n");
     for text in texts {
@@ -319,8 +319,8 @@ pub fn run(
     if let Some(line) = more {
         answer.push_str(&format!("{line}\n"));
     }
-    if shortened > 0 {
-        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
+    if trimmed > 0 {
+        answer.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, rows.len(), "files")));
     }
     crate::docs::print_with_docs(&answer, &searched, "trace_find", delivery)?;
     Ok(value)
@@ -364,11 +364,11 @@ pub fn native_context(files: &[PathBuf], delivery: &mut crate::session::Delivery
     }
     let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
     let fixed = crate::output::closing_room(rows.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&rows, &paths, fixed);
     crate::summary::withdraw_cut(delivery, &offered, &levels, 1);
     let mut out: String = texts.iter().map(|text| format!("{text}\n")).collect();
-    if shortened > 0 {
-        out.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
+    if trimmed > 0 {
+        out.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, rows.len(), "files")));
     }
     out
 }

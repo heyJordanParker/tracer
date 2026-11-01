@@ -603,15 +603,15 @@ fn emit_file_mode(
     }
     let changed: Vec<&str> = files.iter().map(|row| row["path"].as_str().unwrap_or("")).collect();
     let fixed = head.len() + crate::output::closing_room(entries.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&entries, &changed, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&entries, &changed, fixed);
     // Every level keeps the header line and its headline.
     crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 3);
     let mut answer = head;
     for text in texts {
         answer.push_str(&format!("{text}\n"));
     }
-    if shortened > 0 {
-        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
+    if trimmed > 0 {
+        answer.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, entries.len(), "files")));
     }
     crate::docs::print_with_docs(&answer, anchors, "trace_diff", delivery)?;
     Ok(payload)

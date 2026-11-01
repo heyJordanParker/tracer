@@ -420,16 +420,16 @@ fn a_session_keeps_one_record_across_the_repositories_it_reads() {
 #[test]
 fn dash_c_carries_into_every_command_an_output_names() {
     let (target, home) = two_repositories();
-    let body: String = (0..400).map(|n| format!("V{n} = {n}\n")).collect();
+    let body: String = (0..4000).map(|n| format!("V{n} = {n}\n")).collect();
     target.write("long.py", &body);
     target.commit("long");
     let dir = target.root.to_string_lossy().into_owned();
 
-    let r = home.trace_env(&["-C", &dir, "read", "long.py"], &[("TRACER_BUDGET", "600")]);
+    let r = home.trace(&["-C", &dir, "read", "long.py"]);
     r.ok();
     assert!(
         r.stdout.contains(&format!("continue: trace -C {dir} read long.py --lines")),
         "{}",
-        r.stdout
+        r.stdout.lines().last().unwrap_or("")
     );
 }

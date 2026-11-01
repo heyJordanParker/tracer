@@ -238,12 +238,12 @@ pub fn run(path: &Path, as_json: bool) -> Result<Value> {
             paths.push(directory);
         }
         let fixed = head.len() + crate::output::closing_room(entries.len(), "directories");
-        let crate::output::Fitted { texts, shortened, .. } = crate::output::fit_listing(&entries, &paths, fixed);
+        let crate::output::Fitted { texts, trimmed, .. } = crate::output::fit_listing(&entries, &paths, fixed);
         for text in texts {
             head.push_str(&format!("{text}\n"));
         }
-        if shortened > 0 {
-            head.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "directories")));
+        if trimmed > 0 {
+            head.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, entries.len(), "directories")));
         }
         crate::docs::print_with_docs(&head, std::slice::from_ref(&resolved), "trace_stats", crate::session::Delivery::default())
     })?;

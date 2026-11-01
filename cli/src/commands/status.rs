@@ -153,13 +153,13 @@ pub fn run(as_json: bool, state_filter: Option<&str>) -> Result<Value> {
         offered.push(offer);
     }
     let fixed = head.len() + crate::output::closing_room(rows.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&rows, &paths, fixed);
     crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
     for text in texts {
         println!("{text}");
     }
-    if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, rows.len(), "files"));
+    if trimmed > 0 {
+        println!("{}", crate::output::trimmed_line(trimmed, rows.len(), "files"));
     }
     std::io::Write::flush(&mut std::io::stdout())?;
     delivery.commit();

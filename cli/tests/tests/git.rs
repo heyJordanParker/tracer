@@ -1686,13 +1686,13 @@ fn history_contains_shows_the_newest_and_the_oldest_with_the_gap_between() {
     text.ok();
     let gap = text
         .stdout
-        .find("… 10 commits between: trace history --contains MARKER --whole")
+        .find("… 10 commits trimmed — untrimmed: trace history --contains MARKER --no-trim")
         .unwrap_or_else(|| panic!("no gap line: {}", text.stdout));
     let oldest = text.stdout.find("marker 0").unwrap();
     let eleventh = text.stdout.find("marker 11").unwrap();
     assert!(eleventh < gap && gap < oldest, "{}", text.stdout);
 
-    let all = f.trace(&["history", "--contains", "MARKER", "--whole", "--json"]);
+    let all = f.trace(&["history", "--contains", "MARKER", "--no-trim", "--json"]);
     all.ok();
     let v = all.view();
     assert_eq!(v["shown"], 40, "{}", all.stdout);
@@ -1865,19 +1865,22 @@ fn history_commit_fits_the_budget() {
     let f = Fixture::new();
     f.write("seed.txt", "seed\n");
     f.commit("seed");
-    for n in 0..20 {
+    for n in 0..400 {
         f.write(&format!("f{n}.py"), &"value = 1\n".repeat(200));
     }
     f.commit("many files");
 
-    let r = f.trace_env(&["history", "--commit", "HEAD"], &[("TRACER_BUDGET", "3000")]);
+    let untrimmed = f.trace(&["history", "--commit", "HEAD", "--no-trim"]);
+    untrimmed.ok();
+    assert!(untrimmed.stdout.encode_utf16().count() > 30_000, "the fixture must overrun the budget");
+    let r = f.trace(&["history", "--commit", "HEAD"]);
     r.ok();
-    assert!(r.stdout.encode_utf16().count() <= 3000, "{} chars", r.stdout.len());
+    assert!(r.stdout.encode_utf16().count() <= 30_000, "{} chars", r.stdout.len());
     assert!(r.stdout.contains("many files"), "{}", r.stdout);
     assert!(
-        r.stdout.contains("shortened to fit — whole: trace history --commit HEAD --whole"),
+        r.stdout.contains("trimmed to fit — untrimmed: trace history --commit HEAD --no-trim"),
         "{}",
-        r.stdout
+        r.stdout.lines().last().unwrap_or("")
     );
 }
 

@@ -246,7 +246,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `trace hook` exits 0 once it answers: a failure `process::report` names goes into the answer through `process::take_reported`, because a harness drops the answer of a hook that exits 2, which trace has already recorded as shown.
 - A Claude Code Read holds the lines its `tool_response.file` names, `startLine` for `numLines`, because Read returns at most its default line count, or fewer under its token cap; `offset` and `limit` name them only when the response doesn't.
 - `process::deadline` ends the process at `--deadline-ms`, the moment its harness throws the answer away, and `Delivery::commit` records nothing past `process::before_deadline`.
-- `output::set_command` names the `trace` command that answers a hook's tool whole, so a cut hook answer's "whole:" line is runnable.
+- `output::set_command` names the `trace` command that answers a hook's tool untrimmed, so a trimmed hook answer's "untrimmed:" line is runnable.
 - The agent's own edit goes through `Delivery::edited`: its old seen lines move by the edit's `Hunk`s, its written lines are seen at the new content, and `context::edit_context` records the file's rows as shown and prints only changed facts and `calls::callers_of` the changed functions. Claude Code's `structuredPatch` gives the hunks, and an `apply_patch` chunk is placed by finding its new side in the file as written.
 - PreCompact empties the agent's record, because Claude Code 2.1.304 and later loads every doc and rule back itself after a compaction: the start docs at once, and a nested doc or a rule with `paths:` at the next read it reaches.
 - InstructionsLoaded refuses a doc `session::holds` whole at its current content, so a doc a `trace` command sent never loads again through Claude Code; cmod drops the refused attachment.
@@ -286,18 +286,18 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - The content is cut at a whole line; only a first line longer than the whole budget is cut inside itself, and the `L<n>: ` format holds either way.
 - A cut read ends with an inline `[trimmed at L<n> of <total> …]` marker naming the command for the next window.
 - The marker survives `--raw`.
-- `--whole` returns the whole selection with no cap and no marker.
+- `--no-trim` returns the whole selection with no cap and no marker.
 - The `read` payload carries `truncated`, `shown_lines`, and `total_lines` on every read.
 - Every `--json` result is the one document `{query, context, results, counts}`, built by `output::document`.
 - Per-file enrichment lives at `context.files[<path>]`, never inside a result row.
 - Every text output fits one budget, `output::DEFAULT_BUDGET`, 30,000, the longest Bash result Claude Code shows whole; `--json` is never cut except `read`'s content.
-- No flag sizes the budget, so an agent never guesses how much of an answer it needs. The global `--whole` alone lifts it, and `TRACER_BUDGET` sets it for the test suite, which no agent-facing doc names.
+- No flag or variable sizes the budget, so an agent never guesses how much of an answer it needs. The global `--no-trim` alone lifts it.
 - Sizes are counted in UTF-16 units as Claude Code counts them.
 - `output::fit` gives every file its levels from whole to its path and cuts the least-imported file's detail first, so the budget cuts detail and never a file. It returns each file's chosen level beside its text, so a caller gates on the level and never parses the text.
 - `output::fit_listing` is `fit` for a listing of paths, where a path ending in `/` is a directory: when bare paths still overrun, it names the entries one line per directory, then each directory with its directory and file counts, then the first of those the budget holds and `… N more directories`.
 - `grep`, `pattern`, `find`, `list`, `tree`, `status`, `diff`, `stats`, and the relations commands fit their text through `fit_listing`; `history` and `logs` through `fit`.
 - The `status` and `diff` directory block takes at most half the budget.
-- A cut output's last line names the same command with `--whole`; `output::closing_room` measures the room that line needs, so no command guesses it.
+- A trimmed output's last line, `output::trimmed_line`, names the same command with `--no-trim`; `output::closing_room` measures the room that line needs, so no command guesses it.
 - `output::within` runs one part of a several-path command inside its share of the budget.
 - `pathval::files_under` expands every path argument, a directory into the repository's own listing, else, for a directory the listing holds no file of, such as one git ignores, into the files ripgrep searches when given it: the directory is searched because it was named, each file under it is still judged by the ignore rules, and a nested repository stays out; a missing path is reported through `process::report`, the rest still answer, and the run exits 2.
 - `main` builds rayon's global pool with at most `THREADS` threads; the file-stamping workers, ripgrep's `--threads`, and ast-grep's `--threads` read the count back from `rayon::current_num_threads()`.
@@ -308,7 +308,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `output::narrow_context` keeps `context.files` for the files the filtered result names and `context.directories` for the directories that hold them.
 - `grep` and `pattern` read hidden folders git does not ignore, such as `.claude/` and `.github/`, and never `.git/` or `.tracer-cache/`, through `lang::RIPGREP_SCOPE` and `lang::AST_GREP_SCOPE`.
 - `callers`, `defines`, `usages`, and `dependencies` name the repository they searched for a symbol it does not declare, through `output::not_declared`; `usages` and `dependencies` given an existing path in place of a symbol name the `--path` command instead.
-- `structure` over many files prints every file at least at the most detailed level they all fit at, and the most imported one level above it: a file's block becomes its one-line headline before any declaration goes, and one closing line names the whole command for every file it cut.
+- `structure` over many files prints every file at least at the most detailed level they all fit at, and the most imported one level above it: a file's block becomes its one-line headline before any declaration goes, and one closing line names the untrimmed command for every file it trimmed.
 - `surface::render_rows` fits one file's rows to a budget without a closing line, for a listing of many files; `surface::render_within` adds the line for one file. Its `Fit::Names` keeps every row named, cut to `L<n> name()` and past that one line per parent; its `Fit::Whole`, which `api` uses, keeps rows whole in order up to the budget and cuts the rest.
 - `api`'s `--visibility` levels are `public`, rows `Unknown` or wider; `internal`, rows `Internal` or wider; and `all`, every row and every import.
 - `api` lists the rows whose visibility its `--visibility` level reaches, re-exports among them in line order, with `tree`'s layout through `tree::lead`. An import or re-export prints once per statement, from the lines its `Import`s' `line` and `end_line` span. Past the budget it drops every file's facts, then every purpose, then collapses the least-imported files through `output::fit_listing`, each to a line naming its own `trace api` command; a single file prints whole rows up to the budget. `-g` matches through `grep::globbed`, the matcher `grep --revision` uses.
@@ -335,7 +335,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `history --contains` finds the commits, merges left out, that changed how often a string occurs in a file, the rule of `git log -S`. It counts the string once per distinct blob of the commit index, in parallel through `git_activity::blobs`.
 - A blob with a zero byte in its first 8,000 bytes is binary, the way git reads it: it is never counted, and the commit index records it.
 - `history --contains --regex` keeps the changes where either side matches and the blobs differ, then confirms them through `git log -G --no-walk=unsorted --stdin`.
-- `history --contains` shows the newest 29 commits, a line naming how many fall between, and the oldest; `--whole` shows every one.
+- `history --contains` shows the newest 29 commits, a line naming how many it trimmed between them, and the oldest; `--no-trim` shows every one.
 - `history --contains` gives each matched file an `added` row and a `removed` row for the changed lines that hold the string, read from git's own `-U0` diff of the shown commits in one `git log -p`, each with its count, its first line, and that line's enclosing declaration from its own side of the change. It reads them within `ANNOTATED_FILES`, 200 files of whole commits, the oldest commit first; a file past it takes its direction from the counts alone.
 - `history --commit` fits each file's changed lines to the budget.
 - `status` rows carry a staging word: `staged`, `unstaged`, or `partly staged`.

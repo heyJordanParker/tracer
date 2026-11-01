@@ -1190,7 +1190,7 @@ pub fn run(
             "between": between.as_ref().map(|(a, b)| vec![a.clone(), b.clone()]),
             "ref": revision,
             "raw": raw,
-            "whole": crate::output::budget().is_none(),
+            "no_trim": crate::output::budget().is_none(),
             "diff": as_diff,
         }),
         json!({"files": Value::Object(context)}),

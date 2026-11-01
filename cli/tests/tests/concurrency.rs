@@ -39,13 +39,13 @@ fn mtime_index(fixture: &Fixture) -> String {
 #[test]
 fn concurrent_doc_deliveries_never_send_the_same_lines_twice() {
     let fixture = Fixture::new();
-    let rules: String = (1..=600)
+    let rules: String = (1..=6000)
         .map(|n| format!("- Rule {n}: one line of a doc too long for one message.\n"))
         .collect();
     fixture.write("Claude.md", &format!("# Rules\n{rules}"));
     fixture.write("x.py", "x = 1\n");
     fixture.commit("long doc");
-    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-docs"), ("TRACER_BUDGET", "2000")];
+    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-docs")];
 
     let mut sent: Vec<usize> = Vec::new();
     for _ in 0..4 {
@@ -77,13 +77,13 @@ fn concurrent_doc_deliveries_never_send_the_same_lines_twice() {
 #[test]
 fn concurrent_commands_never_send_the_same_doc_lines_twice() {
     let fixture = Fixture::new();
-    let rules: String = (1..=600)
+    let rules: String = (1..=6000)
         .map(|n| format!("- Rule {n}: one line of a doc too long for one message.\n"))
         .collect();
     fixture.write("Claude.md", &format!("# Rules\n{rules}"));
     fixture.write("x.py", "x = 1\n");
     fixture.commit("long doc");
-    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-command-docs"), ("TRACER_BUDGET", "2000")];
+    let env = [("CLAUDE_CODE_SESSION_ID", "concurrent-command-docs")];
 
     let mut sent: Vec<usize> = Vec::new();
     for _ in 0..4 {

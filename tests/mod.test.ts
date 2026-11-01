@@ -122,3 +122,14 @@ test('a failing trace hook on any other moment shows why', async () => {
 
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'trace hook SessionStart exited 2: trace: the index is locked' }])
 })
+
+test('a run that throws reports its own message, not exited 1', async () => {
+  const tested = testMod(tracer, { projectRoot: ROOT })
+  tested.fakes.process.run = async () => {
+    throw new Error('spawn trace EACCES')
+  }
+
+  await tested.raise.beforeSessionStart({ source: 'startup' })
+
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'trace hook SessionStart: spawn trace EACCES' }])
+})

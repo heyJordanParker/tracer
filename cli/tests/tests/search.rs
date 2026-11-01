@@ -2541,14 +2541,14 @@ fn search_rows_name_the_enclosing_declarations() {
     );
 }
 
-/// Thirty files that each mention `needle` twenty times, and one of them,
-/// `m00.py`, imported by all the others.
-fn crowded_search_repo() -> Fixture {
+/// `files` files that each mention `needle` `matches` times, and one of them,
+/// `m000.py`, imported by all the others.
+fn crowded_search_repo(files: usize, matches: usize) -> Fixture {
     let f = Fixture::new();
-    let body: String = (0..20).map(|n| format!("needle_{n} = {n}\n")).collect();
-    f.write("m00.py", &body);
-    for index in 1..30 {
-        f.write(&format!("m{index:02}.py"), &format!("from m00 import needle_0\n{body}"));
+    let body: String = (0..matches).map(|n| format!("needle_{n} = {n}\n")).collect();
+    f.write("m000.py", &body);
+    for index in 1..files {
+        f.write(&format!("m{index:03}.py"), &format!("from m000 import needle_0\n{body}"));
     }
     f.commit("crowded search");
     f
@@ -2556,36 +2556,37 @@ fn crowded_search_repo() -> Fixture {
 
 #[test]
 fn grep_over_budget_names_every_file_and_the_command_for_the_rest() {
-    let f = crowded_search_repo();
-    let r = f.trace_env(&["grep", "needle", "."], &[("TRACER_BUDGET", "3000")]);
+    let f = crowded_search_repo(30, 100);
+    let r = f.trace(&["grep", "needle", "."]);
     r.ok();
     let size = r.stdout.chars().count();
-    assert!(size <= 3000, "grep spent {size} characters of a 3000 budget:\n{}", r.stdout);
+    assert!(size <= 30_000, "grep spent {size} characters of the 30,000 budget");
     for index in 0..30 {
-        assert!(r.stdout.contains(&format!("m{index:02}.py")), "m{index:02}.py is unnamed:\n{}", r.stdout);
+        assert!(r.stdout.contains(&format!("m{index:03}.py")), "m{index:03}.py is unnamed:\n{}", r.stdout);
     }
     // The file the others import keeps its match lines longest.
-    assert!(r.stdout.contains("needle_19 = 19"), "the most-imported file lost its detail first:\n{}", r.stdout);
+    assert!(r.stdout.contains("needle_99 = 99"), "the most-imported file lost its detail first:\n{}", r.stdout);
     let last = r.stdout.lines().last().unwrap_or("");
     assert!(
-        last.contains("shortened to fit — whole: trace grep needle . --whole]"),
+        last.contains("trimmed to fit — untrimmed: trace grep needle . --no-trim]"),
         "the last line must name the command for the rest: {last}"
     );
 
-    let whole = f.trace(&["grep", "needle", ".", "--whole"]);
-    whole.ok();
-    assert!(!whole.stdout.contains("shortened"), "--whole is uncut:\n{}", whole.stdout);
+    let untrimmed = f.trace(&["grep", "needle", ".", "--no-trim"]);
+    untrimmed.ok();
+    assert!(!untrimmed.stdout.contains("trimmed to fit"), "--no-trim is untrimmed");
+    assert!(untrimmed.stdout.chars().count() > 30_000, "--no-trim prints every match line");
 }
 
 #[test]
 fn find_over_budget_names_every_file() {
-    let f = crowded_search_repo();
-    let r = f.trace_env(&["find", "*.py", "."], &[("TRACER_BUDGET", "600")]);
+    let f = crowded_search_repo(900, 1);
+    let r = f.trace(&["find", "*.py", ".", "--limit", "1000"]);
     r.ok();
-    for index in 0..30 {
-        assert!(r.stdout.contains(&format!("  m{index:02}.py")), "m{index:02}.py is unnamed:\n{}", r.stdout);
+    for index in 0..900 {
+        assert!(r.stdout.contains(&format!("  m{index:03}.py")), "m{index:03}.py is unnamed");
     }
-    assert!(r.stdout.contains("shortened to fit — whole: "), "{}", r.stdout);
+    assert!(r.stdout.contains("trimmed to fit — untrimmed: "), "{}", r.stdout.lines().last().unwrap_or(""));
 }
 
 /// The lines of a human search after its file header, up to the blank line
@@ -2903,63 +2904,6 @@ fn find_basename_matches_whole_names() {
     let r = f.trace(&["find", "Contact.php", ".", "--json"]);
     r.ok();
     assert_eq!(result_files(&r, "path"), vec!["src/Contact.php"], "{}", r.stdout);
-}
-
-/// A listing whose bare paths alone overrun the budget still names every
-/// file, one line per directory, and past that every directory with its
-/// count — inside the budget either way.
-#[test]
-fn listings_name_every_file_by_directory_when_paths_alone_overrun() {
-    let f = Fixture::new();
-    for directory in ["alpha", "beta"] {
-        for index in 0..40 {
-            f.write(&format!("src/{directory}/module_{index:02}.py"), "needle = 1\n");
-        }
-    }
-    f.commit("eighty files");
-    for command in ["grep", "find"] {
-        let args: Vec<&str> = match command {
-            "grep" => vec!["grep", "needle", "src"],
-            _ => vec!["find", "*.py", "src"],
-        };
-        let named = f.trace_env(&args, &[("TRACER_BUDGET", "1600")]);
-        named.ok();
-        assert!(named.stdout.len() <= 1600, "{command}: {} chars\n{}", named.stdout.len(), named.stdout);
-        for directory in ["alpha", "beta"] {
-            let line = named
-                .stdout
-                .lines()
-                .find(|line| line.starts_with(&format!("src/{directory}/: ")))
-                .unwrap_or_else(|| panic!("{command}: no {directory} line\n{}", named.stdout));
-            assert_eq!(line.matches("module_").count(), 40, "{command}: {line}");
-        }
-
-        let counted = f.trace_env(&args, &[("TRACER_BUDGET", "400")]);
-        counted.ok();
-        assert!(
-            counted.stdout.contains("src/alpha/: 40 files") && counted.stdout.contains("src/beta/: 40 files"),
-            "{command}: {}",
-            counted.stdout
-        );
-    }
-}
-
-#[test]
-fn a_listing_of_more_directories_than_the_budget_holds_names_how_many_are_left() {
-    let f = Fixture::new();
-    for directory in 0..60 {
-        for index in 0..2 {
-            f.write(&format!("src/directory_{directory:02}/module_{index}.py"), "needle = 1\n");
-        }
-    }
-    f.commit("sixty directories");
-    for args in [["grep", "needle", "src"], ["find", "*.py", "src"]] {
-        let r = f.trace_env(&args, &[("TRACER_BUDGET", "500")]);
-        r.ok();
-        assert!(r.stdout.chars().count() <= 500, "{}: {} chars\n{}", args[0], r.stdout.chars().count(), r.stdout);
-        assert!(r.stdout.contains("src/directory_00/: 2 files"), "{}: the first directories stay\n{}", args[0], r.stdout);
-        assert!(r.stdout.contains(" more directories\n"), "{}: names how many are left\n{}", args[0], r.stdout);
-    }
 }
 
 /// Every path argument takes several paths; a missing one is named, the

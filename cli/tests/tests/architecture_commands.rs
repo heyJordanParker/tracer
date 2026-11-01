@@ -1714,6 +1714,9 @@ fn api_from_head_matches_the_clean_working_tree() {
     f.write("src/cloud-sync.rs", "pub fn sync() {}\n");
     f.write("src/a/b.rs", "pub fn deep() {}\n");
     std::os::unix::fs::symlink("cloud.rs", f.root.join("src/link.rs")).unwrap();
+    for n in 0..300 {
+        f.write(&format!("src/many/m{n}.rs"), &(0..10).map(|i| format!("pub fn f{i}(value: u32) -> u32 {{ value }}\n")).collect::<String>());
+    }
     f.commit("layout");
     f.trace(&["api", "src", "-o", "tree.txt"]).ok();
     f.trace(&["api", "src", "--revision", "HEAD", "-o", "head.txt"]).ok();
@@ -1721,9 +1724,9 @@ fn api_from_head_matches_the_clean_working_tree() {
     assert_eq!(std::fs::read_to_string(f.root.join("head.txt")).unwrap(), tree);
     assert!(tree.contains("src/cloud.rs") && tree.contains("src/cloud/drive.rs"), "{tree}");
     assert_eq!(tree.matches("pub fn up()").count(), 1, "a link lists nothing the file it names doesn't: {tree}");
-    let cut = f.trace_env(&["api", "src", "--revision", "HEAD"], &[("TRACER_BUDGET", "150")]);
+    let cut = f.trace(&["api", "src", "--revision", "HEAD"]);
     cut.ok();
-    assert!(cut.stdout.contains("--revision HEAD"), "a collapsed file keeps its revision: {}", cut.stdout);
+    assert!(cut.stdout.lines().any(|line| line.contains("→ trace api") && line.contains("--revision HEAD")), "a collapsed file keeps its revision");
 }
 
 /// Every depth is listed unless `--max-depth` limits it, the way ripgrep
@@ -1919,26 +1922,20 @@ fn api_annotates_each_file_with_its_purposes_first_sentence() {
 #[test]
 fn api_collapses_the_least_imported_files_first_and_keeps_headers_whole() {
     let f = Fixture::new();
-    let exports = |prefix: &str| (0..6).map(|n| format!("export function {prefix}{n}(value: string, count: number): string {{ return value; }}\n")).collect::<String>();
-    f.write("core.ts", &exports("core"));
-    f.write("mid.ts", &format!("import {{ core0 }} from './core';\n{}", exports("mid")));
-    f.write("leaf.ts", &format!("import {{ core0 }} from './core';\nimport {{ mid0 }} from './mid';\n{}", exports("leaf")));
+    let exports = |prefix: &str, count: usize| (0..count).map(|n| format!("export function {prefix}{n}(value: string, count: number): string {{ return value; }}\n")).collect::<String>();
+    // Collapsing leaf.ts alone leaves the answer over the budget, so a second
+    // file collapses too, and it must be mid.ts, never core.ts.
+    f.write("core.ts", &exports("core", 200));
+    f.write("mid.ts", &format!("import {{ core0 }} from './core';\n{}", exports("mid", 200)));
+    f.write("leaf.ts", &format!("import {{ core0 }} from './core';\nimport {{ mid0 }} from './mid';\n{}", exports("leaf", 10)));
     f.commit("chain");
-    let mut collapsed_any = false;
-    for budget in (300..4000).step_by(100) {
-        let out = f.trace_env(&["api", "."], &[("TRACER_BUDGET", &budget.to_string())]);
-        out.ok();
-        let collapsed = |file: &str| out.stdout.lines().any(|line| line.contains(&format!(" {file}  … ")) && line.contains("→ trace api"));
-        for line in out.stdout.lines().filter(|line| line.trim_start().starts_with('L')) {
-            assert!(line.ends_with("{ … }  // complexity 1"), "a header was cut at budget {budget}: {line}\n{}", out.stdout);
-        }
-        if collapsed("core.ts") {
-            assert!(collapsed("mid.ts") && collapsed("leaf.ts"), "core.ts collapsed before less-imported files at budget {budget}:\n{}", out.stdout);
-        }
-        if collapsed("mid.ts") {
-            assert!(collapsed("leaf.ts"), "mid.ts collapsed before leaf.ts at budget {budget}:\n{}", out.stdout);
-        }
-        collapsed_any |= collapsed("leaf.ts");
+    let out = f.trace(&["api", "."]);
+    out.ok();
+    let collapsed = |file: &str| out.stdout.lines().any(|line| line.contains(&format!(" {file}  … ")) && line.contains("→ trace api"));
+    for line in out.stdout.lines().filter(|line| line.trim_start().starts_with('L')) {
+        assert!(line.ends_with("{ … }  // complexity 1"), "a header was cut: {line}");
     }
-    assert!(collapsed_any, "no budget collapsed a file");
+    let folds = out.stdout.lines().filter(|line| line.contains("→ trace api")).collect::<Vec<_>>().join("\n");
+    assert!(collapsed("leaf.ts") && collapsed("mid.ts"), "the two least-imported files collapse first:\n{folds}");
+    assert!(!collapsed("core.ts"), "the most-imported file keeps its declarations:\n{folds}");
 }

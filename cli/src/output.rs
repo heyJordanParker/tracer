@@ -34,8 +34,7 @@ use std::sync::OnceLock;
 /// The characters text output fits in: the longest Bash result Claude Code
 /// shows whole. It saves anything longer to a file and shows the Agent a
 /// 2,000-character preview. No flag changes it, so an agent never guesses
-/// how much of an answer it needs. `TRACER_BUDGET` sets it for the test
-/// suite alone, so a small fixture still overruns it.
+/// how much of an answer it needs.
 pub const DEFAULT_BUDGET: usize = 30_000;
 
 /// The length Claude Code measures text by: JavaScript's, in UTF-16 units.
@@ -58,14 +57,10 @@ pub fn clip(text: &str, room: usize) -> &str {
 static BUDGET: OnceLock<Option<usize>> = OnceLock::new();
 static DIRECTORY: OnceLock<String> = OnceLock::new();
 
-/// Fit text output to `DEFAULT_BUDGET`, once, or leave it uncut for
-/// `--whole`. A `TRACER_BUDGET` of 0 leaves it uncut too.
-pub fn set_whole(whole: bool) {
-    let chars = match whole {
-        true => 0,
-        false => std::env::var("TRACER_BUDGET").ok().and_then(|chars| chars.parse().ok()).unwrap_or(DEFAULT_BUDGET),
-    };
-    let _ = BUDGET.set((chars > 0).then_some(chars));
+/// Trim text output to `DEFAULT_BUDGET`, once, or leave it untrimmed for
+/// `--no-trim`.
+pub fn set_trim(trim: bool) {
+    let _ = BUDGET.set(trim.then_some(DEFAULT_BUDGET));
 }
 
 /// Record `-C <dir>` as typed, so every command this output names for the
@@ -114,7 +109,7 @@ pub struct Entry {
 /// down one level at a time to its last, then the next lowest, so the
 /// highest-ranked entries keep their detail longest and every entry keeps at
 /// least its last level. Returns each entry's chosen level and its text in
-/// input order, and how many were shortened.
+/// input order, and how many were trimmed.
 pub fn fit(entries: &[Entry], fixed: usize) -> (Vec<(usize, &str)>, usize) {
     let mut level = vec![0usize; entries.len()];
     if let Some(budget) = budget() {
@@ -132,21 +127,21 @@ pub fn fit(entries: &[Entry], fixed: usize) -> (Vec<(usize, &str)>, usize) {
             }
         }
     }
-    let shortened = level.iter().filter(|&&at| at > 0).count();
+    let trimmed = level.iter().filter(|&&at| at > 0).count();
     let chosen = entries
         .iter()
         .zip(level)
         .map(|(entry, at)| (at, entry.levels[at].as_str()))
         .collect();
-    (chosen, shortened)
+    (chosen, trimmed)
 }
 
-/// A fitted listing: its lines, how many entries were shortened, and the
+/// A fitted listing: its lines, how many entries were trimmed, and the
 /// level each entry printed at, in input order. An entry folded into its
 /// directory's line printed below every level it has.
 pub struct Fitted {
     pub texts: Vec<String>,
-    pub shortened: usize,
+    pub trimmed: usize,
     pub levels: Vec<usize>,
 }
 
@@ -157,14 +152,14 @@ pub struct Fitted {
 /// entry is, and past that the first directories with their counts while the
 /// budget holds, then how many directories are left.
 pub fn fit_listing(entries: &[Entry], paths: &[&str], fixed: usize) -> Fitted {
-    let (chosen, shortened) = fit(entries, fixed);
+    let (chosen, trimmed) = fit(entries, fixed);
     let levels: Vec<usize> = chosen.iter().map(|(level, _)| *level).collect();
     let size = |lines: &[String]| fixed + lines.iter().map(|line| width(line) + 1).sum::<usize>();
     let texts: Vec<String> = chosen.into_iter().map(|(_, text)| text.to_string()).collect();
     let Some(budget) = budget().filter(|&budget| size(&texts) > budget) else {
-        return Fitted { texts, shortened, levels };
+        return Fitted { texts, trimmed, levels };
     };
-    let folded = |texts: Vec<String>| Fitted { texts, shortened: entries.len(), levels: vec![usize::MAX; entries.len()] };
+    let folded = |texts: Vec<String>| Fitted { texts, trimmed: entries.len(), levels: vec![usize::MAX; entries.len()] };
     let mut directories: Vec<(&str, Vec<&str>)> = Vec::new();
     let mut at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for path in paths {
@@ -219,14 +214,14 @@ pub fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// The last line of an output the budget shortened: what was cut, and the
-/// command that returns it whole.
-pub fn shortened_line(shortened: usize, of: usize, unit: &str) -> String {
-    format!("[{shortened} of {of} {unit} shortened to fit — whole: {} --whole]", this_command())
+/// The last line of an output the budget trimmed: what was trimmed, and the
+/// command that returns it untrimmed.
+pub fn trimmed_line(trimmed: usize, of: usize, unit: &str) -> String {
+    format!("[{trimmed} of {of} {unit} trimmed to fit — untrimmed: {} --no-trim]", this_command())
 }
 
 pub fn closing_room(of: usize, unit: &str) -> usize {
-    width(&shortened_line(of, of, unit)) + 1
+    width(&trimmed_line(of, of, unit)) + 1
 }
 
 /// What a symbol command says when the repository it searched declares no
@@ -241,7 +236,7 @@ pub fn not_declared(symbol: &str, repo_root: &std::path::Path) -> String {
 
 static COMMAND: OnceLock<String> = OnceLock::new();
 
-/// Name the `trace` command that answers this call whole, for a call the
+/// Name the `trace` command that answers this call untrimmed, for a call the
 /// agent did not type: `trace hook` names the command for the tool it
 /// enriches.
 pub fn set_command(command: String) {
@@ -323,7 +318,7 @@ pub fn trim_marker(file: &str, flags: &str, last_line: usize, selection_end: usi
     let trace = trace_command();
     // The selection's last line was reached, so the trim cut that line.
     if last_line >= selection_end {
-        return format!("\n[trimmed at L{last_line} of {total_lines} — whole: {trace} read {quoted} --whole{flags}]\n");
+        return format!("\n[trimmed at L{last_line} of {total_lines} — untrimmed: {trace} read {quoted} --no-trim{flags}]\n");
     }
     format!(
         "\n[trimmed at L{last_line} of {total_lines} — continue: {trace} read {quoted} --lines {}:{}{flags}]\n",
@@ -454,5 +449,59 @@ impl Sink<'_> {
             w.write_all(b"\n")?;
         }
         Ok(w.flush()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One entry per path, its facts first and its bare path last.
+    fn listing(paths: &[String]) -> Vec<Entry> {
+        paths.iter().map(|path| Entry { rank: 0, levels: vec![format!("{path}  {{lines: 1}}"), path.clone()] }).collect()
+    }
+
+    fn fitted(paths: &[String], budget: usize) -> Fitted {
+        let named: Vec<&str> = paths.iter().map(String::as_str).collect();
+        within(Some(budget), || fit_listing(&listing(paths), &named, 0))
+    }
+
+    fn eighty_files() -> Vec<String> {
+        ["alpha", "beta"].iter().flat_map(|directory| (0..40).map(move |index| format!("src/{directory}/module_{index:02}.py"))).collect()
+    }
+
+    #[test]
+    fn a_listing_whose_bare_paths_overrun_names_every_file_one_line_per_directory() {
+        let listed = fitted(&eighty_files(), 1600);
+        assert_eq!(listed.texts.len(), 2, "{:?}", listed.texts);
+        for (line, directory) in listed.texts.iter().zip(["alpha", "beta"]) {
+            assert!(line.starts_with(&format!("src/{directory}/: ")), "{line}");
+            assert_eq!(line.matches("module_").count(), 40, "{line}");
+        }
+        assert_eq!(listed.trimmed, 80);
+    }
+
+    #[test]
+    fn a_listing_whose_names_overrun_counts_each_directory() {
+        let listed = fitted(&eighty_files(), 400);
+        assert_eq!(listed.texts, vec!["src/alpha/: 40 files", "src/beta/: 40 files"]);
+    }
+
+    #[test]
+    fn a_listing_of_more_directories_than_the_budget_holds_names_how_many_are_left() {
+        let paths: Vec<String> = (0..60).flat_map(|directory| (0..2).map(move |index| format!("src/directory_{directory:02}/module_{index}.py"))).collect();
+        let listed = fitted(&paths, 500);
+        let size: usize = listed.texts.iter().map(|line| width(line) + 1).sum();
+        assert!(size <= 500, "{size}: {:?}", listed.texts);
+        assert_eq!(listed.texts[0], "src/directory_00/: 2 files");
+        let last = listed.texts.last().unwrap();
+        assert!(last.starts_with("… ") && last.ends_with(" more directories"), "{last}");
+    }
+
+    #[test]
+    fn untrimmed_output_keeps_every_entry_at_its_most_detail() {
+        let listed = within(None, || fit_listing(&listing(&eighty_files()), &eighty_files().iter().map(String::as_str).collect::<Vec<_>>(), 0));
+        assert_eq!(listed.trimmed, 0);
+        assert!(listed.texts.iter().all(|line| line.ends_with("{lines: 1}")));
     }
 }

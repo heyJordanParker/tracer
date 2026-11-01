@@ -403,8 +403,8 @@ fn fitted_calls<'a>(head: &str, calls: &'a [Call], file: &str, budget: Option<us
     if whole.len() <= budget {
         return (format!("{head}:\n{whole}"), every());
     }
-    let shortened = crate::output::shortened_line(calls.len(), calls.len(), "calls");
-    let Some(budget) = budget.checked_sub(shortened.len() + 3) else {
+    let trimmed = crate::output::trimmed_line(calls.len(), calls.len(), "calls");
+    let Some(budget) = budget.checked_sub(trimmed.len() + 3) else {
         return (String::new(), HashSet::new());
     };
     let per_function: Vec<CallEntry> = grouped(calls, target_key)
@@ -414,7 +414,7 @@ fn fitted_calls<'a>(head: &str, calls: &'a [Call], file: &str, budget: Option<us
     let (text, cut, printed) = fit_entries(&per_call, budget)
         .or_else(|| fit_entries(&per_function, budget))
         .unwrap_or_else(|| (by_file(calls, file, budget), calls.len(), HashSet::new()));
-    (format!("{head}:\n{text}  {}\n", crate::output::shortened_line(cut, calls.len(), head)), printed)
+    (format!("{head}:\n{text}  {}\n", crate::output::trimmed_line(cut, calls.len(), head)), printed)
 }
 
 struct CallEntry<'a> {
@@ -566,4 +566,34 @@ fn excerpt(lines: &[String], start: i64, end: i64) -> String {
         .map(|line| line.trim_end_matches(['\n', '\r']))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A call on `line` to `method`, declared in `file`, with five call sites
+    /// elsewhere.
+    fn resolved(line: i64, method: &str, file: &str) -> Call {
+        let sites = (0..5)
+            .map(|n| CallSite { file: "refund.php".into(), line: n, caller: Some("back".into()), text: format!("return $ledger->{method}({n});") })
+            .collect();
+        let target = Target::Resolved { file: file.into(), declared_at: 3, callers: 5, source: "function body() {}".into(), held: false, also_called_from: sites };
+        Call { line, method: method.into(), target }
+    }
+
+    #[test]
+    fn calls_into_other_files_get_their_call_sites_before_calls_into_the_reading_file() {
+        let (into_reading, into_other) = (resolved(6, "note", "here.php"), resolved(7, "post", "away.php"));
+        // The reading file's call comes first, so only the ordering puts the
+        // other file's call sites in the room for one entry's sites.
+        let entries = [CallEntry::of(vec![&into_reading], true, "here.php"), CallEntry::of(vec![&into_other], true, "here.php")];
+        assert!(entries[0].into_reading_file && !entries[1].into_reading_file);
+        let budget = entries[1].levels[0].len() + entries[0].levels[1].len();
+
+        let (text, _, printed) = fit_entries(&entries, budget).unwrap();
+        assert!(text.contains("return $ledger->post(0);"), "the other file's call sites print:\n{text}");
+        assert!(!text.contains("return $ledger->note(0);"), "the reading file's call sites took the room:\n{text}");
+        assert_eq!(printed.len(), 1);
+    }
 }

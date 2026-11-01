@@ -555,15 +555,15 @@ fn one(path: &Path, show_hidden: bool, recent: bool, limit: Option<usize>, as_js
     let root = format!("{}/", base.to_string_lossy());
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let fixed = root.len() + 1 + footer.len() + 1 + crate::output::closing_room(rows.len(), "entries");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &names, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&rows, &names, fixed);
     crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
     let mut answer = format!("{root}\n");
     for text in texts {
         answer.push_str(&format!("{text}\n"));
     }
     answer.push_str(&format!("{footer}\n"));
-    if shortened > 0 {
-        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "entries")));
+    if trimmed > 0 {
+        answer.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, rows.len(), "entries")));
     }
     crate::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_list", delivery)?;
     Ok(value)

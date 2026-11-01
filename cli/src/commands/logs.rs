@@ -695,12 +695,12 @@ fn render_human(
         ),
     };
     let summary = format!("\nentries={} files={} scanned={}{}", entries.len(), files_matched, scanned, window);
-    let (chosen, shortened) = crate::output::fit(&rows, summary.len() + 1 + crate::output::closing_room(rows.len(), "entries"));
+    let (chosen, trimmed) = crate::output::fit(&rows, summary.len() + 1 + crate::output::closing_room(rows.len(), "entries"));
     for (_, text) in chosen {
         println!("{text}");
     }
     println!("{summary}");
-    if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, rows.len(), "entries"));
+    if trimmed > 0 {
+        println!("{}", crate::output::trimmed_line(trimmed, rows.len(), "entries"));
     }
 }

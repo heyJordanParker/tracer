@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- `--no-trim` prints any command's answer untrimmed, in place of `--whole`. Every trimmed answer says so with one word: `[3 of 40 files trimmed to fit — untrimmed: trace grep Cart src --no-trim]`, `[trimmed at L1 of 1 — untrimmed: trace read bundle.js --no-trim]` for a line longer than the budget, and `… 212 commits trimmed — untrimmed: …` in `history --contains`. The `--json` query key is `no_trim`.
+- The `TRACER_BUDGET` environment variable is gone. Nothing sizes the 30,000 characters an answer is trimmed to.
+- A tracer hook that fails or is cancelled names its real cause, such as `trace hook PostToolUseFailure: tracer: $.process.run(…) aborted`, instead of a made-up `exited 1`.
+
 ## 0.7.0
 
 - Claude no longer guesses how much of an answer to read. Every text answer fits the 30,000 characters Claude Code shows whole, and `--budget` is gone, so a `trace` command reads like a `grep`, with no size to choose.

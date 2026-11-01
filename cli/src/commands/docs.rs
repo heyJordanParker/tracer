@@ -6,7 +6,7 @@
 //!   agent does not hold whole yet. Walks each path's ancestor chain, nearest
 //!   doc first, and partitions it against the agent's record. As text, each
 //!   doc is a Markdown section (`## <path>` then its text), sent from its first
-//!   unread line; the first doc that does not fit `--budget` is cut at a whole
+//!   unread line; the first doc that does not fit the budget is cut at a whole
 //!   line and ends in `read`'s trim marker, and the docs after it are queued
 //!   by name. A doc counts as loaded only once every line arrived. Nothing
 //!   prints when every doc is already loaded. As JSON the new docs arrive

@@ -337,12 +337,12 @@ fn render_function(p: &Value) -> String {
         }
         entries.push(crate::output::Entry { rank: -(index as i64), levels: vec![format!("{whole}\n"), header] });
     }
-    let (chosen, shortened) = crate::output::fit(&entries, out.len() + crate::output::closing_room(entries.len(), "commits"));
+    let (chosen, trimmed) = crate::output::fit(&entries, out.len() + crate::output::closing_room(entries.len(), "commits"));
     for (_, text) in chosen {
         let _ = writeln!(out, "{text}");
     }
-    if shortened > 0 {
-        let _ = writeln!(out, "{}", crate::output::shortened_line(shortened, entries.len(), "commits"));
+    if trimmed > 0 {
+        let _ = writeln!(out, "{}", crate::output::trimmed_line(trimmed, entries.len(), "commits"));
     }
     out
 }
@@ -711,10 +711,10 @@ fn annotate(shown: &[&Found], matcher: Option<&Regex>, counts: Option<&Counts>, 
         .collect()
 }
 
-fn pickaxe_payload(pattern: &str, regex: bool, whole: bool, repo_root: &Path) -> Result<Value> {
+fn pickaxe_payload(pattern: &str, regex: bool, untrimmed: bool, repo_root: &Path) -> Result<Value> {
     let commits = git_activity::commits(repo_root);
     let (found, counts) = pickaxe(pattern, regex, &commits, repo_root)?;
-    let shown: Vec<&Found> = if whole || found.len() <= NEWEST_SHOWN + 1 {
+    let shown: Vec<&Found> = if untrimmed || found.len() <= NEWEST_SHOWN + 1 {
         found.iter().collect()
     } else {
         found[..NEWEST_SHOWN].iter().chain(found.last()).collect()
@@ -781,9 +781,9 @@ fn render_pickaxe(p: &Value) {
             }
         })
         .collect();
-    let gap = (between > 0).then(|| format!("… {between} commits between: {} --whole\n", crate::output::this_command()));
+    let gap = (between > 0).then(|| format!("… {between} commits trimmed — untrimmed: {} --no-trim\n", crate::output::this_command()));
     let fixed = head.len() + gap.as_ref().map_or(0, |gap| gap.len() + 1) + crate::output::closing_room(entries.len(), "commits");
-    let (chosen, shortened) = crate::output::fit(&entries, fixed);
+    let (chosen, trimmed) = crate::output::fit(&entries, fixed);
     print!("{head}");
     let oldest = chosen.len().saturating_sub(1);
     for (index, (_, text)) in chosen.iter().enumerate() {
@@ -792,8 +792,8 @@ fn render_pickaxe(p: &Value) {
         }
         println!("{text}");
     }
-    if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, entries.len(), "commits"));
+    if trimmed > 0 {
+        println!("{}", crate::output::trimmed_line(trimmed, entries.len(), "commits"));
     }
 }
 
@@ -922,12 +922,12 @@ fn render_commit(p: &Value) {
         })
         .collect();
     let fixed = head.len() + crate::output::closing_room(entries.len(), "files");
-    let crate::output::Fitted { texts, shortened, .. } = crate::output::fit_listing(&entries, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, .. } = crate::output::fit_listing(&entries, &paths, fixed);
     for text in texts {
         println!("{text}");
     }
-    if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, entries.len(), "files"));
+    if trimmed > 0 {
+        println!("{}", crate::output::trimmed_line(trimmed, entries.len(), "files"));
     }
 }
 
@@ -973,13 +973,13 @@ pub fn run(
         }
         let here = Path::new(".");
         let repo_root = cache::worktree_root_for(here).unwrap_or_else(|| cache::display_root(here));
-        let whole = crate::output::budget().is_none();
-        let payload = pickaxe_payload(pattern, regex, whole, &repo_root)?;
+        let untrimmed = crate::output::budget().is_none();
+        let payload = pickaxe_payload(pattern, regex, untrimmed, &repo_root)?;
         if !as_json {
             render_pickaxe(&payload);
         }
         return Ok(crate::output::document(
-            json!({"mode": "contains", "pattern": pattern, "regex": regex, "whole": whole}),
+            json!({"mode": "contains", "pattern": pattern, "regex": regex, "no_trim": untrimmed}),
             json!({
                 "repo_root": repo_root.to_string_lossy(),
                 "searched_commits": payload["searched"],

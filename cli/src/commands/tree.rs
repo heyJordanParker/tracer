@@ -181,7 +181,7 @@ pub fn run(path: &Path, max_depth: Option<usize>, as_json: bool) -> Result<Value
         + 1
         + footer.as_ref().map_or(0, |footer| footer.len() + 1)
         + crate::output::closing_room(rows.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&rows, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&rows, &paths, fixed);
     crate::summary::withdraw_cut(&mut delivery, &offered, &levels, 1);
     let mut answer = format!("{root}\n");
     for text in texts {
@@ -190,8 +190,8 @@ pub fn run(path: &Path, max_depth: Option<usize>, as_json: bool) -> Result<Value
     if let Some(footer) = footer {
         answer.push_str(&format!("{footer}\n"));
     }
-    if shortened > 0 {
-        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, rows.len(), "files")));
+    if trimmed > 0 {
+        answer.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, rows.len(), "files")));
     }
     crate::docs::print_with_docs(&answer, std::slice::from_ref(&base), "trace_tree", delivery)?;
     Ok(value)

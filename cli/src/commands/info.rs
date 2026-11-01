@@ -373,7 +373,7 @@ fn file_human(
         printed += 1;
     }
     if printed < shown.len() {
-        out.push_str(&format!("{}\n", crate::output::shortened_line(shown.len() - printed, shown.len(), "functions")));
+        out.push_str(&format!("{}\n", crate::output::trimmed_line(shown.len() - printed, shown.len(), "functions")));
     }
     if !full && total > 3 {
         out.push_str(&format!("  … {} more (run without --brief to see all)\n", total - 3));

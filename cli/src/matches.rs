@@ -317,7 +317,7 @@ pub fn render_human(
         counted(files.len(), "file", "files"),
     );
     let fixed = footer.len() + 1 + signpost.map_or(0, |line| line.len() + 1) + crate::output::closing_room(entries.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&entries, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&entries, &paths, fixed);
     // The bare path is the last level; every level above it has the header.
     let headline_levels = if files_only { 1 } else { 2 };
     crate::summary::withdraw_cut(delivery, &offered, &levels, headline_levels);
@@ -329,8 +329,8 @@ pub fn render_human(
     if let Some(line) = signpost {
         out.push_str(&format!("{line}\n"));
     }
-    if shortened > 0 {
-        out.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
+    if trimmed > 0 {
+        out.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, entries.len(), "files")));
     }
     out
 }
@@ -383,7 +383,7 @@ pub fn render_native(
         return String::new();
     }
     let fixed = crate::output::closing_room(entries.len(), "files");
-    let crate::output::Fitted { texts, shortened, levels } = crate::output::fit_listing(&entries, &paths, fixed);
+    let crate::output::Fitted { texts, trimmed, levels } = crate::output::fit_listing(&entries, &paths, fixed);
     for ((_, lines), level) in offered.iter().zip(&levels) {
         if let Some(key) = lines.as_ref().filter(|_| *level >= 1) {
             delivery.withdraw(crate::session::Kind::Matches, key);
@@ -392,8 +392,8 @@ pub fn render_native(
     let facts: Vec<Option<String>> = offered.into_iter().map(|(facts, _)| facts).collect();
     crate::summary::withdraw_cut(delivery, &facts, &levels, 2);
     let mut out: String = texts.iter().map(|text| format!("{text}\n")).collect();
-    if shortened > 0 {
-        out.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
+    if trimmed > 0 {
+        out.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, entries.len(), "files")));
     }
     out
 }

@@ -57,7 +57,7 @@ pub fn render_sections(sections: &[Section], facts: &HashMap<String, Facts>, rep
     let share = crate::output::budget()
         .filter(|&budget| whole + closing > budget)
         .map(|budget| budget.saturating_sub(closing) / sections.len().max(1));
-    let mut shortened = 0;
+    let mut trimmed = 0;
     let mut files = 0;
     for ((section, entries), keys) in sections.iter().zip(&entries).zip(&offered) {
         println!("{}", section.heading);
@@ -66,16 +66,16 @@ pub fn render_sections(sections: &[Section], facts: &HashMap<String, Facts>, rep
             (Some(budget), Some(share)) => budget - share + section.heading.len() + 1,
             _ => section.heading.len() + 1,
         };
-        let crate::output::Fitted { texts, shortened: cut, levels } = crate::output::fit_listing(entries, &paths, fixed);
+        let crate::output::Fitted { texts, trimmed: cut, levels } = crate::output::fit_listing(entries, &paths, fixed);
         crate::summary::withdraw_cut(&mut delivery, keys, &levels, 1);
         for text in texts {
             println!("{text}");
         }
-        shortened += cut;
+        trimmed += cut;
         files += entries.len();
     }
-    if shortened > 0 {
-        println!("{}", crate::output::shortened_line(shortened, files, "files"));
+    if trimmed > 0 {
+        println!("{}", crate::output::trimmed_line(trimmed, files, "files"));
     }
     if std::io::Write::flush(&mut std::io::stdout()).is_ok() {
         delivery.commit();

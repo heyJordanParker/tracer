@@ -174,7 +174,7 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
         })
         .collect();
     let (chosen, _) = crate::output::fit(&offered, closing);
-    let shortened = chosen.iter().filter(|(level, _)| start + level > 0).count();
+    let trimmed = chosen.iter().filter(|(level, _)| start + level > 0).count();
     let mut delivery = Delivery::default();
     let mut answer = String::new();
     for (index, (level, text)) in chosen.into_iter().enumerate() {
@@ -194,8 +194,8 @@ pub fn run(paths: &[PathBuf], as_json: bool) -> Result<Value> {
             _ => answer.push_str(text),
         }
     }
-    if shortened > 0 {
-        answer.push_str(&format!("{}\n", crate::output::shortened_line(shortened, entries.len(), "files")));
+    if trimmed > 0 {
+        answer.push_str(&format!("{}\n", crate::output::trimmed_line(trimmed, entries.len(), "files")));
     }
     crate::docs::print_with_docs(&answer, paths, "trace_structure", delivery)?;
     Ok(document)

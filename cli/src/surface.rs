@@ -117,9 +117,9 @@ pub fn render_within(
     let whole = render_rows(rows, file, window, None, Fit::Names, held);
     match budget {
         Some(budget) if whole.text.len() > budget => {
-            let closing = crate::output::shortened_line(whole.of, whole.of, "declarations").len() + 1;
+            let closing = crate::output::trimmed_line(whole.of, whole.of, "declarations").len() + 1;
             let fitted = render_rows(rows, file, window, Some(budget.saturating_sub(closing)), Fit::Names, held);
-            format!("{}{}\n", fitted.text, crate::output::shortened_line(fitted.cut, fitted.of, "declarations"))
+            format!("{}{}\n", fitted.text, crate::output::trimmed_line(fitted.cut, fitted.of, "declarations"))
         }
         _ => whole.text,
     }

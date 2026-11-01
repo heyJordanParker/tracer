@@ -59,11 +59,11 @@ struct Cli {
     #[arg(long, global = true, value_name = "JQ")]
     filter: Option<String>,
 
-    /// Print the whole answer, uncut. Text output otherwise fits the
-    /// 30,000 characters Claude Code shows whole: detail is cut, never a
-    /// file or declaration, and the last line names this flag.
-    #[arg(long, global = true)]
-    whole: bool,
+    /// Print the answer untrimmed. Text output otherwise is trimmed to fit
+    /// the 30,000 characters Claude Code shows whole: detail is trimmed,
+    /// never a file or declaration, and the last line names this flag.
+    #[arg(long = "no-trim", global = true)]
+    no_trim: bool,
 
     /// The agent whose session record this call reads and writes, in place
     /// of `TRACER_AGENT_ID`.
@@ -120,8 +120,8 @@ enum Command {
         /// tree.
         #[arg(long, value_name = "REV")]
         revision: Option<String>,
-        /// Write the API to FILE instead of printing it, uncut by --budget
-        /// and without line numbers or file facts, so two versions compare
+        /// Write the API to FILE instead of printing it, untrimmed and
+        /// without line numbers or file facts, so two versions compare
         /// line by line.
         #[arg(short = 'o', long, value_name = "FILE", conflicts_with = "json")]
         output: Option<PathBuf>,
@@ -557,7 +557,7 @@ fn run() -> Result<()> {
         }
         output::set_directory(dir.to_string_lossy().into_owned());
     }
-    output::set_whole(cli.whole);
+    output::set_trim(!cli.no_trim);
     if let Some(agent) = cli.agent {
         session::set_agent(agent);
     }
