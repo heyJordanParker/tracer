@@ -10164,7 +10164,7 @@ function defineMod(definition) {
   return definition;
 }
 
-// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-I86bex/release/src/mod.ts
+// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-2Q2SvS/release/src/mod.ts
 var options = {
   tracerOnly: option.toggle({
     title: "Claude reads files only through tracer",
@@ -10206,16 +10206,18 @@ function refusalOf(printed) {
 async function hook(mod, event, { deadline }, input) {
   const timeoutMs = Math.max(deadline - Date.now(), MARGIN_MS);
   const argv = ["trace", "hook", event, "--harness", "claude", "--deadline-ms", String(timeoutMs - MARGIN_MS), ...mod.options.tracerOnly ? ["--tracer-only"] : []];
-  const traced = await process.run(argv, { cwd: input.cwd, stdin: JSON.stringify(input), timeoutMs }).catch((error) => ({ exitCode: 1, stdout: "", stderr: messageOf(error) }));
-  if (traced.exitCode === 0)
+  const traced = await process.run(argv, { cwd: input.cwd, stdin: JSON.stringify(input), timeoutMs }).catch((error) => new Error(`trace hook ${event}: ${messageOf(error)}`));
+  if (!(traced instanceof Error) && traced.exitCode === 0)
     return traced.stdout.trim() === "" ? undefined : JSON.parse(traced.stdout);
   if (event === "PreToolUse")
     return;
+  if (traced instanceof Error)
+    throw traced;
   throw new Error(`trace hook ${event} exited ${traced.exitCode}: ${traced.stderr.trim().split(`
 `).at(-1) ?? ""}`);
 }
 
-// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-I86bex/release/hooks/register.ts
+// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-2Q2SvS/release/hooks/register.ts
 function register(addHook, options2) {
   registerMod(addHook, tracer, options2);
 }

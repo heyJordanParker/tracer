@@ -10,8 +10,8 @@
       "description": "Code intelligence for Claude Code: every file Claude reads, edits, or searches arrives with its declarations, its callers, its git history, and the project docs it has not read yet.",
       "source": {
         "source": "archive",
-        "url": "https://github.com/heyJordanParker/tracer/releases/download/v0.6.3/tracer-0.6.3.zip",
-        "sha256": "b57e8faffe5c221e86470233cb9eb594d0e8e7638709e3ccf2cbf1df1e40bf85"
+        "url": "https://github.com/heyJordanParker/tracer/releases/download/v0.7.0/tracer-0.7.0.zip",
+        "sha256": "e28fe7f4b3300b2d6aeabf87599a3cbcafab3b151ac9d6d7158232448d6126e6"
       }
     },
     {
