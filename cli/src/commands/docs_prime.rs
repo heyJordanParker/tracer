@@ -21,12 +21,11 @@
 //! is harness-internal state managed by Claude Code itself and intentionally
 //! out of tracer's scope — the primer models repo docs only.
 //!
-//! Each top-level doc's recursive `@include` graph is walked by
+//! Each top-level doc's recursive `@path` import graph is walked by
 //! `nested_memory::load_includes` (the locked reuse target — no duplicate
-//! include logic lives here). The boundary passed to `load_includes` is the
-//! containment root each doc family belongs to: the repo root for the in-repo
-//! chain, and `$HOME/.claude/` for the user-global doc, so @-imports stay
-//! anchored to their own tree.
+//! import logic lives here). The in-repo chain's imports stay inside the
+//! repository, and the user-global doc's may reach any file, as Claude Code
+//! loads them.
 //!
 //! Emission runs through `session::record_emission` with
 //! `source = "context_prime_session_start" | "context_prime_post_compact"`.
@@ -190,7 +189,7 @@ fn start_chain(
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| global.clone());
-        load_one(&global, &boundary, kind, pass, session, &mut memories);
+        load_one(&global, &boundary, true, kind, pass, session, &mut memories);
     }
 
     // 2. Project-root rules chain — repo_root down to cwd. Both harness
@@ -205,7 +204,7 @@ fn start_chain(
             (dir.join("AGENTS.md"), "agents_md"),
             (dir.join("Agents.md"), "agents_md"),
         ] {
-            load_one(&candidate, repo_root, kind, pass, session, &mut memories);
+            load_one(&candidate, repo_root, false, kind, pass, session, &mut memories);
         }
     }
     memories
@@ -257,12 +256,14 @@ fn report(
     out
 }
 
-/// Try to load one top-level doc plus its `@include` graph, appending to
-/// `memories`. Silently skips missing / empty / outside-boundary / already-
-/// surfaced files — every gate already lives in `try_load` and `load_includes`.
+/// Try to load one top-level doc plus its `@path` import graph, appending to
+/// `memories`. Silently skips missing / empty / already-surfaced files and a
+/// project doc's outside imports — every gate already lives in `try_load` and
+/// `load_includes`.
 fn load_one(
     path: &Path,
     boundary: &Path,
+    user_scope: bool,
     kind: &str,
     pass: &mut BTreeSet<String>,
     session: &mut BTreeSet<String>,
@@ -275,6 +276,7 @@ fn load_one(
         Path::new(&mem.path),
         &mem.content,
         boundary,
+        user_scope,
         pass,
         session,
         0,

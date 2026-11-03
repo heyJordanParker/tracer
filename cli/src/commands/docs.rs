@@ -15,7 +15,7 @@
 //!   `--source` names the delivering surface in the record, `trace_docs` by
 //!   default.
 //!
-//! - `--graph`: the whole-repo docs graph (doc-file nodes + `@include`
+//! - `--graph`: the whole-repo docs graph (doc-file nodes + `@path` import
 //!   edges), built in memory per call, plus the "available but not loaded"
 //!   set computed against the agent's record when a session is active.
 //! - `status`: the agent-facing "what do I have right now?" query. With no

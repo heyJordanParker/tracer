@@ -1,10 +1,10 @@
 //! Docs-graph builder: discovers every recognized project-rules markdown file
-//! in the repo, resolves `@include` directives, parses conditional
+//! in the repo, resolves `@path` imports, parses conditional
 //! `paths:` frontmatter onto rule nodes. Two harness conventions are
 //! recognized: Claude Code's `CLAUDE.md`/`Claude.md` (plus `.local.md`
 //! peer) and OpenAI's `AGENTS.md`/`Agents.md` (plus `.local.md` peer)
 //! — the cross-harness convention adopted by Codex, Cursor, Aider, Jules,
-//! Amp et al. Both share the file-list discovery and the same `@include`/
+//! Amp et al. Both share the file-list discovery and the same `@path`/
 //! `paths:` mechanics; each gets its own `kind` (`agents_md` /
 //! `agents_local_md` mirror the existing `claude_md` / `local_md`).
 //!
@@ -38,7 +38,7 @@ pub struct DocNode {
     pub paths_globs: Option<Vec<String>>,
 }
 
-/// `source` includes `target` via an `@include` directive (or is a rules
+/// `source` includes `target` via an `@path` import (or is a rules
 /// file whose conditional `paths:` matched).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocEdge {
@@ -222,11 +222,12 @@ fn assemble(
             },
         );
 
-        // Resolve @-includes through nested_memory's shared walker.
+        // Resolve @path imports through nested_memory's shared walker.
         let included = nested_memory::load_includes(
             path,
             &content,
             repo_root,
+            false,
             &mut pass_dedupe,
             &mut session_dedupe,
             0,

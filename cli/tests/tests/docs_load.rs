@@ -576,3 +576,93 @@ fn unconditional_user_rules_reach_session_start_conditional_reach_file_touch() {
         "unconditional user-global rule must not be delivered twice in one session: {again_v}"
     );
 }
+
+// --- @path imports ------------------------------------------------------------
+
+fn doc_paths(v: &serde_json::Value) -> Vec<String> {
+    v["results"]
+        .as_array()
+        .expect("docs must be an array")
+        .iter()
+        .map(|d| d["path"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_nested_doc_brings_the_files_it_imports_as_claude_code_reads_them() {
+    let f = docs_repo();
+    f.write(
+        "sub/Claude.md",
+        concat!(
+            "# Sub rules\n\n",
+            "@extra.md\n",
+            "See @docs/my\\ notes.md#setup for setup.\n",
+            "@include old.md\n",
+            "Mentioned only: `@literal.md`\n",
+            "<!-- @commented.md -->\n",
+            "<!--\n@commented.md\n-->\n",
+            "```\n@fenced.md\n```\n",
+            "Mail me@example.md\n",
+            "@logo.svg\n",
+        ),
+    );
+    for name in ["extra.md", "docs/my notes.md", "old.md", "include", "literal.md", "commented.md", "fenced.md", "example.md", "logo.svg"] {
+        f.write(&format!("sub/{name}"), &format!("# {name}\n"));
+    }
+    f.commit("nested doc with imports");
+
+    let sid = fresh_session_id("imports");
+    let r = f.trace_env(&["docs", "sub/util.py", "--json"], &[("CLAUDE_CODE_SESSION_ID", sid.as_str())]);
+    r.ok();
+    assert_eq!(
+        doc_paths(&r.view()),
+        ["sub/Claude.md", "sub/extra.md", "sub/docs/my notes.md", "sub/include", "Claude.md"],
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn imports_load_four_hops_deep() {
+    let f = docs_repo();
+    f.write("sub/Claude.md", "# Sub rules\n\n@one.md\n");
+    f.write("sub/one.md", "@two.md\n");
+    f.write("sub/two.md", "@three.md\n");
+    f.write("sub/three.md", "@four.md\n");
+    f.write("sub/four.md", "@five.md\n");
+    f.write("sub/five.md", "# Five hops away\n");
+    f.commit("import chain");
+
+    let sid = fresh_session_id("import-depth");
+    let r = f.trace_env(&["docs", "sub/util.py", "--json"], &[("CLAUDE_CODE_SESSION_ID", sid.as_str())]);
+    r.ok();
+    assert_eq!(
+        doc_paths(&r.view()),
+        ["sub/Claude.md", "sub/one.md", "sub/two.md", "sub/three.md", "sub/four.md", "Claude.md"],
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
+fn a_user_rule_imports_outside_the_repository_and_a_project_doc_does_not() {
+    let home = UserHome::new("imports-outside");
+    std::fs::write(home.root.join("shared.md"), "# Shared by the user rule\n").unwrap();
+    std::fs::write(home.root.join("outside.md"), "# Outside the repository\n").unwrap();
+    home.write_rule("global.md", "# Global\n\n@~/shared.md\n");
+
+    let f = docs_repo();
+    f.write("sub/Claude.md", &format!("# Sub rules\n\n@{}\n", home.root.join("outside.md").display()));
+    f.commit("project doc imports an outside file");
+
+    let sid = fresh_session_id("imports-outside");
+    let home_str = home.root.to_string_lossy().into_owned();
+    let env = [("HOME", home_str.as_str()), ("CLAUDE_CODE_SESSION_ID", sid.as_str())];
+    let start = f.trace_env(&["docs", &f.root.to_string_lossy(), "--json"], &env);
+    start.ok();
+    assert!(any_doc_ends_with(&start.view(), "shared.md"), "{}", start.stdout);
+
+    let touch = f.trace_env(&["docs", "sub/util.py", "--json"], &env);
+    touch.ok();
+    assert!(!any_doc_ends_with(&touch.view(), "outside.md"), "{}", touch.stdout);
+}

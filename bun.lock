@@ -1,17 +1,18 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "tracer",
       "dependencies": {
-        "@cmodjs/core": "^5.0.0",
+        "@cmodjs/core": "^5.2.0",
       },
     },
   },
   "packages": {
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
-    "@cmodjs/core": ["@cmodjs/core@5.0.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-ssKVmLpkpzFE1me/rahe3BGBIIZCKhfL10bB8u5xzLwkZ4zIvivL0lK7d9jQFqs005uTokizeLAcViuctHM8yg=="],
+    "@cmodjs/core": ["@cmodjs/core@5.2.0", "", { "dependencies": { "bun-types": "^1.4.2", "json-schema-to-ts": "^3.1.1" } }, "sha512-v2G06JCrG+qyeWAZ1jvd+OANbHVxV5W6rtnBvnVmJOHe2RPR3aLMunmwnCnVk0dlh9aUTnw9ubkH8EnvdYo8/Q=="],
 
     "@types/node": ["@types/node@26.6.4", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg=="],
 

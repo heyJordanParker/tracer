@@ -80,7 +80,7 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 | Command | Answers |
 |---|---|
 | `trace docs <paths> [--skip PATH]` | The docs of each path not yet loaded in this context, nearest first. |
-| `trace docs <path> --graph` | The repository's whole docs graph, with `@include` edges and path-scoped rules. |
+| `trace docs <path> --graph` | The repository's whole docs graph, with `@path` import edges and path-scoped rules. |
 | `trace docs status [<path>]` | What this context has loaded, and from where. |
 | `trace docs prime [<files>]` | Records docs the harness loaded itself, so tracer never sends them. |
 | `trace docs reset` | Forgets what this context loaded, after a compaction or `/clear`. |

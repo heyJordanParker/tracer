@@ -2,18 +2,32 @@
 //! Consumed by `trace read` and `trace docs`. Replicates Claude Code's
 //! Claude.md walk-up that a subprocess `read` would otherwise bypass.
 //!
-//! Limits matched: @include depth cap (5), pass + session dedupe by resolved
-//! path, visited-dir tracking in rules recursion, nested traversal bounded
-//! to file dir..repo_root, external @include blocked, 40k-char large warning.
+//! Limits matched: `@path` imports four hops deep, pass + session dedupe by
+//! resolved path, visited-dir tracking in rules recursion, nested traversal
+//! bounded to file dir..repo_root, a project doc's imports kept inside the
+//! repository, 40k-char large warning.
 //!
 //! Session-scoped dedupe across invocations lives in `crate::session`.
 
+use regex::Regex;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-const MAX_INCLUDE_DEPTH: i32 = 5;
+const MAX_INCLUDE_DEPTH: i32 = 4;
 const LARGE_MEMORY_THRESHOLD: usize = 40_000;
+const TEXT_EXTENSIONS: &[&str] = &[
+    "md", "txt", "text", "json", "yaml", "yml", "toml", "xml", "csv", "html", "htm", "css", "scss",
+    "sass", "less", "js", "ts", "tsx", "jsx", "mjs", "cjs", "mts", "cts", "py", "pyi", "pyw", "rb",
+    "erb", "rake", "go", "rs", "java", "kt", "kts", "scala", "c", "cpp", "cc", "cxx", "h", "hpp",
+    "hxx", "cs", "swift", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "env", "ini", "cfg",
+    "conf", "config", "properties", "sql", "graphql", "gql", "proto", "vue", "svelte", "astro",
+    "ejs", "hbs", "pug", "jade", "php", "pl", "pm", "lua", "r", "dart", "ex", "exs", "erl", "hrl",
+    "clj", "cljs", "cljc", "edn", "hs", "lhs", "elm", "ml", "mli", "f", "f90", "f95", "for",
+    "cmake", "make", "makefile", "gradle", "sbt", "rst", "adoc", "asciidoc", "org", "tex", "latex",
+    "lock", "log", "diff", "patch",
+];
 
 #[derive(Clone)]
 pub struct LoadedMemory {
@@ -31,7 +45,7 @@ fn resolve(p: &Path) -> Option<PathBuf> {
 
 /// Instruction files for a path, nearest first: the target directory's docs,
 /// then each parent's up to the repo root (each doc followed by its
-/// includes), then the user-global rules. `directory_mode` skips
+/// imports), then the user-global rules. `directory_mode` skips
 /// path-conditional rules.
 pub fn load_for_file(
     file_path: &Path,
@@ -113,6 +127,7 @@ pub fn load_for_file(
                     Path::new(&mem.path),
                     &mem.content,
                     &repo_root,
+                    false,
                     &mut pass_dedupe,
                     session_dedupe,
                     0,
@@ -137,6 +152,7 @@ pub fn load_for_file(
                     Path::new(&rule_mem.path),
                     &rule_mem.content,
                     &repo_root,
+                    false,
                     &mut pass_dedupe,
                     session_dedupe,
                     0,
@@ -177,6 +193,7 @@ pub fn load_for_file(
                     Path::new(&rule_mem.path),
                     &rule_mem.content,
                     &repo_root,
+                    true,
                     &mut pass_dedupe,
                     session_dedupe,
                     0,
@@ -432,6 +449,7 @@ pub fn load_includes(
     including_file: &Path,
     content: &str,
     repo_root: &Path,
+    user_scope: bool,
     pass_dedupe: &mut BTreeSet<String>,
     session_dedupe: &mut BTreeSet<String>,
     depth: i32,
@@ -440,43 +458,47 @@ pub fn load_includes(
         return vec![];
     }
     let mut results: Vec<LoadedMemory> = Vec::new();
-    let mut in_fence = false;
     let parent = including_file.parent().unwrap_or(Path::new("."));
-    for ln in content.split('\n') {
-        let ls = ln.trim_start();
-        if ls.starts_with("```") || ls.starts_with("~~~") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        let cleaned = strip_inline_code(ln);
-        for refpath in find_includes(&cleaned) {
-            let included = match resolve(&parent.join(&refpath)) {
-                Some(p) => p,
+    for refpath in find_includes(content) {
+        let named = match refpath.strip_prefix("~/") {
+            Some(rest) => match home_dir() {
+                Some(home) => home.join(rest),
                 None => continue,
-            };
-            if included.strip_prefix(repo_root).is_err() {
-                continue;
-            }
-            if let Some(mem) =
-                try_load(&included, repo_root, "include", pass_dedupe, session_dedupe)
-            {
-                let inc = load_includes(
-                    &included,
-                    &mem.content,
-                    repo_root,
-                    pass_dedupe,
-                    session_dedupe,
-                    depth + 1,
-                );
-                results.push(mem);
-                results.extend(inc);
-            }
+            },
+            None => parent.join(&refpath),
+        };
+        if !is_text_file(&named) {
+            continue;
+        }
+        let included = match resolve(&named) {
+            Some(p) => p,
+            None => continue,
+        };
+        if !user_scope && included.strip_prefix(repo_root).is_err() {
+            continue;
+        }
+        if let Some(mem) = try_load(&included, repo_root, "include", pass_dedupe, session_dedupe) {
+            let inc = load_includes(
+                &included,
+                &mem.content,
+                repo_root,
+                user_scope,
+                pass_dedupe,
+                session_dedupe,
+                depth + 1,
+            );
+            results.push(mem);
+            results.extend(inc);
         }
     }
     results
+}
+
+fn is_text_file(path: &Path) -> bool {
+    match path.extension() {
+        Some(extension) => TEXT_EXTENSIONS.contains(&extension.to_string_lossy().to_lowercase().as_str()),
+        None => true,
+    }
 }
 
 /// Remove `` `...` `` inline-code spans from a line.
@@ -506,33 +528,61 @@ fn strip_inline_code(line: &str) -> String {
     out
 }
 
-/// `@include\s+(\S+)` finditer.
-fn find_includes(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let bytes: Vec<char> = line.chars().collect();
-    let needle: Vec<char> = "@include".chars().collect();
-    let mut i = 0;
-    while i + needle.len() <= bytes.len() {
-        if bytes[i..i + needle.len()] == needle[..] {
-            let mut j = i + needle.len();
-            // require at least one whitespace
-            if j < bytes.len() && bytes[j].is_whitespace() {
-                while j < bytes.len() && bytes[j].is_whitespace() {
-                    j += 1;
+fn strip_comments(line: &str, in_comment: &mut bool) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    loop {
+        if *in_comment {
+            match rest.find("-->") {
+                Some(end) => {
+                    rest = &rest[end + 3..];
+                    *in_comment = false;
                 }
-                let mut token = String::new();
-                while j < bytes.len() && !bytes[j].is_whitespace() {
-                    token.push(bytes[j]);
-                    j += 1;
-                }
-                if !token.is_empty() {
-                    out.push(token);
-                }
-                i = j;
-                continue;
+                None => return out,
             }
         }
-        i += 1;
+        match rest.find("<!--") {
+            Some(start) => {
+                out.push_str(&rest[..start]);
+                rest = &rest[start + 4..];
+                *in_comment = true;
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
     }
-    out
+}
+
+fn import_pattern() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?:^|\s)@((?:[^\s\\]|\\ )+)").unwrap())
+}
+
+fn find_includes(content: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut in_fence = false;
+    let mut in_comment = false;
+    for line in content.split('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        let text = strip_inline_code(&strip_comments(line, &mut in_comment));
+        for found in import_pattern().captures_iter(&text) {
+            let written = found[1].split('#').next().unwrap_or_default().replace("\\ ", " ");
+            let is_path = written.starts_with("~/")
+                || (written.starts_with('/') && written != "/")
+                || written.starts_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+            if is_path {
+                paths.push(written);
+            }
+        }
+    }
+    paths
 }

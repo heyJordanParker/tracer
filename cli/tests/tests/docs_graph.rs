@@ -1,4 +1,4 @@
-//! `trace docs --graph`: doc-file nodes, `@include` edges, conditional
+//! `trace docs --graph`: doc-file nodes, `@path` import edges, conditional
 //! `paths:` frontmatter promotion, and the freshness contract.
 //!
 //! The doc graph is built in memory on every call and persists nothing.
@@ -119,10 +119,10 @@ fn moving_git_head_changes_the_answer() {
 }
 
 #[test]
-fn at_include_directives_produce_edges() {
+fn at_path_imports_produce_edges() {
     let f = Fixture::new();
     f.write("included.md", "# included content\n");
-    f.write("Claude.md", "# top\n@include included.md\n");
+    f.write("Claude.md", "# top\n@included.md\n");
     f.commit("seed includes");
 
     let v = f.trace(&["docs", "--graph", "--json"]).view();

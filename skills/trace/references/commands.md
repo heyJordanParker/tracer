@@ -177,4 +177,4 @@ A `grep` or `pattern` row carries `declaration` and `type` as whole surface rows
 ## 7. Know which project docs trace recognizes
 
 ### Project docs are graph nodes
-The graph recognizes `CLAUDE.md`, `Claude.md`, `AGENTS.md`, `Agents.md`, their `.local.md` peers, and every `.claude/rules/*.md`. It preserves `@include` edges and conditional `paths:` frontmatter.
+The graph recognizes `CLAUDE.md`, `Claude.md`, `AGENTS.md`, `Agents.md`, their `.local.md` peers, and every `.claude/rules/*.md`. It preserves `@path` import edges and conditional `paths:` frontmatter.

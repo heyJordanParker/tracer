@@ -7,7 +7,7 @@
 //! output.
 //!
 //! The primer models repo docs only: user-global CLAUDE.md + project-root
-//! CLAUDE.md chain (and their `@include` graphs). The Claude memory system
+//! CLAUDE.md chain (and their `@path` import graphs). The Claude memory system
 //! (`$HOME/.claude/projects/<slug>/memory/MEMORY.md`) is harness-internal
 //! state managed by Claude Code itself and is out of tracer's scope.
 //!
@@ -15,7 +15,7 @@
 //!   * empty case               — no docs at all, nothing recorded, success
 //!   * single CLAUDE.md         — project-root CLAUDE.md only, one doc recorded
 //!   * nested @-imports         — recursive include graph fully captured
-//!   * recursion depth cap      — runaway @include cycle is bounded
+//!   * recursion depth cap      — runaway @path import cycle is bounded
 //!   * memory file ignored      — a populated MEMORY.md never enters the primer
 //!
 //! All five run against the same hermetic fixture pattern, each with its
@@ -140,11 +140,8 @@ fn single_project_claude_md_records_one_doc() {
 #[test]
 fn nested_at_imports_are_walked_recursively() {
     let (f, home, sid) = isolated("nested");
-    // @-imports use the `@include <path>` directive that the shared
-    // `nested_memory::load_includes` walker matches (the locked reuse
-    // target for include walking).
-    f.write("CLAUDE.md", "# Root\n\n@include docs/one.md\n");
-    f.write("docs/one.md", "# One\n\n@include two.md\n");
+    f.write("CLAUDE.md", "# Root\n\n@docs/one.md\n");
+    f.write("docs/one.md", "# One\n\n@two.md\n");
     f.write("docs/two.md", "# Two\n\nLeaf rules.\n");
     f.commit("add nested includes");
 
@@ -186,14 +183,14 @@ fn nested_at_imports_are_walked_recursively() {
 #[test]
 fn cyclic_includes_terminate_at_depth_cap() {
     let (f, home, sid) = isolated("cycle");
-    // a → b → c → a: a true cycle. The cap (MAX_INCLUDE_DEPTH = 5) plus
+    // a → b → c → a: a true cycle. The cap (MAX_INCLUDE_DEPTH = 4) plus
     // path dedupe guarantees termination — without either, the walk loops
     // forever. The contract: it returns, the unique file set is exactly
     // {root, a, b, c}, and no event is recorded twice for the same path.
-    f.write("CLAUDE.md", "# Root\n\n@include a.md\n");
-    f.write("a.md", "# A\n\n@include b.md\n");
-    f.write("b.md", "# B\n\n@include c.md\n");
-    f.write("c.md", "# C\n\n@include a.md\n");
+    f.write("CLAUDE.md", "# Root\n\n@a.md\n");
+    f.write("a.md", "# A\n\n@b.md\n");
+    f.write("b.md", "# B\n\n@c.md\n");
+    f.write("c.md", "# C\n\n@a.md\n");
     f.commit("add cyclic includes");
 
     let home_str = home.to_string_lossy().into_owned();

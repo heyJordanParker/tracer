@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Prompt, ToolCall } from '../node_modules/@cmodjs/core/mod.js'
 import { testMod } from '../node_modules/@cmodjs/core/testing.js'
+import { claudeCodeOf } from '../node_modules/@cmodjs/core/testing/claude-code.js'
 import { tracer } from '../src/mod.js'
 import { fakeTrace } from './fake-trace.js'
 
@@ -121,6 +122,26 @@ test('a failing trace hook on any other moment shows why', async () => {
   await tested.raise.beforeSessionStart({ source: 'startup' })
 
   expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([{ type: 'error', message: 'The beforeSessionStart listener failed', description: 'trace hook SessionStart exited 2: trace: the index is locked' }])
+})
+
+test('Esc during a tool result stops trace hook with no toast', async () => {
+  const tested = testMod(tracer, { projectRoot: ROOT })
+  const pressedEsc = new AbortController()
+  let ran = () => undefined as void
+  const running = new Promise<void>((resolve) => (ran = resolve))
+  tested.fakes.process.run = () => {
+    ran()
+    return new Promise((_resolve, reject) => pressedEsc.signal.addEventListener('abort', () => reject(new Error('tracer: $.process.run(trace) aborted'))))
+  }
+  await tested.add({ type: Prompt, text: 'Run the tests' })
+  await tested.add({ type: ToolCall, name: 'Bash', input: { command: 'make test' }, callId: 'toolu_1' })
+
+  const answer = claudeCodeOf(tested).fire('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'make test' }, tool_response: { stdout: '', stderr: '', interrupted: true }, tool_use_id: 'toolu_1' }, undefined, pressedEsc.signal)
+  await running
+  pressedEsc.abort()
+  await answer
+
+  expect(tested.shown.toasts.filter(({ type }) => type === 'error')).toEqual([])
 })
 
 test('a run that throws reports its own message, not exited 1', async () => {
