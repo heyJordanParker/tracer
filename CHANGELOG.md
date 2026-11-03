@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- A Claude.md's `@path` imports reach Claude when it reads code through `trace`. tracer read only its own `@include <path>` form, so a nested doc arrived without the files it imports, such as `@docs/architecture.md`. tracer now follows Claude Code's rules: an `@` at the start of a word outside code and HTML comments, a path relative to the importing doc or from `~/`, `\ ` for a space, text files only, and four hops deep. A project doc's imports stay inside the repository, and `~/.claude/` docs import from anywhere. `@include <path>` is no longer read.
+- Pressing Esc no longer shows a tracer error toast. A `trace hook` run that Claude Code stopped because you cancelled the turn showed `The beforeToolResult listener failed` with `trace hook PostToolUse: tracer: $.process.run(…) aborted`. The mod runs on `@cmodjs/core` 5.2.0, so a cancelled run ends quietly, and a run that fails on its own still shows why.
+- The mod needs cmod 5.2.0 or newer.
+
 ## 0.8.0
 
 - `--no-trim` prints any command's answer untrimmed, in place of `--whole`. Every trimmed answer says so with one word: `[3 of 40 files trimmed to fit — untrimmed: trace grep Cart src --no-trim]`, `[trimmed at L1 of 1 — untrimmed: trace read bundle.js --no-trim]` for a line longer than the budget, and `… 212 commits trimmed — untrimmed: …` in `history --contains`. The `--json` query key is `no_trim`.

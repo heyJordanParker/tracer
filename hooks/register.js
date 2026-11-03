@@ -1,4 +1,4 @@
-// ../Developer/tracer/node_modules/@cmodjs/core/hotkeys.js
+// node_modules/@cmodjs/core/hotkeys.js
 var hotkeyName = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 var comboShape = /^(?:(?:ctrl|alt|shift|meta)\+){1,2}(?:[a-z0-9]|f(?:[1-9]|1[0-2])|tab|enter|escape|space|backspace|delete|up|down|left|right|home|end|pageup|pagedown|[`\-=[\]\\;',./])$/;
 var order = ["ctrl", "alt", "shift", "meta"];
@@ -28,7 +28,7 @@ function checkHotkeys(name, hotkeys) {
   return hotkeys;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/utils/text.js
+// node_modules/@cmodjs/core/utils/text.js
 function listed(items) {
   if (items.length <= 1)
     return items.join("");
@@ -47,7 +47,7 @@ function formatExit(code, reason) {
   return clause ? `${exit}: ${clause}` : exit;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/records.js
+// node_modules/@cmodjs/core/records.js
 var listPermissions = ["network", "run", "files", "config"];
 var flagPermissions = ["conversation", "prompt", "model", "tasks", "tools", "approve"];
 var permissionNames = [...listPermissions, ...flagPermissions];
@@ -240,8 +240,8 @@ function readHotkeys(hotkeys) {
     throw new Error(`package.json "cmod.hotkeys" is not a map of hotkeys to their title and optional default combo. ${fix}`);
   return { hotkeys: checkHotkeys('package.json "cmod"', hotkeys) };
 }
-var coreVersion = "5.0.0";
-var oldestCmodVersion = "5.0.0";
+var coreVersion = "5.2.0";
+var oldestCmodVersion = "5.2.0";
 function hotkeyCommand(mod, hotkey) {
   return `${mod}--${hotkey}`;
 }
@@ -352,7 +352,7 @@ function isTextList(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/dependencies.js
+// node_modules/@cmodjs/core/runtime/dependencies.js
 var cmodPluginName = "cmod";
 async function answerCall(name, api, e) {
   const method = Object.hasOwn(api, e.method) ? api[e.method] : undefined;
@@ -389,25 +389,41 @@ function answeringOwnCalls(claude, router) {
   return { ...claude, cmod: { call } };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/vendor.js
+// node_modules/@cmodjs/core/vendor.js
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: () => mod[key],
-        enumerable: true
-      });
+  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  if (mod && typeof mod === "object" || typeof mod === "function") {
+    for (let key of __getOwnPropNames(mod))
+      if (!__hasOwnProp.call(to, key))
+        __defProp(to, key, {
+          get: __accessProp.bind(mod, key),
+          enumerable: true
+        });
+  }
+  if (canCache)
+    cache.set(mod, to);
   return to;
 };
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
-var require_constants = __commonJS((exports, module) => {
+var require_constants = __commonJS(function(exports, module) {
   var WIN_SLASH = "\\\\/";
   var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
   var DEFAULT_MAX_EXTGLOB_RECURSION = 0;
@@ -550,7 +566,7 @@ var require_constants = __commonJS((exports, module) => {
     }
   };
 });
-var require_utils = __commonJS((exports) => {
+var require_utils = __commonJS(function(exports) {
   var {
     REGEX_BACKSLASH,
     REGEX_REMOVE_BACKSLASH,
@@ -609,7 +625,7 @@ var require_utils = __commonJS((exports) => {
     return last;
   };
 });
-var require_scan = __commonJS((exports, module) => {
+var require_scan = __commonJS(function(exports, module) {
   var utils = require_utils();
   var {
     CHAR_ASTERISK,
@@ -897,21 +913,21 @@ var require_scan = __commonJS((exports, module) => {
     if (opts.parts === true || opts.tokens === true) {
       let prevIndex;
       for (let idx = 0;idx < slashes.length; idx++) {
-        const n2 = prevIndex !== undefined ? prevIndex + 1 : start;
+        const n = prevIndex !== undefined ? prevIndex + 1 : start;
         const i = slashes[idx];
-        const value2 = input.slice(n2, i);
+        const value = input.slice(n, i);
         if (opts.tokens) {
           if (idx === 0 && start !== 0) {
             tokens[idx].isPrefix = true;
             tokens[idx].value = prefix;
           } else {
-            tokens[idx].value = value2;
+            tokens[idx].value = value;
           }
           depth(tokens[idx]);
           state.maxDepth += tokens[idx].depth;
         }
         if (i >= start) {
-          parts.push(value2);
+          parts.push(value);
           prevIndex = i;
         }
       }
@@ -930,7 +946,7 @@ var require_scan = __commonJS((exports, module) => {
   };
   module.exports = scan;
 });
-var require_parse = __commonJS((exports, module) => {
+var require_parse = __commonJS(function(exports, module) {
   var constants = require_constants();
   var utils = require_utils();
   var {
@@ -1117,7 +1133,7 @@ var require_parse = __commonJS((exports, module) => {
       if (!match || match.type !== "*") {
         return;
       }
-      const branches = splitTopLevel(match.body).map((branch2) => branch2.trim());
+      const branches = splitTopLevel(match.body).map((branch) => branch.trim());
       if (branches.length !== 1) {
         return;
       }
@@ -1180,7 +1196,7 @@ var require_parse = __commonJS((exports, module) => {
     }
     return { risky: false };
   };
-  var parse2 = (input, options) => {
+  var parse = (input, options) => {
     if (typeof input !== "string") {
       throw new TypeError("Expected a string");
     }
@@ -1210,8 +1226,8 @@ var require_parse = __commonJS((exports, module) => {
       STAR,
       START_ANCHOR
     } = PLATFORM_CHARS;
-    const globstar = (opts2) => {
-      return `(${capture}(?:(?!${START_ANCHOR}${opts2.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
+    const globstar = (opts) => {
+      return `(${capture}(?:(?!${START_ANCHOR}${opts.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
     };
     const nodot = opts.dot ? "" : NO_DOT;
     const qmarkNoDot = opts.dot ? QMARK : QMARK_NO_DOT;
@@ -1250,8 +1266,8 @@ var require_parse = __commonJS((exports, module) => {
     const peek = state.peek = (n = 1) => input[state.index + n];
     const advance = state.advance = () => input[++state.index] || "";
     const remaining = () => input.slice(state.index + 1);
-    const consume = (value2 = "", num = 0) => {
-      state.consumed += value2;
+    const consume = (value = "", num = 0) => {
+      state.consumed += value;
       state.index += num;
     };
     const append = (token) => {
@@ -1306,8 +1322,8 @@ var require_parse = __commonJS((exports, module) => {
       tokens.push(tok);
       prev = tok;
     };
-    const extglobOpen = (type, value2) => {
-      const token = { ...EXTGLOB_CHARS[value2], conditions: 1, inner: "" };
+    const extglobOpen = (type, value) => {
+      const token = { ...EXTGLOB_CHARS[value], conditions: 1, inner: "" };
       token.prev = prev;
       token.parens = state.parens;
       token.output = state.output;
@@ -1315,7 +1331,7 @@ var require_parse = __commonJS((exports, module) => {
       token.tokensIndex = tokens.length;
       const output = (opts.capture ? "(" : "") + token.open;
       increment("parens");
-      push({ type, value: value2, output: state.output ? "" : ONE_CHAR });
+      push({ type, value, output: state.output ? "" : ONE_CHAR });
       push({ type: "paren", extglob: true, value: advance(), output });
       extglobs.push(token);
     };
@@ -1351,7 +1367,7 @@ var require_parse = __commonJS((exports, module) => {
           output = token.close = `)$))${extglobStar}`;
         }
         if (token.inner.includes("*") && (rest = remaining()) && /^\.[^\\/.]+$/.test(rest)) {
-          const expression = parse2(rest, { ...options, fastpaths: false }).output;
+          const expression = parse(rest, { ...options, fastpaths: false }).output;
           output = token.close = `)${expression})${extglobStar})`;
         }
         if (token.prev.type === "bos") {
@@ -1449,8 +1465,8 @@ var require_parse = __commonJS((exports, module) => {
             if (inner.includes(":")) {
               const idx = prev.value.lastIndexOf("[");
               const pre = prev.value.slice(0, idx);
-              const rest2 = prev.value.slice(idx + 2);
-              const posix = POSIX_REGEX_SOURCE[rest2];
+              const rest = prev.value.slice(idx + 2);
+              const posix = POSIX_REGEX_SOURCE[rest];
               if (posix) {
                 prev.value = pre + posix;
                 state.backtrack = true;
@@ -1878,7 +1894,7 @@ var require_parse = __commonJS((exports, module) => {
     }
     return state;
   };
-  parse2.fastpaths = (input, options) => {
+  parse.fastpaths = (input, options) => {
     const opts = { ...options };
     const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
     const len = input.length;
@@ -1905,10 +1921,10 @@ var require_parse = __commonJS((exports, module) => {
     if (opts.capture) {
       star = `(${star})`;
     }
-    const globstar = (opts2) => {
-      if (opts2.noglobstar === true)
+    const globstar = (opts) => {
+      if (opts.noglobstar === true)
         return star;
-      return `(${capture}(?:(?!${START_ANCHOR}${opts2.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
+      return `(${capture}(?:(?!${START_ANCHOR}${opts.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
     };
     const create = (str) => {
       switch (str) {
@@ -1932,10 +1948,10 @@ var require_parse = __commonJS((exports, module) => {
           const match = /^(.*?)\.(\w+)$/.exec(str);
           if (!match)
             return;
-          const source2 = create(match[1]);
-          if (!source2)
+          const source = create(match[1]);
+          if (!source)
             return;
-          return source2 + DOT_LITERAL + match[2];
+          return source + DOT_LITERAL + match[2];
         }
       }
     };
@@ -1946,44 +1962,44 @@ var require_parse = __commonJS((exports, module) => {
     }
     return source;
   };
-  module.exports = parse2;
+  module.exports = parse;
 });
-var require_picomatch = __commonJS((exports, module) => {
+var require_picomatch = __commonJS(function(exports, module) {
   var scan = require_scan();
-  var parse2 = require_parse();
+  var parse = require_parse();
   var utils = require_utils();
   var constants = require_constants();
-  var isObject2 = (val) => val && typeof val === "object" && !Array.isArray(val);
+  var isObject = (val) => val && typeof val === "object" && !Array.isArray(val);
   var picomatch = (glob, options, returnState = false) => {
     if (Array.isArray(glob)) {
       const fns = glob.map((input) => picomatch(input, options, returnState));
       const arrayMatcher = (str) => {
         for (const isMatch of fns) {
-          const state2 = isMatch(str);
-          if (state2)
-            return state2;
+          const state = isMatch(str);
+          if (state)
+            return state;
         }
         return false;
       };
       return arrayMatcher;
     }
-    const isState = isObject2(glob) && glob.tokens && glob.input;
+    const isState = isObject(glob) && glob.tokens && glob.input;
     if (glob === "" || typeof glob !== "string" && !isState) {
       throw new TypeError("Expected pattern to be a non-empty string");
     }
     const opts = options || {};
     const posix = opts.windows;
-    const regex2 = isState ? picomatch.compileRe(glob, options) : picomatch.makeRe(glob, options, false, true);
-    const state = regex2.state;
-    delete regex2.state;
+    const regex = isState ? picomatch.compileRe(glob, options) : picomatch.makeRe(glob, options, false, true);
+    const state = regex.state;
+    delete regex.state;
     let isIgnored = () => false;
     if (opts.ignore) {
       const ignoreOpts = { ...options, ignore: null, onMatch: null, onResult: null };
       isIgnored = picomatch(opts.ignore, ignoreOpts, returnState);
     }
     const matcher = (input, returnObject = false) => {
-      const { isMatch, match, output } = picomatch.test(input, regex2, options, { glob, posix });
-      const result = { glob, state, regex: regex2, posix, input, output, match, isMatch };
+      const { isMatch, match, output } = picomatch.test(input, regex, options, { glob, posix });
+      const result = { glob, state, regex, posix, input, output, match, isMatch };
       if (typeof opts.onResult === "function") {
         opts.onResult(result);
       }
@@ -2008,7 +2024,7 @@ var require_picomatch = __commonJS((exports, module) => {
     }
     return matcher;
   };
-  picomatch.test = (input, regex2, options, { glob, posix } = {}) => {
+  picomatch.test = (input, regex, options, { glob, posix } = {}) => {
     if (typeof input !== "string") {
       throw new TypeError("Expected input to be a string");
     }
@@ -2016,31 +2032,31 @@ var require_picomatch = __commonJS((exports, module) => {
       return { isMatch: false, output: "" };
     }
     const opts = options || {};
-    const format3 = opts.format || (posix ? utils.toPosixSlashes : null);
+    const format = opts.format || (posix ? utils.toPosixSlashes : null);
     let match = input === glob;
-    let output = match && format3 ? format3(input) : input;
+    let output = match && format ? format(input) : input;
     if (match === false) {
-      output = format3 ? format3(input) : input;
+      output = format ? format(input) : input;
       match = output === glob;
     }
     if (match === false || opts.capture === true) {
       if (opts.matchBase === true || opts.basename === true) {
-        match = picomatch.matchBase(input, regex2, options, posix);
+        match = picomatch.matchBase(input, regex, options, posix);
       } else {
-        match = regex2.exec(output);
+        match = regex.exec(output);
       }
     }
     return { isMatch: Boolean(match), match, output };
   };
   picomatch.matchBase = (input, glob, options, posix = options && options.windows) => {
-    const regex2 = glob instanceof RegExp ? glob : picomatch.makeRe(glob, options);
-    return regex2.test(utils.basename(input, { windows: posix }));
+    const regex = glob instanceof RegExp ? glob : picomatch.makeRe(glob, options);
+    return regex.test(utils.basename(input, { windows: posix }));
   };
   picomatch.isMatch = (str, patterns, options) => picomatch(patterns, options)(str);
   picomatch.parse = (pattern, options) => {
     if (Array.isArray(pattern))
       return pattern.map((p) => picomatch.parse(p, options));
-    return parse2(pattern, { ...options, fastpaths: false });
+    return parse(pattern, { ...options, fastpaths: false });
   };
   picomatch.scan = (input, options) => scan(input, options);
   picomatch.compileRe = (state, options, returnOutput = false, returnState = false) => {
@@ -2054,11 +2070,11 @@ var require_picomatch = __commonJS((exports, module) => {
     if (state && state.negated === true) {
       source = `^(?!${source}).*$`;
     }
-    const regex2 = picomatch.toRegex(source, options);
+    const regex = picomatch.toRegex(source, options);
     if (returnState === true) {
-      regex2.state = state;
+      regex.state = state;
     }
-    return regex2;
+    return regex;
   };
   picomatch.makeRe = (input, options = {}, returnOutput = false, returnState = false) => {
     if (!input || typeof input !== "string") {
@@ -2066,10 +2082,10 @@ var require_picomatch = __commonJS((exports, module) => {
     }
     let parsed = { negated: false, fastpaths: true };
     if (options.fastpaths !== false && (input[0] === "." || input[0] === "*")) {
-      parsed.output = parse2.fastpaths(input, options);
+      parsed.output = parse.fastpaths(input, options);
     }
     if (!parsed.output) {
-      parsed = parse2(input, options);
+      parsed = parse(input, options);
     }
     return picomatch.compileRe(parsed, options, returnOutput, returnState);
   };
@@ -2086,7 +2102,7 @@ var require_picomatch = __commonJS((exports, module) => {
   picomatch.constants = constants;
   module.exports = picomatch;
 });
-var require_quote = __commonJS((exports, module) => {
+var require_quote = __commonJS(function(exports, module) {
   var OPS = [
     "||",
     "&&",
@@ -2166,7 +2182,7 @@ var require_quote = __commonJS((exports, module) => {
     }).join(" ");
   };
 });
-var require_parse2 = __commonJS((exports, module) => {
+var require_parse2 = __commonJS(function(exports, module) {
   var CONTROL = "(?:" + [
     "\\|\\|",
     "\\&(?:\\&|>>?)",
@@ -2249,8 +2265,8 @@ var require_parse2 = __commonJS((exports, module) => {
   function expandAnsiC(body) {
     return body.replace(ansiCEscape, expandAnsiCEscape).split("\x00")[0];
   }
-  function closesAnsiC(s, i2) {
-    ansiCAt.lastIndex = i2;
+  function closesAnsiC(s, i) {
+    ansiCAt.lastIndex = i;
     return !!ansiCAt.exec(s)[1];
   }
   function parseInternal(string, env, opts) {
@@ -2289,19 +2305,19 @@ var require_parse2 = __commonJS((exports, module) => {
       var sawQuote = false;
       var pendingNw = null;
       var isGlob = false;
-      var i2;
+      var i;
       function parseEnvVar() {
-        i2 += 1;
+        i += 1;
         var varend;
         var varname;
-        var char = s.charAt(i2);
+        var char = s.charAt(i);
         if (char === "{") {
-          i2 += 1;
-          if (s.charAt(i2) === "}") {
-            throw new Error("Bad substitution: " + s.slice(i2 - 2, i2 + 1));
+          i += 1;
+          if (s.charAt(i) === "}") {
+            throw new Error("Bad substitution: " + s.slice(i - 2, i + 1));
           }
           var depth = 1;
-          varend = i2;
+          varend = i;
           while (depth > 0 && varend < s.length) {
             if (s.charAt(varend) === "{" && s.charAt(varend - 1) === "$") {
               depth += 1;
@@ -2311,22 +2327,22 @@ var require_parse2 = __commonJS((exports, module) => {
             varend += 1;
           }
           if (depth !== 0) {
-            throw new Error("Bad substitution: " + s.slice(i2));
+            throw new Error("Bad substitution: " + s.slice(i));
           }
           varend -= 1;
-          varname = s.slice(i2, varend);
-          i2 = varend;
+          varname = s.slice(i, varend);
+          i = varend;
         } else if (/[*@#?$!-]/.test(char)) {
           varname = char;
         } else {
-          var slicedFromI = s.slice(i2);
+          var slicedFromI = s.slice(i);
           varend = slicedFromI.match(/[^\w\d_]/);
           if (!varend) {
             varname = slicedFromI;
-            i2 = s.length;
+            i = s.length;
           } else {
             varname = slicedFromI.slice(0, varend.index);
-            i2 += varend.index - 1;
+            i += varend.index - 1;
           }
         }
         return getVar(env, "", varname);
@@ -2349,8 +2365,8 @@ var require_parse2 = __commonJS((exports, module) => {
         }
         pendingNw = null;
       }
-      for (i2 = 0;i2 < s.length; i2++) {
-        var c = s.charAt(i2);
+      for (i = 0;i < s.length; i++) {
+        var c = s.charAt(i);
         if (ifs && c !== DS) {
           flushRun();
         }
@@ -2365,8 +2381,8 @@ var require_parse2 = __commonJS((exports, module) => {
             out += c;
           } else {
             if (c === BS) {
-              i2 += 1;
-              c = s.charAt(i2);
+              i += 1;
+              c = s.charAt(i);
               if (c === DQ || c === BS || c === DS) {
                 out += c;
               } else {
@@ -2385,18 +2401,18 @@ var require_parse2 = __commonJS((exports, module) => {
           return { op: s };
         } else if (hash.test(c)) {
           commented = true;
-          var commentObj = { comment: string.slice(match.index + i2 + 1) };
+          var commentObj = { comment: string.slice(match.index + i + 1) };
           if (out.length) {
             return [out, commentObj];
           }
           return [commentObj];
         } else if (c === BS) {
           esc = true;
-        } else if (c === DS && s.charAt(i2 + 1) === SQ && closesAnsiC(s, i2)) {
+        } else if (c === DS && s.charAt(i + 1) === SQ && closesAnsiC(s, i)) {
           flushRun();
           sawQuote = true;
-          out += expandAnsiC(s.slice(i2 + 2, ansiCAt.lastIndex - 1));
-          i2 = ansiCAt.lastIndex - 1;
+          out += expandAnsiC(s.slice(i + 2, ansiCAt.lastIndex - 1));
+          i = ansiCAt.lastIndex - 1;
         } else if (c === DS) {
           var value = parseEnvVar();
           if (!ifs) {
@@ -2452,12 +2468,12 @@ var require_parse2 = __commonJS((exports, module) => {
     if (typeof env !== "function") {
       return mapped;
     }
-    return mapped.reduce(function(acc, s2) {
-      if (typeof s2 === "object") {
-        acc[acc.length] = s2;
+    return mapped.reduce(function(acc, s) {
+      if (typeof s === "object") {
+        acc[acc.length] = s;
         return acc;
       }
-      var xs = s2.split(RegExp("(" + TOKEN + ".*?" + TOKEN + ")", "g"));
+      var xs = s.split(RegExp("(" + TOKEN + ".*?" + TOKEN + ")", "g"));
       if (xs.length === 1) {
         acc[acc.length] = xs[0];
         return acc;
@@ -2672,7 +2688,7 @@ var $quote = require_quote();
 var $parse = require_parse2();
 var export_picomatch = import_posix.default;
 
-// ../Developer/tracer/node_modules/@cmodjs/core/utils/paths.js
+// node_modules/@cmodjs/core/utils/paths.js
 var missingPath = /(?:^|: )(?:ENOENT|ENOTDIR)\b/;
 function isMissing(error) {
   return missingPath.test(messageOf(error));
@@ -2698,7 +2714,66 @@ function relativePath(base, path) {
   return path.startsWith(prefix) ? path.slice(prefix.length) : undefined;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/deadline.js
+// node_modules/@cmodjs/core/runtime/device.js
+var cmodAppId = "1fd8a8ee972047c4a89640fd51048522";
+var sha256Block = 64;
+var systems = { Darwin: "darwin", Linux: "linux" };
+var machines = { arm64: "arm64", aarch64: "arm64", x86_64: "x64", amd64: "x64" };
+var platformUuid = /"IOPlatformUUID" = "([0-9A-Fa-f-]{36})"/;
+var machineId = /^[0-9a-f]{32}$/;
+var machineIdFiles = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
+
+class MissingMachineId extends Error {
+}
+async function readDevice(claude) {
+  const output = async (argv) => {
+    const { exitCode, stdout, stderr } = await claude.process.run(argv);
+    if (exitCode !== 0)
+      throw new Error(`cmod could not read this computer: ${argv.join(" ")} ${formatExit(exitCode, stderr)}`);
+    return stdout.trim();
+  };
+  const [system = "", node = "", machine = ""] = (await output(["uname", "-snm"])).split(/\s+/);
+  const os = systems[system];
+  const arch = machines[machine];
+  if (os === undefined)
+    throw new Error(`cmod reads the device of macOS and Linux, and this computer runs ${system}.`);
+  if (arch === undefined)
+    throw new Error(`cmod reads the device of arm64 and x64 computers, and this one is ${machine}.`);
+  if (os === "linux")
+    return { id: await appSpecific(await linuxMachineId(claude.fs)), name: node, os, arch };
+  const [platform, name] = await Promise.all([output(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"]), output(["scutil", "--get", "LocalHostName"])]);
+  const uuid = platformUuid.exec(platform)?.[1];
+  if (uuid === undefined)
+    throw new Error("cmod could not read this computer: ioreg -rd1 -c IOPlatformExpertDevice names no IOPlatformUUID.");
+  return { id: await appSpecific(uuid.replaceAll("-", "").toLowerCase()), name, os, arch };
+}
+async function linuxMachineId(fs) {
+  for (const path of machineIdFiles) {
+    const id = (await fs.read(path).catch(ifMissing(""))).trim();
+    if (machineId.test(id))
+      return id;
+  }
+  throw new MissingMachineId(`cmod could not read this computer: neither ${machineIdFiles.join(" nor ")} holds a machine id.`);
+}
+async function appSpecific(machine) {
+  if (!machineId.test(machine))
+    throw new Error("cmod could not read this computer: its machine id is not 32 hex digits.");
+  const id = (await hmacSha256(bytesOf(machine), bytesOf(cmodAppId))).slice(0, 16);
+  id[6] = (id[6] ?? 0) & 15 | 64;
+  id[8] = (id[8] ?? 0) & 63 | 128;
+  return [...id].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function hmacSha256(key, message) {
+  const sha256 = async (...parts) => new Uint8Array(await crypto.subtle.digest("SHA-256", Uint8Array.from(parts.flatMap((part) => [...part]))));
+  const padded = new Uint8Array(sha256Block);
+  padded.set(key);
+  return sha256(padded.map((byte) => byte ^ 92), await sha256(padded.map((byte) => byte ^ 54), message));
+}
+function bytesOf(hex) {
+  return Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+}
+
+// node_modules/@cmodjs/core/runtime/deadline.js
 var longestMs = 600000;
 var listenerMs = 1e4;
 
@@ -2718,29 +2793,36 @@ function listenerOf(name, method, args) {
     throw new Error(`${name}: ${method}'s onFailure is ${String(onFailure)}. Give 'pass' or 'refuse'.`);
   return { matcher: hasMatcher ? args[0] : undefined, listener, options };
 }
-async function withinTime(clock, method, { timeoutMs = listenerMs }, run) {
+async function withinTime(clock, method, { timeoutMs = listenerMs }, cancel, run) {
   const controller = new AbortController;
   const deadline = await clock.now() + timeoutMs;
+  cancel.throwIfAborted();
   let timer;
+  let cancelled = () => {
+    return;
+  };
   const passed = new Promise((_resolve, reject) => {
     timer = timers.setTimeout(() => {
       controller.abort();
       reject(new PassedTimeout(`${method} passed its ${timeoutMs / 1000} s timeout`));
     }, timeoutMs);
+    cancelled = () => reject(cancel.reason);
+    cancel.addEventListener("abort", cancelled, { once: true });
   });
   try {
-    return await Promise.race([Promise.resolve().then(() => run({ deadline, signal: controller.signal })), passed]);
+    return await Promise.race([Promise.resolve().then(() => run({ deadline, signal: AbortSignal.any([controller.signal, cancel]) })), passed]);
   } finally {
     timers.clearTimeout(timer);
+    cancel.removeEventListener("abort", cancelled);
   }
 }
 function beforeDeadline(claude, { ms, job }, call, task) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve, reject) => {
     const passed = job === undefined ? `its ${ms / 1000} s deadline` : `the ${ms / 1000} s deadline of ${job}`;
     const timer = claude.clock.after(ms, () => reject(new Error(`${call} passed ${passed}`)));
     task.then((value) => {
       timer.cancel();
-      resolve2(value);
+      resolve(value);
     }, (error) => {
       timer.cancel();
       reject(error);
@@ -2748,7 +2830,7 @@ function beforeDeadline(claude, { ms, job }, call, task) {
   });
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/announce.js
+// node_modules/@cmodjs/core/runtime/announce.js
 var announcementMs = 1e4;
 async function announcementOf(claude, plugin, added, openSettings) {
   const manifest = jsonOf(await claude.fs.read(`${plugin.root}/.claude-plugin/plugin.json`).catch(ifMissing(undefined)));
@@ -2774,7 +2856,7 @@ function jsonOf(text) {
   }
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/bound.js
+// node_modules/@cmodjs/core/runtime/bound.js
 var current;
 function bind2(imports) {
   current = imports;
@@ -2785,12 +2867,12 @@ function bound() {
   return current;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/goal/task.js
+// node_modules/@cmodjs/core/session/goal/task.js
 var Task = "task";
 var TaskStart = "taskStart";
 var TaskEnd = "taskEnd";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/attached-file.js
+// node_modules/@cmodjs/core/session/context/turn/message/attached-file.js
 var AttachedFile = "attachedFile";
 var attachmentTypes = {
   file: "contents",
@@ -2807,13 +2889,13 @@ function attachedPathOf(text) {
   return read === undefined ? noted.exec(text)?.[1] ?? "" : JSON.parse(read);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/instruction-file.js
+// node_modules/@cmodjs/core/session/context/turn/message/instruction-file.js
 var InstructionFile = "instructionFile";
 function isRulePath(path) {
   return /(^|\/)\.claude[^/]*\/rules\//.test(path);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/note.js
+// node_modules/@cmodjs/core/session/context/turn/message/note.js
 var Note = "note";
 var modNoteBlock = new RegExp(`<(${pluginName.source.slice(1, -1)})_mod>\\n([\\s\\S]*?)\\n</\\1_mod>`, "g");
 function modNote(mod, text) {
@@ -2831,16 +2913,16 @@ function untagged(text) {
 `);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/notice.js
+// node_modules/@cmodjs/core/session/context/turn/message/notice.js
 var Notice = "notice";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/prompt.js
+// node_modules/@cmodjs/core/session/context/turn/message/prompt.js
 var Prompt = "prompt";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/reply.js
+// node_modules/@cmodjs/core/session/context/turn/message/reply.js
 var Reply = "reply";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/sender.js
+// node_modules/@cmodjs/core/session/context/turn/message/sender.js
 var Person = "person";
 var Mod = "mod";
 var Schedule = "schedule";
@@ -2873,16 +2955,16 @@ function senderOf(origin, isInTask) {
   return { type: isInTask ? Task : Person };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/skill.js
+// node_modules/@cmodjs/core/session/context/turn/message/skill.js
 var Skill = "skill";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/tool-call.js
+// node_modules/@cmodjs/core/session/context/turn/message/tool-call.js
 var ToolCall = "toolCall";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/tool-result.js
+// node_modules/@cmodjs/core/session/context/turn/message/tool-result.js
 var ToolResult = "toolResult";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/message/message.js
+// node_modules/@cmodjs/core/session/context/turn/message/message.js
 var Message = "message";
 var skillPrefix = "Base directory for this skill:";
 var interruption = /^\[Request interrupted by user( for tool use)?\]$/;
@@ -2890,7 +2972,7 @@ var memoryPath = /^Contents of (.+?)(?: \([^)\n]*\))?:\r?$/m;
 function instructionPathOf(text) {
   return memoryPath.exec(text)?.[1] ?? "";
 }
-function rowOfAppend(append, at, cwd2) {
+function rowOfAppend(append, at, cwd) {
   const { message, origin } = append;
   const text = textOf(message.content);
   const path = message.type === "attachment" ? (attachmentTypeOf(message.name) !== undefined ? attachedPathOf(text) : instructionPathOf(text)) || undefined : undefined;
@@ -2904,7 +2986,7 @@ function rowOfAppend(append, at, cwd2) {
     isSummary: append.door === "compaction",
     content: message.content,
     origin,
-    cwd: cwd2,
+    cwd,
     ...path === undefined ? {} : { path },
     ...model === undefined ? {} : { model }
   };
@@ -2994,8 +3076,8 @@ function withTexts(row, texts) {
       if (!isText && !isCall)
         return block;
       index += 1;
-      const text2 = texts.get(index);
-      return isText && text2 !== undefined ? { ...block, text: text2 } : block;
+      const text = texts.get(index);
+      return isText && text !== undefined ? { ...block, text } : block;
     });
   }
   if (row.type === "user" && row.content.some(isToolResultBlock)) {
@@ -3004,10 +3086,10 @@ function withTexts(row, texts) {
       if (!isToolResultBlock(block))
         return block;
       index += 1;
-      const text2 = texts.get(index);
-      if (text2 === undefined)
+      const text = texts.get(index);
+      if (text === undefined)
         return block;
-      return { ...block, content: Array.isArray(block["content"]) ? keepingMedia(block["content"], text2) : text2 };
+      return { ...block, content: Array.isArray(block["content"]) ? keepingMedia(block["content"], text) : text };
     });
   }
   const text = texts.get(0);
@@ -3048,18 +3130,27 @@ function basename2(path) {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/context.js
+// node_modules/@cmodjs/core/session/context/context.js
 var ContextStart = "contextStart";
 var ContextEnd = "contextEnd";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/context/turn/turn.js
+// node_modules/@cmodjs/core/session/context/turn/device.js
+var deviceLine = /^As of \S+, this session runs on (.+), a (darwin|linux) (arm64|x64) computer with the cmod device id ([0-9a-f]{32})\.$/m;
+function deviceOf(note) {
+  if (note.from.type !== Mod)
+    return;
+  const [, name, os, arch, id] = deviceLine.exec(note.text) ?? [];
+  return name === undefined || id === undefined ? undefined : { id, name, os, arch };
+}
+
+// node_modules/@cmodjs/core/session/context/turn/turn.js
 var TurnStart = "turnStart";
 var TurnEnd = "turnEnd";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/goal/goal.js
+// node_modules/@cmodjs/core/session/goal/goal.js
 var GoalChange = "goalChange";
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/conversation.js
+// node_modules/@cmodjs/core/session/conversation.js
 var forkAgentType = "fork";
 function ownerOfSpawn(agentType, session) {
   return agentType === forkAgentType ? { forkedFrom: session } : { agentType: agentType ?? "general-purpose" };
@@ -3078,7 +3169,7 @@ function emptyConversation(session) {
   return { session, context: 0, contextOpenedAt: "", agentCalls: [], endedCalls: {}, tasks: {}, taskTurns: {} };
 }
 function createConversation(start) {
-  let { context, contextOpenedAt, turn, goal } = start;
+  let { context, contextOpenedAt, turn, goal, device } = start;
   const agentCalls = new Set(start.agentCalls);
   const endedCalls = new Map(Object.entries(start.endedCalls));
   const tasks = new Map(Object.entries(start.tasks));
@@ -3148,9 +3239,12 @@ function createConversation(start) {
       const owner = task === undefined ? undefined : tasks.get(task);
       const placedIn = owner?.context ?? context;
       for (const unplaced of messagesOf(row, task !== undefined)) {
+        if (task === undefined && unplaced.type === Note)
+          device = deviceOf(unplaced) ?? device;
         if (unplaced.type === Prompt) {
           changes.push(...task === undefined ? endTurn(row.at) : endTaskTurn(task, row.at));
-          const opened = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...task === undefined ? {} : { task } }, context: placedIn, openedAt: row.at, ...owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt } };
+          const ranOn = task === undefined ? device : owner?.device;
+          const opened = { prompt: { ...unplaced, session: start.session, context: placedIn, turn: unplaced.id, ...task === undefined ? {} : { task } }, context: placedIn, openedAt: row.at, ...owner?.closedAt === undefined ? {} : { closedAt: owner.closedAt }, ...ranOn === undefined ? {} : { device: ranOn } };
           if (task === undefined)
             turn = opened;
           else
@@ -3179,9 +3273,9 @@ function createConversation(start) {
         if (placed.type === ToolResult && agentCalls.has(placed.callId) && !String(placed.output).startsWith(asyncLaunch))
           changes.push(...endCall(placed.callId, row.at));
         if (placed.type === Note && placed.from.type === Task) {
-          const call2 = tagOf(textOf(row.content), "tool-use-id");
-          if (call2 !== undefined && agentCalls.has(call2))
-            changes.push(...endCall(call2, row.at, tagOf(textOf(row.content), "task-id")));
+          const call = tagOf(textOf(row.content), "tool-use-id");
+          if (call !== undefined && agentCalls.has(call))
+            changes.push(...endCall(call, row.at, tagOf(textOf(row.content), "task-id")));
         }
       }
       return changes;
@@ -3189,7 +3283,7 @@ function createConversation(start) {
     startTask(data) {
       if (tasks.has(data.id))
         return [];
-      const started = { ...data, context };
+      const started = { ...data, context, ...device === undefined ? {} : { device } };
       tasks.set(data.id, started);
       agentCalls.add(data.openedBy);
       const changes = [{ type: TaskStart, task: started }];
@@ -3216,6 +3310,7 @@ function createConversation(start) {
         contextOpenedAt,
         ...turn === undefined ? {} : { turn },
         ...goal === undefined ? {} : { goal },
+        ...device === undefined ? {} : { device },
         agentCalls: [...agentCalls],
         endedCalls: Object.fromEntries(endedCalls),
         tasks: Object.fromEntries(tasks),
@@ -3226,7 +3321,7 @@ function createConversation(start) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/session/session.js
+// node_modules/@cmodjs/core/session/session.js
 var Session = "session";
 var UsageChange = "usageChange";
 var sessionEvents = {
@@ -3271,7 +3366,7 @@ var processEvents = {
   ReplyDisplay: { on: "MessageDisplay", before: "MessageDisplay" }
 };
 
-// ../Developer/tracer/node_modules/@cmodjs/core/utils/matcher.js
+// node_modules/@cmodjs/core/utils/matcher.js
 function matches(value, matcher) {
   if (matcher instanceof RegExp)
     return value !== undefined && value !== null && matcher.test(String(value));
@@ -3305,7 +3400,7 @@ function receivedMatcher(sent) {
   return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, receivedMatcher(value)]));
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/tool-calls.js
+// node_modules/@cmodjs/core/runtime/tool-calls.js
 var reservedKeys = ["tool", "tool_use_id", "consent", "agentId"];
 function toolInputOf(envelope) {
   return Object.fromEntries(Object.entries(envelope).filter(([key]) => !reservedKeys.includes(key)));
@@ -3344,7 +3439,7 @@ function toolCalls(claude, router) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/before.js
+// node_modules/@cmodjs/core/runtime/before.js
 var appended = [Note, Reply, Notice];
 var withNote = (below, note) => {
   const fields = below ?? {};
@@ -3359,7 +3454,7 @@ function relayOf(e) {
 function installBefore({ claude, router, hooks }) {
   const { place, wants, fold } = hooks;
   const now = () => new Date().toISOString();
-  const asked = async (event, change, decide = fold()) => await decide(event, change) ?? {};
+  const asked = async (event, change, decide) => await decide(event, change) ?? {};
   const message = (where, unplaced, task, isInTurn = true) => {
     const turn = isInTurn ? task === undefined ? where.turn : where.taskTurns[task] : undefined;
     const context = task === undefined ? where.context : where.tasks[task]?.context ?? where.context;
@@ -3377,6 +3472,18 @@ function installBefore({ claude, router, hooks }) {
     return waiting.length === 1 ? waiting[0]?.[0] : undefined;
   };
   const agentFolders = new Map;
+  const askedAtStop = (turn, signal) => new Promise((resolve, reject) => {
+    if (signal.aborted)
+      return resolve({});
+    const cancelled = () => resolve({});
+    signal.addEventListener("abort", cancelled, { once: true });
+    asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } }, fold(signal)).then(resolve, reject).finally(() => signal.removeEventListener("abort", cancelled));
+  });
+  const answeredStop = (below, answer, signal) => {
+    if (signal.aborted)
+      return below;
+    return answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse };
+  };
   const toolResultHook = (isFailure) => async (e, next) => {
     if (!await wants(ToolResult))
       return next(e);
@@ -3386,7 +3493,7 @@ function installBefore({ claude, router, hooks }) {
     const input = typeof e["tool_input"] === "object" && e["tool_input"] !== null ? e["tool_input"] : {};
     const task = typeof e["agent_id"] === "string" ? e["agent_id"] : undefined;
     const result = { id: callId, at: now(), type: ToolResult, callId, name, input, cwd: String(e["cwd"]), files: noFiles, output: isFailure ? e["error"] : e["tool_response"], isError: isFailure };
-    const answer = await asked(ToolResult, message(where, result, task));
+    const answer = await asked(ToolResult, message(where, result, task), fold(next.signal));
     const below = await next(e);
     const rewritten = answer.output === undefined || isFailure ? {} : name.startsWith("mcp__") ? { updatedMCPToolOutput: answer.output } : { updatedToolOutput: answer.output };
     const failed = answer.isError === true && !isFailure ? { block: answer.note === undefined ? `${name} failed.` : untagged(answer.note) } : {};
@@ -3397,7 +3504,7 @@ function installBefore({ claude, router, hooks }) {
       if (!await wants(Prompt))
         return next(e);
       const where = await place();
-      const answer = await asked(Prompt, message(where, { id: "", at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false));
+      const answer = await asked(Prompt, message(where, { id: "", at: now(), type: Prompt, text: e.text, from: senderOf(e.origin, false) }, undefined, false), fold(next.signal));
       if (answer.refuse !== undefined)
         return { drop: answer.refuse };
       const text = answer.text ?? e.text;
@@ -3425,7 +3532,7 @@ function installBefore({ claude, router, hooks }) {
       if (!await wants(Prompt) || relayOf(e) !== undefined)
         return next(e);
       const where = await place();
-      const answer = await asked(Prompt, message(where, { id: "", at: now(), type: Prompt, text: e.text, from: { type: "session" } }, e.agentId, false));
+      const answer = await asked(Prompt, message(where, { id: "", at: now(), type: Prompt, text: e.text, from: { type: "session" } }, e.agentId, false), fold(next.signal));
       if (answer.refuse !== undefined)
         return { consumed: answer.refuse };
       return next(answer.text === undefined ? e : { ...e, text: answer.text });
@@ -3434,7 +3541,7 @@ function installBefore({ claude, router, hooks }) {
       if (!await wants(Skill))
         return next(e);
       const where = await place();
-      const answer = await asked(Skill, message(where, { id: "", at: now(), type: Skill, name: e.skill, text: e.text }, undefined));
+      const answer = await asked(Skill, message(where, { id: "", at: now(), type: Skill, name: e.skill, text: e.text }, undefined), fold(next.signal));
       return answer.text === undefined ? next(e) : { text: answer.text };
     }),
     router.add("prompt.attachment", async (e, next) => {
@@ -3444,7 +3551,7 @@ function installBefore({ claude, router, hooks }) {
         return next(e);
       const where = await place();
       const found = attachmentType === undefined ? { id: "", at: now(), type: InstructionFile, path: instructionPathOf(e.text), text: e.text, isRule: isRulePath(instructionPathOf(e.text)) } : { id: "", at: now(), type: AttachedFile, path: attachedPathOf(e.text), attachmentType, text: e.text };
-      const answer = await asked(event, message(where, found, e.agentId));
+      const answer = await asked(event, message(where, found, e.agentId), fold(next.signal));
       if (answer.refuse !== undefined)
         return { text: null };
       return answer.text === undefined ? next(e) : { text: answer.text };
@@ -3459,7 +3566,7 @@ function installBefore({ claude, router, hooks }) {
         return next(e);
       const where = await place();
       const texts = new Map;
-      const decide = fold();
+      const decide = fold(next.signal);
       for (const [part, unplaced] of found.entries()) {
         if (!wanted.has(unplaced.type))
           continue;
@@ -3474,8 +3581,8 @@ function installBefore({ claude, router, hooks }) {
         return next(e);
       const where = await place();
       const input = toolInputOf(e);
-      const cwd2 = (e.agentId === undefined ? undefined : agentFolders.get(e.agentId)) ?? await claude.session.cwd();
-      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd: cwd2, files: noFiles }, e.agentId));
+      const cwd = (e.agentId === undefined ? undefined : agentFolders.get(e.agentId)) ?? await claude.session.cwd();
+      const answer = await asked(ToolCall, message(where, { id: e.tool_use_id, at: now(), type: ToolCall, callId: e.tool_use_id, name: e.tool, input, cwd, files: noFiles }, e.agentId), fold(next.signal));
       if (answer.refuse !== undefined)
         return { deny: answer.refuse };
       if (answer.result !== undefined)
@@ -3502,7 +3609,7 @@ function installBefore({ claude, router, hooks }) {
         return start(e);
       const where = await place();
       const task = { id: "", title: e.description, ...ownerOfSpawn(e.subagentType, where.session), model: e.model ?? e.parentModel, openedBy: e.tool_use_id, openedAt: now(), ...e.parentAgentId === undefined ? {} : { parent: e.parentAgentId } };
-      const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } });
+      const answer = await asked(TaskStart, { type: TaskStart, task: { ...task, context: where.context } }, fold(next.signal));
       if (answer.refuse !== undefined) {
         spawned.delete(e.tool_use_id);
         return { deny: answer.refuse };
@@ -3510,7 +3617,7 @@ function installBefore({ claude, router, hooks }) {
       if (e.workflow !== undefined)
         return start(e);
       const isFork = task.forkedFrom !== undefined;
-      const { agentType, model, cwd: cwd2 } = (isFork ? undefined : answer.owner) ?? {};
+      const { agentType, model, cwd } = (isFork ? undefined : answer.owner) ?? {};
       const isAsync = isFork ? undefined : answer.isAsync;
       const answered = {
         ...e,
@@ -3518,7 +3625,7 @@ function installBefore({ claude, router, hooks }) {
         ...answer.title === undefined ? {} : { description: answer.title },
         ...agentType === undefined ? {} : { subagentType: agentType },
         ...model === undefined ? {} : { model },
-        ...cwd2 === undefined ? {} : { cwd: cwd2 },
+        ...cwd === undefined ? {} : { cwd },
         ...isAsync === undefined ? {} : { background: isAsync }
       };
       spawned.set(e.tool_use_id, { prompt: answered.prompt, agentType: answered.subagentType });
@@ -3537,33 +3644,31 @@ function installBefore({ claude, router, hooks }) {
       const text = open?.text ?? prompt;
       if (text === undefined)
         return next(e);
-      const answer = await asked(Prompt, message(where, { id: open?.id ?? "", at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false));
+      const answer = await asked(Prompt, message(where, { id: open?.id ?? "", at: now(), type: Prompt, text, from: open?.from ?? { type: Task } }, e.agent_id, false), fold(next.signal));
       return withNote(await next(e), answer.note);
     }),
     router.add("classic.SubagentStop", async (e, next) => {
-      const stopped = (answer2) => {
-        if (answer2.block === undefined)
+      const stopped = (answer) => {
+        if (answer.block === undefined)
           agentFolders.delete(e.agent_id);
-        return answer2;
+        return answer;
       };
-      if (!await wants(TurnEnd))
+      if (next.signal.aborted || !await wants(TurnEnd))
         return stopped(await next(e));
       const turn = (await place()).taskTurns[e.agent_id];
       if (turn === undefined)
         return stopped(await next(e));
-      const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...turn, closedAt: now() } });
-      const below = await next(e);
-      return stopped(answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse });
+      const answer = await askedAtStop(turn, next.signal);
+      return stopped(answeredStop(await next(e), answer, next.signal));
     }),
     router.add("classic.Stop", async (e, next) => {
-      if (!await wants(TurnEnd))
+      if (next.signal.aborted || !await wants(TurnEnd))
         return next(e);
-      const where = await place();
-      if (where.turn === undefined)
+      const { turn } = await place();
+      if (turn === undefined)
         return next(e);
-      const answer = await asked(TurnEnd, { type: TurnEnd, turn: { ...where.turn, closedAt: now() } });
-      const below = await next(e);
-      return answer.refuse === undefined ? withNote(below, answer.note) : { ...below, block: answer.refuse };
+      const answer = await askedAtStop(turn, next.signal);
+      return answeredStop(await next(e), answer, next.signal);
     }),
     router.add("session.compact", async (e, next) => {
       if (!await wants(ContextEnd) || e.trigger === "precompute")
@@ -3572,8 +3677,10 @@ function installBefore({ claude, router, hooks }) {
       const task = e.agentId === undefined ? undefined : where.tasks[e.agentId];
       if (e.agentId !== undefined && task === undefined)
         return next(e);
-      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) });
-      return answer.refuse === undefined ? next(e) : { skip: answer.refuse };
+      const answer = await asked(ContextEnd, { type: ContextEnd, context: closingContext(where, task, now()) }, fold(next.signal));
+      if (answer.refuse !== undefined)
+        return { skip: answer.refuse };
+      return answer.summary === undefined ? next(e) : { messages: [{ role: "user", text: answer.summary, toolUses: [] }] };
     })
   ];
   return { remove: () => added.forEach((each) => each.remove()) };
@@ -3607,7 +3714,7 @@ var beforeAnswerKeys = {
   notice: ["text"],
   taskStart: ["prompt", "title", "owner", "isAsync", "refuse"],
   turnEnd: ["refuse", "note"],
-  contextEnd: ["refuse"]
+  contextEnd: ["refuse", "summary"]
 };
 function foldBefore(event, change, askers, report) {
   return foldAnswers(methodOf("before", event), beforeAnswerKeys[event], ["refuse", "result"], change, askers, report, withAnswer);
@@ -3645,7 +3752,7 @@ async function foldAnswers(method, takes, ends, change, askers, report, applied 
   return result;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/programs.js
+// node_modules/@cmodjs/core/runtime/programs.js
 function lastLineOf(text) {
   const trimmed = text.trim();
   return trimmed === "" ? undefined : trimmed.slice(trimmed.lastIndexOf(`
@@ -3711,7 +3818,7 @@ function locatingPrograms(claude) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/utils/parse-shell.js
+// node_modules/@cmodjs/core/utils/parse-shell.js
 var markerPattern = /\u0001(\d+)\u0001/g;
 var descriptorPattern = /[0-9]+(?=[<>])/y;
 var assignmentPattern = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
@@ -4743,7 +4850,7 @@ function literal(text) {
   return { text, isGlob: false, isDynamic: false };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/utils/call-effects.js
+// node_modules/@cmodjs/core/utils/call-effects.js
 function callEffects(use, workspace) {
   const { fs } = workspace;
   const absolute = (path, folder = workspace.cwd) => resolve(folder, expandHome(path, workspace.home, workspace.configRoot));
@@ -4818,10 +4925,10 @@ function optionalTextField(use, name) {
   return fieldOf(use, name) === undefined ? undefined : textField(use, name);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/hooks.js
+// node_modules/@cmodjs/core/runtime/hooks.js
 function classicHook(event, hook, report) {
   const routed = async (e, next) => {
-    const ours = await Promise.resolve().then(() => hook(e)).catch((error) => {
+    const ours = await Promise.resolve().then(() => hook(e, next.signal)).catch((error) => {
       report({ id: `hook:${event}`, message: `The ${event} listener failed`, error });
       return;
     });
@@ -4860,12 +4967,12 @@ function userSkillHook(claude) {
     return next(e);
   };
 }
-async function callFiles(name, claude, folders, use, cwd2) {
+async function callFiles(name, claude, folders, use, cwd) {
   try {
     const { home, configRoot } = await folders;
     if (home === undefined)
       throw new Error("HOME is not set, so ~ in a path has no meaning.");
-    const { shell, reads, writes } = callEffects(use, { cwd: cwd2, home, ...configRoot === undefined ? {} : { configRoot }, fs: claude.fs });
+    const { shell, reads, writes } = callEffects(use, { cwd, home, ...configRoot === undefined ? {} : { configRoot }, fs: claude.fs });
     const known = (accesses) => accesses.map(({ path }) => path).filter((path) => shell === undefined || !dynamicPattern.test(path));
     const unchecked = (path) => (error) => {
       if (!isMissing(error))
@@ -4887,7 +4994,7 @@ function mergeClassic(below, ours) {
   return merged;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/sessions.js
+// node_modules/@cmodjs/core/runtime/sessions.js
 var everySession = "*";
 var conversationMethods = {
   sessions: "cmod:sessions",
@@ -4993,7 +5100,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
   const queued = new Set;
   const parents = new Map;
   const known = new Map;
-  let current2 = { id: "", title: "", project: "", cwd: "", model: "", startedAt: "", lastAt: "", isRunning: true };
+  let current = { id: "", title: "", project: "", cwd: "", model: "", startedAt: "", lastAt: "", isRunning: true };
   let told = { session: "" };
   const colored = ({ color: _color, ...data }) => told.session === data.id && told.color !== undefined ? { ...data, color: told.color } : data;
   const keyOf = (scope) => scope.session ?? everySession;
@@ -5052,20 +5159,20 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     };
   };
   const refusalOf = (options, takes, error) => options.onFailure === "refuse" && takes.includes("refuse") ? { refuse: `${name}: ${messageOf(error)}` } : undefined;
-  const invoke = (method, options, run, takes = []) => withinTime(claude.clock, method, options, run).catch((error) => {
-    if (error instanceof PassedTimeout && !method.startsWith("before"))
+  const invoke = (method, options, cancel, run, takes = []) => withinTime(claude.clock, method, options, cancel, run).catch((error) => {
+    if (cancel.aborted || error instanceof PassedTimeout && !method.startsWith("before"))
       return;
     report(`session:${method}`, `The ${method} listener failed`, error);
     return refusalOf(options, takes, error);
   });
   const decidersOf = (session, event, isInProject) => [...deciding.get(session) ?? [], ...isInProject ? deciding.get(everySession) ?? [] : []].filter((entry) => entry.event === event);
   const decides = (entry, session, change) => isInScope(entry.scope, session, change, isUnderIn(session)) && (entry.matcher === undefined || matches(payloadOf(change), entry.matcher));
-  const combined = async (session, event, change, isInProject) => {
+  const combined = async (session, event, change, isInProject, cancel) => {
     const askers = decidersOf(session, event, isInProject).map((entry) => async (latest) => {
       if (!decides(entry, session, latest))
         return;
       const payload = await payloadFor(session, latest);
-      return invoke(entry.method, entry.options, async (time2) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time2)), beforeAnswerKeys[event]);
+      return invoke(entry.method, entry.options, cancel, async (time) => takenAnswer(entry.method, beforeAnswerKeys[event], await entry.listener(payload, time)), beforeAnswerKeys[event]);
     });
     const answer = await foldBefore(event, change, askers, (error) => report(`session:${methodOf("before", event)}`, `The ${methodOf("before", event)} listener failed`, error));
     return answer?.note === undefined ? answer : { ...answer, note: modNote(name, answer.note) };
@@ -5117,7 +5224,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       abort: async () => {
         if (data.closedAt !== undefined)
           throw new Error(`${name}: turn ${data.prompt.id} has ended, so there is nothing to abort.`);
-        const session = scope.session ?? current2.id;
+        const session = scope.session ?? current.id;
         await act(session, "abort", { turn: data.prompt.id }, task === undefined ? undefined : { session, task });
       }
     };
@@ -5154,13 +5261,13 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     ...eventMethods(() => ({ ...where(), isGoal: true }), true),
     text: async () => (await call(conversationMethods.goal, where())).text,
     tasks: async () => {
-      const { session = current2.id, task } = where();
+      const { session = current.id, task } = where();
       return (await call(conversationMethods.tasks, { session, ...task === undefined ? {} : { task } })).map((each) => taskOf(session, each));
     },
     update: async ({ text }) => {
       if (text.trim() === "")
         throw new Error(`${name}: a goal needs text.`);
-      const { session = current2.id, task } = where();
+      const { session = current.id, task } = where();
       await call(conversationMethods.updateGoal, { session, ...task === undefined ? {} : { task }, text });
     }
   });
@@ -5196,7 +5303,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
   const surfacesHere = async () => [...await claude.session.surfaces()];
   const sessionOf = (read, owned, isOwner = owned !== undefined) => {
     const id = () => read().id;
-    const isHere = () => owned === undefined && id() === current2.id;
+    const isHere = () => owned === undefined && id() === current.id;
     const scope = () => owned === undefined ? { session: id(), isAgent: true } : { session: owned.session, task: owned.task, isAgent: true };
     const where = () => owned === undefined ? { session: id() } : { session: owned.session, task: owned.task };
     const turnsOf = async (options = {}) => (await call(conversationMethods.turns, { ...where(), ...options })).map((turn) => turnOf(where(), turn));
@@ -5267,13 +5374,13 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     const started = async (starting) => taskOf(id(), await starting.catch((error) => Promise.reject(new Error(`${name}: ${messageOf(error)}`))));
     return Object.assign(session, {
       startTask: (task) => started(task.isBackground === true ? act(id(), "startBackgroundTask", task) : isHere() ? spawnTask(claude, task) : act(id(), "startTask", task)),
-      fork: (task) => started(isHere() ? spawnTask(claude, task, current2.id) : act(id(), "fork", task)),
+      fork: (task) => started(isHere() ? spawnTask(claude, task, current.id) : act(id(), "fork", task)),
       clone: (task) => started(act(id(), "clone", task)),
       callTool: async (toolCall) => await withFiles(await act(id(), "callTool", toolCall))
     });
   };
   const ownerOf = (session, data) => {
-    const parent = session === current2.id ? current2 : known.get(session);
+    const parent = session === current.id ? current : known.get(session);
     const isBackground = data.isBackground === true;
     return sessionOf(() => ({
       id: data.id,
@@ -5290,21 +5397,21 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
   };
   const processListeners = new Map;
   const processHearers = (method, payload) => [...processListeners.get(method) ?? []].filter(({ matcher, isEveryAgent }) => (payload["task"] === undefined || isEveryAgent) && (matcher === undefined || matches(payload, matcher)));
-  const raise = async (method, payload) => {
+  const raise = async (method, payload, cancel) => {
     const heard = processHearers(method, payload);
     if (!method.startsWith("before")) {
-      await Promise.all(heard.map(({ listener, options }) => invoke(method, options, (time2) => listener(payload, time2))));
+      await Promise.all(heard.map(({ listener, options }) => invoke(method, options, cancel, (time) => listener(payload, time))));
       return;
     }
     const takes = takesOf(method);
-    const askers = heard.map(({ listener, options }) => () => invoke(method, options, async (time2) => takenAnswer(method, takes, await listener(payload, time2)), takes));
+    const askers = heard.map(({ listener, options }) => () => invoke(method, options, cancel, async (time) => takenAnswer(method, takes, await listener(payload, time)), takes));
     return foldAnswers(method, takes, ["refuse"], undefined, askers, (error) => report(`session:${method}`, `The ${method} listener failed`, error));
   };
   const takesOf = (method) => answerKeys[method.slice("before".length)] ?? [];
   const refusalFor = (method, payload, error) => processHearers(method, payload).map((entry) => refusalOf(entry.options, takesOf(method), error)).find((answer) => answer !== undefined);
   const commandRun = async (e) => {
     const source = (await claude.command.list()).find((command) => command.name === e.command)?.source;
-    return { session: current2.id, cwd: current2.cwd, name: e.command, args: e.args, ...defined({ source }), from: senderOf(e.origin, false) };
+    return { session: current.id, cwd: current.cwd, name: e.command, args: e.args, ...defined({ source }), from: senderOf(e.origin, false) };
   };
   const commandListeners = { beforeRun: new Set, onRun: new Set };
   for (const [method, held] of Object.entries(commandListeners))
@@ -5313,14 +5420,14 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     if (commandListeners.beforeRun.size === 0 && commandListeners.onRun.size === 0)
       return next(e);
     const run = await commandRun(e);
-    const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise("beforeRun", run);
+    const answer = commandListeners.beforeRun.size === 0 ? undefined : await raise("beforeRun", run, next.signal);
     if (typeof answer?.["refuse"] === "string")
       return { text: answer["refuse"] };
     if (typeof answer?.["result"] === "string")
       return { text: answer["result"], ...typeof answer["exitCode"] === "number" ? { exitCode: answer["exitCode"] } : {} };
     const args = typeof answer?.["args"] === "string" ? answer["args"] : e.args;
     const ran = await next(args === e.args ? e : { ...e, args });
-    raise("onRun", { ...run, args });
+    raise("onRun", { ...run, args }, next.signal);
     return typeof answer?.["note"] === "string" ? { ...ran, context: [...ran.context ?? [], modNote(name, answer["note"])] } : ran;
   }, async (e, error) => {
     const refusal = commandListeners.beforeRun.size === 0 ? undefined : refusalFor("beforeRun", await commandRun(e), error);
@@ -5334,7 +5441,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       const routes = permissionRoutes?.();
       if (routes === undefined)
         throw new Error(withoutPermissionCheck(name, method));
-      return routes(method, { raise, refusalFor, hookOn, routeOn, current: () => current2 });
+      return routes(method, { raise, refusalFor, hookOn, routeOn, current: () => current });
     }
     const event = processEvents[named];
     const hook = (isBefore ? event.before : undefined) ?? event.on;
@@ -5349,25 +5456,25 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
       const refusal = refusalFor(method, processPayloadOf(named, input), error);
       return refusal === undefined ? undefined : hookAnswerOf(name, named, refusal);
     };
-    return hookOn(hook, async (input) => {
+    return hookOn(hook, async (input, signal) => {
       const payload = processPayloadOf(named, input);
       if (named === "SessionStart" && payload["source"] === "compact") {
         if (!isBefore)
           return;
         const task = compacting?.agentId;
         const model = task === undefined ? await claude.session.model() : undefined;
-        const answer2 = await raise(method, { ...payload, ...defined({ task, model, title: current2.title || undefined }) });
-        if (answer2 === undefined)
+        const answer = await raise(method, { ...payload, ...defined({ task, model, title: current.title || undefined }) }, signal);
+        if (answer === undefined)
           return;
-        return hookAnswerOf(name, named, task === undefined ? answer2 : defined({ note: answer2["note"] }));
+        return hookAnswerOf(name, named, task === undefined ? answer : defined({ note: answer["note"] }));
       }
       if (!isBefore) {
-        raise(method, payload);
+        raise(method, payload, signal);
         return;
       }
       if (named === "ModelChange")
         modelNotes.splice(0);
-      const answer = await raise(method, payload);
+      const answer = await raise(method, payload, signal);
       if (answer === undefined)
         return;
       if (named === "ModelChange" && typeof answer["note"] === "string" && answer["refuse"] === undefined)
@@ -5398,7 +5505,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     return { remove: () => void held.delete(entry) };
   };
   const processMethods = () => Object.fromEntries(Object.entries(processEvents).flatMap(([named, event]) => [`on${named}`, ..."before" in event ? [`before${named}`] : []]).map((method) => [method, (...args) => listen(method, args)]));
-  const here = sessionOf(() => current2);
+  const here = sessionOf(() => current);
   const currentSession = Object.assign(here, processMethods(), {
     goal: Object.assign(here.goal, { beforeSessionStart: (...args) => listen("beforeSessionStart", args, true) }),
     async scrollTo(message, options) {
@@ -5419,18 +5526,18 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
         return currentSession;
       },
       list: async (scope = {}) => (await call(conversationMethods.sessions, scope)).map((data) => {
-        if (data.id !== current2.id) {
+        if (data.id !== current.id) {
           known.set(data.id, data);
           return sessionOf(() => known.get(data.id) ?? data);
         }
-        if (current2.title === "")
-          current2 = { ...current2, title: data.title };
+        if (current.title === "")
+          current = { ...current, title: data.title };
         return currentSession;
       }),
       search: (text, matcher, options = {}) => searched({ text, ...searchOptionsOf(options) }, matcher),
       ...every
     },
-    changed(session, change, isInProject) {
+    changed(session, change, isInProject, cancel) {
       remember(session, change);
       let payload;
       for (const key of isInProject ? [session, everySession] : [session]) {
@@ -5438,7 +5545,7 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
           if (!isHeardBy(event, matcher, change) || !isInScope(scope, session, change, isUnderIn(session)))
             continue;
           payload ??= payloadFor(session, change);
-          payload.then((heard) => invoke(method, options, (time2) => listener(heard, time2))).catch((error) => report(`session:${method}`, `The ${method} listener failed`, error));
+          payload.then((heard) => invoke(method, options, cancel, (time) => listener(heard, time))).catch((error) => report(`session:${method}`, `The ${method} listener failed`, error));
         }
       }
     },
@@ -5446,11 +5553,11 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
     failedBefore,
     raise,
     listen,
-    turn: (data) => turnOf({ session: current2.id }, data),
+    turn: (data) => turnOf({ session: current.id }, data),
     follow(next) {
-      const moved = next.id !== current2.id && current2.id !== "";
-      const previous = current2.id;
-      current2 = colored({ ...next, title: next.title || (next.id === current2.id ? current2.title : ""), isRunning: true, lastAt: new Date().toISOString() });
+      const moved = next.id !== current.id && current.id !== "";
+      const previous = current.id;
+      current = colored({ ...next, title: next.title || (next.id === current.id ? current.title : ""), isRunning: true, lastAt: new Date().toISOString() });
       if (!moved)
         return;
       for (const into of [listening, deciding]) {
@@ -5460,16 +5567,16 @@ function createSessionsClient({ name, claude, report, hookOn, routeOn, permissio
         into.delete(previous);
         for (const entry of kept)
           if (entry.scope.session === previous)
-            entry.scope = { ...entry.scope, session: current2.id };
-        into.set(current2.id, new Set([...into.get(current2.id) ?? [], ...kept]));
+            entry.scope = { ...entry.scope, session: current.id };
+        into.set(current.id, new Set([...into.get(current.id) ?? [], ...kept]));
       }
       parents.delete(previous);
       subscribe(previous);
-      subscribe(current2.id);
+      subscribe(current.id);
     },
     recolor(next) {
       told = next;
-      current2 = colored(current2);
+      current = colored(current);
     }
   };
 }
@@ -5540,14 +5647,14 @@ var processFields = {
 async function spawnTask(claude, task, forkedFrom) {
   if (task.title.trim() === "")
     throw new Error("a task needs a title.");
-  const { name, agentType, model, cwd: cwd2 } = forkedFrom === undefined ? task : { prompt: task.prompt, title: task.title, agentType: forkAgentType };
+  const { name, agentType, model, cwd } = forkedFrom === undefined ? task : { prompt: task.prompt, title: task.title, agentType: forkAgentType };
   const started = await claude.agent.spawn({
     prompt: task.prompt,
     description: task.title,
     ...name === undefined ? {} : { name },
     ...agentType === undefined ? {} : { subagentType: agentType },
     ...model === undefined ? {} : { model },
-    ...cwd2 === undefined ? {} : { cwd: cwd2 }
+    ...cwd === undefined ? {} : { cwd }
   });
   if (started.deny !== undefined)
     throw new Error(`Claude Code refused the task: ${started.deny}`);
@@ -5596,7 +5703,7 @@ function searchOptionsOf({ running, since, everyProject, before }) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/conversations.js
+// node_modules/@cmodjs/core/runtime/conversations.js
 var relayKinds = new Set(["act", "before", "answer", "watch", "goal", "taskEnd"]);
 var taskVariable = "CMOD_TASK";
 var isRelay = (value) => isObject(value) && relayKinds.has(value["kind"]);
@@ -5614,7 +5721,7 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   const listeners = `${folder}/listeners`;
   const heard = new Map;
   const subscribed = new Map;
-  let savingListeners = Promise.resolve();
+  let listenerFiles = Promise.resolve();
   const asked = new Map;
   const ownWatches = new Map;
   let watchers = [];
@@ -5635,19 +5742,20 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     engineTurns.set(agent, e.turnId);
     return next(e);
   });
-  const endTurn = (ending, task) => (below) => {
+  const endTurn = (ending, task) => (below, isInterrupted = false) => {
     if (below.block !== undefined)
       return below;
     engineTurns.delete(task ?? "");
-    dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task));
+    if (!isInterrupted)
+      dispatch(session, conversation.endTurn(new Date().toISOString(), ending, task));
     return below;
   };
-  router.add("classic.Stop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } })(await next(e)));
+  router.add("classic.Stop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } })(await next(e), next.signal.aborted));
   router.add("classic.StopFailure", async (e, next) => endTurn({ reason: "error", failure: { type: String(e.error), text: e.error_details ?? e.last_assistant_message ?? String(e.error) } })(await next(e)));
-  router.add("classic.SubagentStop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } }, e.agent_id)(await next(e)));
+  router.add("classic.SubagentStop", async (e, next) => endTurn({ reason: "answer", ...e.last_assistant_message === undefined ? {} : { answer: e.last_assistant_message } }, e.agent_id)(await next(e), next.signal.aborted));
   router.add("classic.Stop", async (e, next) => {
     const below = await next(e);
-    if (below.block === undefined)
+    if (below.block === undefined && !next.signal.aborted)
       answerTask().catch((error) => report("task", "Could not record that this session answered its task", error));
     return below;
   });
@@ -5763,13 +5871,13 @@ function serveConversations({ claude, router, store, project, report, clear }) {
       }
     };
   };
-  const ask = (to, relay, deadlineMs) => new Promise((resolve2, reject) => {
+  const ask = (to, relay, deadlineMs) => new Promise((resolve, reject) => {
     const id = `${session}:${asks += 1}`;
     const settle = {
       resolve(value) {
         if (asked.delete(id))
           timer.cancel();
-        resolve2(value);
+        resolve(value);
       },
       reject(error) {
         if (asked.delete(id))
@@ -5789,8 +5897,12 @@ function serveConversations({ claude, router, store, project, report, clear }) {
   const publishNow = async (isEnding) => {
     if (session === "")
       return;
-    const list = isEnding ? [] : [...ownWatches.values()].filter((watch) => watch.events.length > 0);
-    await claude.fs.write(`${watches}/${session}.json`, JSON.stringify(list));
+    const at = session;
+    const list = await onListenerFiles(async () => {
+      const kept = isEnding ? [] : [...ownWatches.values()].filter((watch) => watch.events.length > 0);
+      await claude.fs.write(`${watches}/${at}.json`, JSON.stringify(kept));
+      return kept;
+    });
     const targets = new Set([...published, ...list.map((watch) => watch.target)]);
     published = new Set(list.map((watch) => watch.target));
     const running = targets.has(everySession) ? (await json(["history", "sessions", "--running"])).map((each) => each.id) : [];
@@ -5805,28 +5917,49 @@ function serveConversations({ claude, router, store, project, report, clear }) {
     lists.set(id, list);
     subscribed.set(caller, lists);
   };
-  const saveListeners = (isEnding = false) => {
-    const at = session;
-    const kept = isEnding ? {} : Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)]));
-    const next = savingListeners.then(() => at === "" ? undefined : claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(kept)));
-    savingListeners = next.catch((error) => claude.ui.log(`cmod: saving the mods' listeners failed: ${messageOf(error)}`, { to: "debug" }));
+  const onListenerFiles = (work) => {
+    const next = listenerFiles.then(work);
+    listenerFiles = next.catch((error) => claude.ui.log(`cmod: reading or writing the mods' listeners failed: ${messageOf(error)}`, { to: "debug" }));
     return next;
   };
-  const restoreListeners = async () => {
-    const kept = JSON.parse(await claude.fs.read(`${listeners}/${session}.json`).catch(ifMissing("{}")));
-    for (const [caller, lists] of Object.entries(kept))
-      if (!subscribed.has(caller))
-        for (const [id, list] of Object.entries(lists))
-          hear(caller, id, list);
+  const clearListeners = (at) => onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, "{}"));
+  const clearWatches = (at) => onListenerFiles(() => claude.fs.write(`${watches}/${at}.json`, "[]"));
+  const saveListeners = (isEnding = false) => {
+    const at = session;
+    if (at === "")
+      return Promise.resolve();
+    if (isEnding)
+      return clearListeners(at);
+    return onListenerFiles(() => claude.fs.write(`${listeners}/${at}.json`, JSON.stringify(Object.fromEntries([...subscribed].map(([caller, lists]) => [caller, Object.fromEntries(lists)])))));
   };
-  const readWatchers = async () => {
+  const restoreListeners = () => {
+    const at = session;
+    return onListenerFiles(async () => {
+      const kept = JSON.parse(await claude.fs.read(`${listeners}/${at}.json`).catch(ifMissing("{}")));
+      for (const [caller, lists] of Object.entries(kept))
+        if (!subscribed.has(caller))
+          for (const [id, list] of Object.entries(lists))
+            hear(caller, id, list);
+    });
+  };
+  const readWatchers = () => onListenerFiles(async () => {
     const files = await claude.fs.list(watches).catch(ifMissing([]));
     const found = [];
     for (const file of files) {
       const from = file.name.replace(/\.json$/, "");
       if (!file.name.endsWith(".json"))
         continue;
-      const list = JSON.parse(await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing("[]")));
+      const text = await claude.fs.read(`${watches}/${file.name}`).catch(ifMissing("[]"));
+      let list;
+      try {
+        list = JSON.parse(text);
+      } catch (error) {
+        if (from === session || !(error instanceof SyntaxError))
+          throw error;
+        claude.ui.log(`cmod: session ${from} was writing its before listeners, so it keeps the ones from before until it relays that it changed them`, { to: "debug" });
+        found.push(...watchers.filter((watch) => watch.from === from));
+        continue;
+      }
       if (from === session) {
         for (const watch of list)
           if (!ownWatches.has(`${watch.mod}
@@ -5838,7 +5971,7 @@ ${watch.target}`, watch);
       found.push(...list.filter((watch) => watch.target === session || watch.target === everySession && watch.project === project()).map((watch) => ({ ...watch, from })));
     }
     watchers = found;
-  };
+  });
   const changeGoal = (task, text) => dispatch(session, task === undefined ? conversation.changeGoal(text) : [{ type: GoalChange, goal: { text, task } }]);
   const reloadWatchers = () => {
     watching = readWatchers().catch((error) => report("before", "Kept the other sessions’ before listeners from before", error));
@@ -5859,7 +5992,7 @@ ${watcher.mod}`, watcher])).values()];
         return true;
     return false;
   };
-  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard2, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard2, matcher === undefined ? undefined : receivedMatcher(matcher), change));
+  const refuses = (watcher, event, change) => beforeAnswerKeys[event].includes("refuse") && (watcher.refusing ?? []).some(({ event: heard, matcher, scope }) => isInScope(scope ?? {}, session, change, isUnderHere) && isHeardBy(heard, matcher === undefined ? undefined : receivedMatcher(matcher), change));
   const askAway = async (watcher, event, change, endsAt) => {
     try {
       const leftMs = Math.min(beforeDeadlineMs, endsAt - await claude.clock.now());
@@ -5874,7 +6007,7 @@ ${watcher.mod}`, watcher])).values()];
       }
       watchers = watchers.filter((each) => each.from !== watcher.from);
       claude.ui.log(`cmod: session ${watcher.from} ended without clearing its before listeners, so they are cleared now`, { to: "debug" });
-      await claude.fs.write(`${watches}/${watcher.from}.json`, "[]");
+      await clearWatches(watcher.from);
       return;
     }
   };
@@ -5882,15 +6015,30 @@ ${watcher.mod}`, watcher])).values()];
     await Promise.all([starting, watching]);
     return deciders(event).length > 0;
   };
-  const decide = () => {
+  const decide = (cancel) => {
     let endsAt;
     return (event, change) => foldBefore(event, change, deciders(event).map((watcher) => async (latest) => {
+      if (cancel?.aborted === true)
+        return;
       if (watcher.from === session)
         return askHere(watcher.mod, event, latest);
       endsAt ??= claude.clock.now().then((now) => now + awayFoldMs);
       return askAway(watcher, event, latest, await endsAt);
-    }), (error) => report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error));
+    }), (error) => {
+      if (cancel?.aborted !== true)
+        report(`before:${event}`, `Passed the ${event} on without a mod's answer`, error);
+    });
   };
+  const recordCompaction = async (e, next) => {
+    const compacted = await next(e);
+    if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
+      return compacted;
+    const at = new Date().toISOString();
+    const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
+    take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
+    return compacted;
+  };
+  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
   installBefore({
     claude,
     router,
@@ -5925,10 +6073,10 @@ ${watcher.mod}`, watcher])).values()];
     });
     reloadWatchers();
     if (subscribed.size > 0)
-      Promise.all([previous === "" ? undefined : claude.fs.write(`${listeners}/${previous}.json`, "{}"), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
+      Promise.all([previous === "" ? undefined : clearListeners(previous), saveListeners()]).catch((error) => report("follow", "Kept telling the mods about the session from before", error));
     if (ownWatches.size === 0)
       return;
-    Promise.all([previous === "" ? undefined : claude.fs.write(`${watches}/${previous}.json`, "[]"), publishWatches()]).catch((error) => report("before", "Kept its before listeners on the session from before", error));
+    Promise.all([previous === "" ? undefined : clearWatches(previous), publishWatches()]).catch((error) => report("before", "Kept its before listeners on the session from before", error));
   };
   const take = async (row, task) => {
     await starting;
@@ -5966,21 +6114,11 @@ ${watcher.mod}`, watcher])).values()];
     const kept = await next(e);
     if (kept.deny !== undefined || session === "")
       return kept;
-    const cwd2 = e.message.type === "assistant" ? await claude.session.cwd() : "";
-    take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd2), e.agentId).catch((error) => report("append", "Missed a message", error));
+    const cwd = e.message.type === "assistant" ? await claude.session.cwd() : "";
+    take(rowOfAppend({ uuid: kept.uuid, door: e.door, origin: e.origin, message: kept.message }, new Date().toISOString(), cwd), e.agentId).catch((error) => report("append", "Missed a message", error));
     return kept;
   };
   router.add("session.append", recordAppend, (e, _error, next) => recordAppend(e, next));
-  const recordCompaction = async (e, next) => {
-    const compacted = await next(e);
-    if (e.trigger === "precompute" || compacted.skip !== undefined || session === "")
-      return compacted;
-    const at = new Date().toISOString();
-    const boundary = { id: `compact:${e.agentId ?? session}:${at}`, at, type: "system", name: "compact_boundary", isMeta: false, isSummary: false, content: [] };
-    take(boundary, e.agentId).catch((error) => report("compact", "Missed a compaction", error));
-    return compacted;
-  };
-  router.add("session.compact", recordCompaction, (e, _error, next) => recordCompaction(e, next));
   router.add("session.measure", async (e, next) => {
     const measured = await next(e);
     if (session !== "")
@@ -6084,10 +6222,10 @@ ${watcher.mod}`, watcher])).values()];
     const turnId = engineTurns.get(task ?? "");
     if (turnId === undefined)
       throw new Error(`no turn is running in ${task === undefined ? `session ${session}` : `task ${task}`}.`);
-    const asked2 = isObject(input) ? input["turn"] : undefined;
+    const asked = isObject(input) ? input["turn"] : undefined;
     const open = task === undefined ? conversation.state.turn : conversation.state.taskTurns[task];
-    if (open?.prompt.id !== asked2)
-      throw new Error(`turn ${String(asked2)} has ended, so there is nothing to abort.`);
+    if (open?.prompt.id !== asked)
+      throw new Error(`turn ${String(asked)} has ended, so there is nothing to abort.`);
     await claude.turn.abort({ turnId });
     return null;
   };
@@ -6113,12 +6251,12 @@ ${watcher.mod}`, watcher])).values()];
     if (task.name !== undefined)
       throw new Error("a background task takes no name.");
     const fresh = forkedFrom === undefined ? task : {};
-    const asked2 = { id: "", title: task.title, ...forkedFrom === undefined ? {} : { forkedFrom }, ...fresh.agentType === undefined ? {} : { agentType: fresh.agentType }, ...fresh.model === undefined ? {} : { model: fresh.model }, openedBy: "", openedAt: new Date().toISOString(), isBackground: true };
-    const answer = await wants(TaskStart) ? await decide()(TaskStart, { type: TaskStart, task: { ...asked2, context: conversation.state.context } }) : undefined;
+    const asked = { id: "", title: task.title, ...forkedFrom === undefined ? {} : { forkedFrom }, ...fresh.agentType === undefined ? {} : { agentType: fresh.agentType }, ...fresh.model === undefined ? {} : { model: fresh.model }, openedBy: "", openedAt: new Date().toISOString(), isBackground: true };
+    const answer = await wants(TaskStart) ? await decide()(TaskStart, { type: TaskStart, task: { ...asked, context: conversation.state.context } }) : undefined;
     if (answer?.refuse !== undefined)
       throw new Error(`a beforeTaskStart listener refused the task: ${answer.refuse}`);
     const owner = forkedFrom === undefined ? answer?.owner ?? {} : {};
-    const folder2 = owner.cwd ?? fresh.cwd;
+    const folder = owner.cwd ?? fresh.cwd;
     const here = await claude.session.cwd();
     const args = [
       "task",
@@ -6129,7 +6267,7 @@ ${watcher.mod}`, watcher])).values()];
       ...textArg("--agent", owner.agentType ?? fresh.agentType),
       ...textArg("--model", owner.model ?? fresh.model),
       "--cwd",
-      folder2 === undefined ? here : resolve(here, folder2),
+      folder === undefined ? here : resolve(here, folder),
       "--json",
       "--",
       answer?.prompt ?? task.prompt
@@ -6140,17 +6278,17 @@ ${watcher.mod}`, watcher])).values()];
   };
   const answerTask = async () => {
     const { env } = await claude.settings.read();
-    const asked2 = isObject(env) ? env[taskVariable] : undefined;
-    if (typeof asked2 !== "string")
+    const asked = isObject(env) ? env[taskVariable] : undefined;
+    if (typeof asked !== "string")
       return;
     const answered = `cmod:task-answered:${session}`;
     if (await claude.store.get(answered) === true)
       return;
     await claude.store.set(answered, true);
-    const { session: from, ...task } = JSON.parse(asked2);
-    const ended2 = { ...task, id: session, closedAt: new Date().toISOString() };
-    await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended2));
-    await post(from, { kind: "taskEnd", task: ended2 }).catch((error) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: "debug" }));
+    const { session: from, ...task } = JSON.parse(asked);
+    const ended = { ...task, id: session, closedAt: new Date().toISOString() };
+    await claude.fs.write(`${backgroundTasks}/${from}/${session}.json`, JSON.stringify(ended));
+    await post(from, { kind: "taskEnd", task: ended }).catch((error) => claude.ui.log(`cmod: session ${from} did not hear that its task ${session} answered: ${messageOf(error)}`, { to: "debug" }));
   };
   const actElsewhere = async (caller, target, action, input, task) => {
     const isLive = await isRunning(target);
@@ -6254,7 +6392,7 @@ ${watcher.mod}`, watcher])).values()];
       await starting;
       const kept = liveTasks().filter((task) => isNested || task.parent === request["task"]);
       const running = await claude.agent.list().catch((error) => (claude.ui.log(`cmod: the tasks show no status, because Claude Code listed no agents: ${messageOf(error)}`, { to: "debug" }), []));
-      const background = saved.flatMap(({ id: id2, status }) => status === undefined ? [] : [{ id: id2, status }]);
+      const background = saved.flatMap(({ id, status }) => status === undefined ? [] : [{ id, status }]);
       return tasksWithAgents(merged(saved, kept, (task) => task.id), [...running, ...background]);
     },
     async[conversationMethods.goal](request) {
@@ -6351,13 +6489,13 @@ function textArg(flag, value) {
   return typeof value === "string" ? [flag, value] : [];
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/engine.js
+// node_modules/@cmodjs/core/runtime/engine.js
 var engines = new WeakMap;
 function keepEngine(mod, engine) {
   engines.set(mod, engine);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/utils/metadata.js
+// node_modules/@cmodjs/core/utils/metadata.js
 class MetadataError extends Error {
   line;
   constructor(line, message) {
@@ -6371,7 +6509,7 @@ var slashComments = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "go",
 var dashComments = ["lua", "sql", "hs", "elm"];
 var hashCommentNames = ["Makefile", "Dockerfile", "Brewfile", "Gemfile", "Rakefile", "Justfile", "justfile"];
 var sidecarSuffix = ".meta";
-function formatOf(path, firstLine2) {
+function formatOf(path, firstLine) {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const dot = name.lastIndexOf(".");
   const extension = dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
@@ -6383,45 +6521,45 @@ function formatOf(path, firstLine2) {
     return { type: "comment", prefix: "//" };
   if (dashComments.includes(extension))
     return { type: "comment", prefix: "--" };
-  if (extension === "" && firstLine2?.startsWith("#!") === true)
+  if (extension === "" && firstLine?.startsWith("#!") === true)
     return { type: "comment", prefix: "#" };
   return { type: "sidecar" };
 }
-function readMetadata(text, format2) {
+function readMetadata(text, format) {
   const lines = text.split(`
 `);
-  if (format2.type === "comment") {
-    const region2 = commentRegion(lines, format2.prefix);
-    return { metadata: region2 === undefined ? {} : asRecord(mapEntries(region2.lines, region2.start + 2, 0)) };
+  if (format.type === "comment") {
+    const region = commentRegion(lines, format.prefix);
+    return { metadata: region === undefined ? {} : asRecord(mapEntries(region.lines, region.start + 2, 0)) };
   }
-  const region = format2.type === "frontmatter" ? frontmatterRegion(lines) : { start: -1, end: lines.length, lines };
+  const region = format.type === "frontmatter" ? frontmatterRegion(lines) : { start: -1, end: lines.length, lines };
   if (region === undefined)
     return { metadata: {} };
   const block = metadataBlock(region);
-  const name = format2.type === "frontmatter" ? topLevelScalar(region, "name") : undefined;
+  const name = format.type === "frontmatter" ? topLevelScalar(region, "name") : undefined;
   return { metadata: block === undefined ? {} : asRecord(block.entries), ...name === undefined ? {} : { name } };
 }
-function writeMetadata(text, format2, metadata) {
+function writeMetadata(text, format, metadata) {
   const lines = text.split(`
 `);
   const entries = Object.entries(metadata);
-  if (format2.type === "comment") {
-    const { prefix } = format2;
-    const block2 = entries.length === 0 ? [] : [`${prefix} /// metadata`, ...entries.map(([key, value]) => `${prefix} ${scalar(key)}: ${scalar(value)}`), `${prefix} ///`];
-    const region2 = commentRegion(lines, prefix);
-    if (region2 !== undefined)
-      return [...lines.slice(0, region2.start), ...block2, ...lines.slice(region2.end + 1)].join(`
+  if (format.type === "comment") {
+    const { prefix } = format;
+    const block = entries.length === 0 ? [] : [`${prefix} /// metadata`, ...entries.map(([key, value]) => `${prefix} ${scalar(key)}: ${scalar(value)}`), `${prefix} ///`];
+    const region = commentRegion(lines, prefix);
+    if (region !== undefined)
+      return [...lines.slice(0, region.start), ...block, ...lines.slice(region.end + 1)].join(`
 `);
-    if (block2.length === 0)
+    if (block.length === 0)
       return text;
     const at = lines[0]?.startsWith("#!") === true ? 1 : 0;
-    return [...lines.slice(0, at), ...block2, ...lines.slice(at)].join(`
+    return [...lines.slice(0, at), ...block, ...lines.slice(at)].join(`
 `);
   }
   const map = entries.length === 0 ? [] : ["metadata:", ...entries.map(([key, value]) => `  ${scalar(key)}: ${scalar(value)}`)];
-  if (format2.type === "sidecar") {
-    const block2 = metadataBlock({ start: -1, end: lines.length, lines });
-    const rest = block2 === undefined ? lines : [...lines.slice(0, block2.start), ...lines.slice(block2.end)];
+  if (format.type === "sidecar") {
+    const block = metadataBlock({ start: -1, end: lines.length, lines });
+    const rest = block === undefined ? lines : [...lines.slice(0, block.start), ...lines.slice(block.end)];
     const kept = rest.join(`
 `).trim();
     return [...kept === "" ? [] : [kept], ...map].join(`
@@ -6486,10 +6624,10 @@ function indentOf(lines) {
   const first = lines.find((line) => line.trim() !== "" && !line.trim().startsWith("#"));
   return first === undefined ? 0 : /^\s*/.exec(first)?.[0].length ?? 0;
 }
-function mapEntries(lines, firstLine2, indent) {
+function mapEntries(lines, firstLine, indent) {
   const entries = [];
   lines.forEach((raw, index) => {
-    const lineNumber = firstLine2 + index;
+    const lineNumber = firstLine + index;
     const line = withoutComment(raw);
     if (line.trim() === "")
       return;
@@ -6523,36 +6661,36 @@ function entryOf(text, lineNumber) {
 function splitOutsideQuotes(text, separator, lineNumber, needsSpace = false) {
   const parts = [];
   let quote;
-  let current2 = "";
+  let current = "";
   for (let index = 0;index < text.length; index += 1) {
     const char = text[index];
     if (quote !== undefined) {
-      current2 += char;
+      current += char;
       if (char === "\\" && quote === '"') {
-        current2 += text[index + 1] ?? "";
+        current += text[index + 1] ?? "";
         index += 1;
       } else if (char === quote)
         quote = undefined;
       continue;
     }
-    const before = current2.trimEnd().at(-1);
+    const before = current.trimEnd().at(-1);
     if ((char === '"' || char === "'") && (before === undefined || before === ":"))
       quote = char;
     const next = text[index + 1];
     if (char === separator && (!needsSpace || next === undefined || next === " " || next === "\t")) {
-      parts.push(current2);
-      current2 = "";
+      parts.push(current);
+      current = "";
       if (needsSpace) {
         parts.push(text.slice(index + 1));
         return parts;
       }
       continue;
     }
-    current2 += char;
+    current += char;
   }
   if (quote !== undefined)
     throw new MetadataError(lineNumber, `a ${quote === '"' ? "double" : "single"} quote never closes.`);
-  parts.push(current2);
+  parts.push(current);
   return parts;
 }
 function withoutComment(line) {
@@ -6617,7 +6755,7 @@ function scalar(text) {
   return isPlain ? text : JSON.stringify(text);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/metadata.js
+// node_modules/@cmodjs/core/runtime/metadata.js
 var skippedFolders = [".git", "node_modules"];
 var ownKey = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 function resolvedPath(path, places) {
@@ -6643,14 +6781,14 @@ function createModFiles({ name, claude, places, report }) {
       throw new Error(`${path} is not a file, so it holds no metadata.`);
     const realPath = stat.realPath ?? path;
     const extensionless = !realPath.slice(realPath.lastIndexOf("/") + 1).includes(".");
-    const firstLine2 = extensionless ? (await claude.fs.read(realPath)).split(`
+    const firstLine = extensionless ? (await claude.fs.read(realPath)).split(`
 `, 1)[0] : undefined;
-    const format2 = formatOf(realPath, firstLine2);
-    const holder = format2.type === "sidecar" ? `${realPath}${sidecarSuffix}` : realPath;
-    const sidecar = format2.type === "sidecar" ? await claude.fs.stat(holder).catch(ifMissing(undefined)) : undefined;
-    return { realPath, format: format2, holder, signature: `${stat.mtimeMs}:${stat.size}:${sidecar?.kind === "file" ? `${sidecar.mtimeMs}:${sidecar.size}` : ""}` };
+    const format = formatOf(realPath, firstLine);
+    const holder = format.type === "sidecar" ? `${realPath}${sidecarSuffix}` : realPath;
+    const sidecar = format.type === "sidecar" ? await claude.fs.stat(holder).catch(ifMissing(undefined)) : undefined;
+    return { realPath, format, holder, signature: `${stat.mtimeMs}:${stat.size}:${sidecar?.kind === "file" ? `${sidecar.mtimeMs}:${sidecar.size}` : ""}` };
   };
-  const textOf2 = async (holder) => (await claude.fs.stat(holder).catch(ifMissing(undefined)))?.kind === "file" ? claude.fs.read(holder) : "";
+  const textOf = async (holder) => (await claude.fs.stat(holder).catch(ifMissing(undefined)))?.kind === "file" ? claude.fs.read(holder) : "";
   const skipped = (path, value) => (error) => {
     if (isMissing(error))
       return value;
@@ -6667,7 +6805,7 @@ function createModFiles({ name, claude, places, report }) {
       return cached.read;
     let read;
     try {
-      const { metadata, name: declared } = readMetadata(await textOf2(located.holder), located.format);
+      const { metadata, name: declared } = readMetadata(await textOf(located.holder), located.format);
       read = { metadata, ...declared === undefined ? {} : { name: declared } };
     } catch (error) {
       if (!(error instanceof MetadataError))
@@ -6691,7 +6829,7 @@ function createModFiles({ name, claude, places, report }) {
     const maxDepth = scanned.glob.includes("**") ? Number.POSITIVE_INFINITY : scanned.glob.split("/").length;
     const found = [];
     const visited = new Set;
-    const walk2 = async (folder, depth) => {
+    const walk = async (folder, depth) => {
       const real = (await claude.fs.stat(folder, { resolve: true }).catch(skipped(folder, undefined)))?.realPath ?? folder;
       if (visited.has(real))
         return;
@@ -6706,12 +6844,12 @@ function createModFiles({ name, claude, places, report }) {
           return;
         if (skippedFolders.includes(entry.name) && !entersSkipped.includes(entry.name))
           return;
-        await walk2(path, depth + 1);
+        await walk(path, depth + 1);
       }));
     };
     const base = scanned.base === "" ? "/" : scanned.base;
     if ((await claude.fs.stat(base).catch(skipped(base, undefined)))?.kind === "dir")
-      await walk2(base, 0);
+      await walk(base, 0);
     return found;
   };
   return {
@@ -6733,7 +6871,7 @@ function createModFiles({ name, claude, places, report }) {
     async update(path, change) {
       const given = resolvedPath(path, places);
       const located = await locate(given);
-      const text = await textOf2(located.holder);
+      const text = await textOf(located.holder);
       let all;
       try {
         all = readMetadata(text, located.format).metadata;
@@ -6768,7 +6906,7 @@ function createModFiles({ name, claude, places, report }) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/options.js
+// node_modules/@cmodjs/core/options.js
 var option = {
   text: (field) => ({ ...field, type: "text" }),
   secret: (field) => ({ ...field, type: "secret" }),
@@ -6819,15 +6957,15 @@ function fitsOption(declared, value) {
   return;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/ui/elements.js
+// node_modules/@cmodjs/core/ui/elements.js
 var unbuilt = Symbol("an element built outside a render");
 var drawing;
-function drawWith(table, draw, markdown2) {
+function drawWith(table, draw, markdown) {
   const outer = drawing;
-  const current2 = { table, markdown: markdown2 };
-  drawing = current2;
+  const current = { table, markdown };
+  drawing = current;
   try {
-    return built(current2, draw());
+    return built(current, draw());
   } finally {
     drawing = outer;
   }
@@ -6836,19 +6974,19 @@ function element(name) {
   const construct = (props) => drawing === undefined ? { [unbuilt]: { name, props } } : build(drawing, name, props);
   return construct;
 }
-function build(current2, name, props) {
-  const ready = "children" in props ? { ...props, children: built(current2, props.children) } : props;
-  if (name === "Markdown" && current2.markdown !== undefined)
-    return current2.markdown(ready);
-  return current2.table[name](ready);
+function build(current, name, props) {
+  const ready = "children" in props ? { ...props, children: built(current, props.children) } : props;
+  if (name === "Markdown" && current.markdown !== undefined)
+    return current.markdown(ready);
+  return current.table[name](ready);
 }
-function built(current2, value) {
+function built(current, value) {
   if (Array.isArray(value))
-    return value.map((child) => built(current2, child));
+    return value.map((child) => built(current, child));
   if (typeof value !== "object" || value === null || !(unbuilt in value))
     return value;
   const { name, props } = value[unbuilt];
-  return build(current2, name, props);
+  return build(current, name, props);
 }
 function drawKeyed(keyPrefix, draw) {
   const outer = drawing;
@@ -6919,7 +7057,7 @@ var Raster = element("Raster");
 var Client = element("Client");
 var constructors = { Box, Text, Button, Link, Code, Markdown, Input, Select, Image, Svg, Raster };
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/buttons.js
+// node_modules/@cmodjs/core/runtime/buttons.js
 function filledButton({ key, label, hotkey, variant = "secondary", onPress }) {
   const isPrimary = variant === "primary";
   return Button({
@@ -6932,7 +7070,7 @@ function filledButton({ key, label, hotkey, variant = "secondary", onPress }) {
   });
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/ui/areas.js
+// node_modules/@cmodjs/core/ui/areas.js
 var AbovePrompt = "abovePrompt";
 var BelowPrompt = "belowPrompt";
 var Working = "working";
@@ -6940,7 +7078,7 @@ var TurnEnd2 = "turnEnd";
 var Dashboard = "dashboard";
 var areas = [AbovePrompt, BelowPrompt, Working, TurnEnd2, Dashboard];
 
-// ../Developer/tracer/node_modules/@cmodjs/core/ui/panes.js
+// node_modules/@cmodjs/core/ui/panes.js
 var partId = /^[A-Za-z0-9_-]{1,64}$/;
 var sizeKeys = ["columns", "rows"];
 function checkPart(name, kind, id, title) {
@@ -6958,7 +7096,7 @@ function checkPane(name, pane) {
   }
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/ui/styles.js
+// node_modules/@cmodjs/core/ui/styles.js
 var ToolGroup = "toolGroup";
 var ToolProgress = "toolProgress";
 var CommandOutput = "commandOutput";
@@ -6983,7 +7121,7 @@ function nameOf(kind) {
   return typeof kind === "string" ? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}` : kind.name;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/ui.js
+// node_modules/@cmodjs/core/runtime/ui.js
 var partMethods = {
   list: "cmod:parts",
   draw: "cmod:draw",
@@ -7050,9 +7188,9 @@ async function drawComponent(table, draw, drawDefault) {
   let first;
   try {
     first = drawWith(table, () => draw(({ children, ...props }) => {
-      const drawing2 = table.Box({});
-      calls.push({ given: props, drawing: drawing2 });
-      return drawing2;
+      const drawing = table.Box({});
+      calls.push({ given: props, drawing });
+      return drawing;
     }));
   } catch (error) {
     return { failure: threw(error) };
@@ -7073,7 +7211,7 @@ async function drawComponent(table, draw, drawDefault) {
   return { drawing: second, isClaudesRow: whole >= 0 };
 }
 function drawPieces(pieces, place) {
-  const spaced = pieces.map(({ drawing: drawing2, isClaudesRow }, index) => (index > 0 || place === "inReply") && !isClaudesRow ? Box({ marginTop: 1, children: drawing2 }) : drawing2);
+  const spaced = pieces.map(({ drawing, isClaudesRow }, index) => (index > 0 || place === "inReply") && !isClaudesRow ? Box({ marginTop: 1, children: drawing }) : drawing);
   const column = (drawings) => Box({ flexDirection: "column", children: drawings });
   const [opening, ...rest] = spaced;
   if (place !== "opensReply" || opening === undefined)
@@ -7095,9 +7233,9 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
   const openPanes = new Set;
   const paneStates = new Map;
   const syncPanes = async () => {
-    const listed2 = new Map((await claude.ui.panes()).map((open) => [open.id, open]));
+    const listed = new Map((await claude.ui.panes()).map((open) => [open.id, open]));
     for (const id of panes.keys()) {
-      const open = listed2.get(id);
+      const open = listed.get(id);
       if (open?.isPlaced === true)
         openPanes.add(id);
       else
@@ -7132,14 +7270,14 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
   let collecting = 0;
   let queued;
   const partList = () => ({
-    widgets: [...widgets.values()].map(({ id, title, areas: listed2, place }) => ({ id, title, areas: listed2, ...place === undefined ? {} : { place } })),
+    widgets: [...widgets.values()].map(({ id, title, areas: listed, place }) => ({ id, title, areas: listed, ...place === undefined ? {} : { place } })),
     pages: [...pages.values()].map(({ init: { id, title }, place }) => ({ id, title, place })),
     ...markdownRenders.size > 0 ? { stylesMarkdown: true } : {}
   });
-  const hear = (listed2, isRestyled) => {
-    if (!Array.isArray(listed2))
+  const hear = (listed, isRestyled) => {
+    if (!Array.isArray(listed))
       return;
-    const heard = listed2.filter((styler) => typeof styler === "string" && styler !== name);
+    const heard = listed.filter((styler) => typeof styler === "string" && styler !== name);
     if (!isRestyled && heard.join("\x00") === stylers.join("\x00"))
       return;
     stylers = heard;
@@ -7239,9 +7377,9 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     if ("text" in piece)
       return drawClaudes({ text: piece.text });
     const { render, props: block } = piece;
-    const draw2 = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }) => drawClaudes({ text: source }) }));
+    const draw = () => drawKeyed(keyPrefix, () => render.Component({ ...block, ...at, Default: ({ source = block.source }) => drawClaudes({ text: source }) }));
     try {
-      return table === undefined ? draw2() : drawWith(table, draw2, drawClaudes);
+      return table === undefined ? draw() : drawWith(table, draw, drawClaudes);
     } catch (error) {
       render.log(threw(error));
       return drawClaudes({ text: block.source });
@@ -7277,7 +7415,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       const laterKey = laterKeys(props.key);
       const drawClaudes = inheriting(props, (part) => others(part, laterKey), laterKey);
       const drawings = pieces.map((piece, index) => drawnBlock(piece, at, drawClaudes, `${scope}:${index}:`, table));
-      return drawPieces(drawings.map((drawing2) => ({ drawing: drawing2, isClaudesRow: false })), "pane");
+      return drawPieces(drawings.map((drawing) => ({ drawing, isClaudesRow: false })), "pane");
     };
   };
   const markdownDrawing = (text, at) => {
@@ -7500,9 +7638,9 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     };
   };
   const addStyle = ({ kind, render }) => {
-    const markdown2 = typeof kind === "string" ? undefined : kind;
+    const markdown = typeof kind === "string" ? undefined : kind;
     const component = componentOf(kind);
-    if (markdown2 === undefined && component === undefined)
+    if (markdown === undefined && component === undefined)
       throw new Error(`${name}: ${String(kind)} is not a kind styles.add draws, such as ToolCall or CodeBlock.`);
     const feature = `the style of ${nameOf(kind)}`;
     if (styles.has(feature))
@@ -7512,19 +7650,19 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
     const Component = (props) => render(mod(), props);
     const stop = (subscription) => () => {
       subscription?.remove();
-      if (markdown2 !== undefined && markdownRenders.delete(markdown2.markdown))
+      if (markdown !== undefined && markdownRenders.delete(markdown.markdown))
         send({ parts: partList() });
       styles.delete(feature);
       claude.ui.invalidate("ui.render");
     };
-    if (markdown2 !== undefined) {
-      markdownRenders.set(markdown2.markdown, { Component, log: logOnce(`${nameOf(kind)} style`) });
-      routeMarkdown(markdown2.createReader);
+    if (markdown !== undefined) {
+      markdownRenders.set(markdown.markdown, { Component, log: logOnce(`${nameOf(kind)} style`) });
+      routeMarkdown(markdown.createReader);
       send({ parts: partList() });
       return { kind, remove: stop() };
     }
     const log = logOnce(`${nameOf(kind)} style`);
-    const drawing2 = router.add("ui.render", async (e, next) => {
+    const drawing = router.add("ui.render", async (e, next) => {
       if (e.component !== component)
         return next(e);
       const table = claude.ui.resolve(e);
@@ -7537,12 +7675,12 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
         return drawn.drawing;
       return drawWith(table, () => drawPieces([drawn], e.props.isFirstOfReply ? "opensReply" : "inReply"));
     });
-    return { kind, remove: stop(drawing2) };
+    return { kind, remove: stop(drawing) };
   };
   const forgetDraws = (key) => {
     for (const kept of latestDraws.get(key)?.values() ?? [])
-      for (const draw2 of kept.draws)
-        draws.delete(draw2);
+      for (const draw of kept.draws)
+        draws.delete(draw);
     latestDraws.delete(key);
   };
   const drawPart = (key, title, input, render) => {
@@ -7556,15 +7694,15 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       const drawnFor = JSON.stringify("turn" in input ? { ...input, turn: input.turn.prompt.id } : input);
       const earlier = inputs.get(drawnFor)?.draws ?? [];
       const kept = [...earlier, number].slice(-2);
-      for (const draw2 of earlier)
-        if (!kept.includes(draw2))
-          draws.delete(draw2);
+      for (const draw of earlier)
+        if (!kept.includes(draw))
+          draws.delete(draw);
       inputs.delete(drawnFor);
       inputs.set(drawnFor, { draws: kept, tree: JSON.stringify(tree), render });
       const [oldest] = inputs;
       if (inputs.size > keptDrawInputs && oldest !== undefined) {
-        for (const draw2 of oldest[1].draws)
-          draws.delete(draw2);
+        for (const draw of oldest[1].draws)
+          draws.delete(draw);
         inputs.delete(oldest[0]);
       }
       draws.set(number, { id: key, handlers: pressed });
@@ -7651,7 +7789,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
       return;
     },
     markdownIn,
-    restyled: (stylers2) => hear(stylers2, true),
+    restyled: (stylers) => hear(stylers, true),
     started() {
       const held = merged(beforeStart ?? []);
       beforeStart = undefined;
@@ -7681,7 +7819,7 @@ function createUi({ name, claude, router, report, announce, mod, borrowed, nextD
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/installer.js
+// node_modules/@cmodjs/core/runtime/installer.js
 var installPage = "cmod:install";
 var keptDraws = 8;
 function createInstaller(name, claude, waiting, nextDraw) {
@@ -7698,18 +7836,18 @@ function createInstaller(name, claude, waiting, nextDraw) {
   };
   const log = (what) => (error) => claude().ui.log(`${name}: ${what}: ${messageOf(error)}`, { to: "debug" });
   const open = (isAsked) => send({ requests: [{ open: installPage, focus: true }], ...isAsked ? { isAsked: true } : {} });
-  const show = async (build2, cancelled) => {
+  const show = async (build, cancelled) => {
     question?.cancel();
-    const answer = new Promise((resolve2) => {
+    const answer = new Promise((resolve) => {
       let isAnswered = false;
       const done = (value) => {
         if (isAnswered)
           return;
         isAnswered = true;
         waiting.hide();
-        claude().clock.after(0, () => resolve2(value));
+        claude().clock.after(0, () => resolve(value));
       };
-      question = { ...build2(done), cancel: () => done(cancelled) };
+      question = { ...build(done), cancel: () => done(cancelled) };
     });
     waiting.show(() => open(true));
     if (isOpen) {
@@ -7722,8 +7860,8 @@ function createInstaller(name, claude, waiting, nextDraw) {
         throw error;
       });
     }
-    for (const resolve2 of waitingForShow)
-      resolve2();
+    for (const resolve of waitingForShow)
+      resolve();
     waitingForShow = [];
     return answer;
   };
@@ -7782,16 +7920,16 @@ function createInstaller(name, claude, waiting, nextDraw) {
       const saved = new Map;
       const failures = new Map;
       return show((answer) => ({
-        draw: () => dialog(Text({ bold: true, children: `Set up ${name}` }), Text({ children: `${name} needs ${missing.length === 1 ? "one setting" : `${missing.length} settings`}:` }), ...missing.map(([key, option2]) => {
-          const label = Box({ flexDirection: "column", children: [Text({ bold: true, children: option2.title }), ...option2.description === "" ? [] : [Text({ dimColor: true, wrap: "wrap", children: option2.description })]] });
-          if (option2.type === "secret") {
+        draw: () => dialog(Text({ bold: true, children: `Set up ${name}` }), Text({ children: `${name} needs ${missing.length === 1 ? "one setting" : `${missing.length} settings`}:` }), ...missing.map(([key, option]) => {
+          const label = Box({ flexDirection: "column", children: [Text({ bold: true, children: option.title }), ...option.description === "" ? [] : [Text({ dimColor: true, wrap: "wrap", children: option.description })]] });
+          if (option.type === "secret") {
             return Box({ flexDirection: "column", children: [label, Text({ dimColor: true, wrap: "wrap", children: `${secretFix} Then press Next.` }), filledButton({ key: `secret:${key}`, label: "Open /config", onPress: () => void claude().command.run({ command: "config" }) })] });
           }
           const failure = failures.get(key);
           const field = Input({
             key: `option:${key}`,
             label: "Value",
-            placeholder: option2.type === "choice" ? (option2.choices ?? []).join(", ") : option2.type === "toggle" ? "true or false" : option2.type === "list" ? "comma-separated" : "",
+            placeholder: option.type === "choice" ? (option.choices ?? []).join(", ") : option.type === "toggle" ? "true or false" : option.type === "list" ? "comma-separated" : "",
             value: saved.get(key) ?? "",
             submitLabel: "save",
             onSubmit: (value) => void save(key, value).then((refused) => {
@@ -7840,12 +7978,12 @@ function createInstaller(name, claude, waiting, nextDraw) {
       isSeen = false;
       await send({ requests: [{ close: installPage }] }).catch(log("the install page stayed open"));
     },
-    shown: () => new Promise((resolve2) => void waitingForShow.push(resolve2)),
+    shown: () => new Promise((resolve) => void waitingForShow.push(resolve)),
     collect
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/options.js
+// node_modules/@cmodjs/core/runtime/options.js
 class MissingOptions extends Error {
   keys;
   titles;
@@ -7890,17 +8028,17 @@ function createOptions({ name, declared, fromClaude, claude, report, changed }) 
     }
     const kept = {};
     for (const [key, value] of Object.entries(file)) {
-      const option2 = declared[key];
-      if (option2 === undefined)
+      const option = declared[key];
+      if (option === undefined)
         ignore(`sets ${key}, which ${name} does not declare. ${Object.keys(declared).length === 0 ? "Remove it." : `Remove it, or use one of: ${Object.keys(declared).join(", ")}.`}`);
-      else if (option2.type === "secret")
+      else if (option.type === "secret")
         ignore(`sets ${key}, a secret, and a project file is committed for everyone to read. Remove it. ${secretFix}`);
       else {
-        const misfit = fitsOption(option2, value);
+        const misfit = fitsOption(option, value);
         if (misfit === undefined)
           kept[key] = value;
         else
-          ignore(`sets ${key} to ${JSON.stringify(value)}, and ${option2.title} ${misfit}.`);
+          ignore(`sets ${key} to ${JSON.stringify(value)}, and ${option.title} ${misfit}.`);
       }
     }
     return kept;
@@ -7910,7 +8048,7 @@ function createOptions({ name, declared, fromClaude, claude, report, changed }) 
       return values;
     },
     get missing() {
-      return Object.entries(declared).filter(([key, option2]) => option2.default === undefined && isUnset(values[key])).map(([key]) => key);
+      return Object.entries(declared).filter(([key, option]) => option.default === undefined && isUnset(values[key])).map(([key]) => key);
     },
     async load(root) {
       if (Object.keys(declared).length === 0)
@@ -7929,19 +8067,20 @@ function createOptions({ name, declared, fromClaude, claude, report, changed }) 
   };
 }
 function merged2(declared, fromClaude, project, locked) {
-  return Object.freeze(Object.fromEntries(Object.entries(declared).map(([key, option2]) => [key, valueOf(key, option2, fromClaude[key], project, locked)])));
+  return Object.freeze(Object.fromEntries(Object.entries(declared).map(([key, option]) => [key, valueOf(key, option, fromClaude[key], project, locked)])));
 }
-function valueOf(key, option2, own, project, locked) {
+function valueOf(key, option, own, project, locked) {
   if (locked.has(key))
     return own;
   if (Object.hasOwn(project, key))
     return project[key];
-  if (!isUnset(own) && fitsOption(option2, own) === undefined)
+  if (!isUnset(own) && fitsOption(option, own) === undefined)
     return Array.isArray(own) ? Object.freeze([...own]) : own;
-  return option2.default ?? (option2.type === "list" ? Object.freeze([]) : option2.type === "number" ? undefined : "");
+  return option.default ?? (option.type === "list" ? Object.freeze([]) : option.type === "number" ? undefined : "");
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/router.js
+// node_modules/@cmodjs/core/runtime/router.js
+var unaborted = new AbortController().signal;
 function createRouter() {
   const routes = new Map;
   return {
@@ -7958,19 +8097,20 @@ function createRouter() {
         }
       };
     },
-    dispatch(event, e, next) {
+    dispatch(event, e, next, signal = unaborted) {
       const chain = routes.get(event);
-      const call = async (index, current2) => {
+      const call = async (index, current) => {
         const route = chain?.[index];
         if (route === undefined)
-          return next(current2);
-        return route.hook(current2, (passed) => call(index + 1, passed));
+          return next(current);
+        return route.hook(current, Object.assign((passed) => call(index + 1, passed), { signal }));
       };
       return call(0, e);
     },
     async dispatchFailure(event, e, error, next) {
+      const signalled = Object.assign((passed) => next(passed), { signal: unaborted });
       for (const route of routes.get(event) ?? []) {
-        const answer = await route.failed?.(e, error, next);
+        const answer = await route.failed?.(e, error, signalled);
         if (answer !== undefined)
           return answer;
       }
@@ -7979,7 +8119,7 @@ function createRouter() {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/state.js
+// node_modules/@cmodjs/core/runtime/state.js
 var lifetimes = ["memory", "session", "project", "global"];
 var keptProjects = 20;
 var listeners = new WeakMap;
@@ -7990,7 +8130,7 @@ function createState({ name, initial, session, root, claude, report, changed: re
       listener();
   };
   const declared = declaredGroups(name, initial);
-  const current2 = copied(declared);
+  const current = copied(declared);
   let projectRoot = root;
   let sessionId = session;
   let turn = Promise.resolve();
@@ -8012,13 +8152,13 @@ function createState({ name, initial, session, root, claude, report, changed: re
       await claude.store.delete(oldest);
   };
   const transcriptsKey = `${name}.$transcripts.`;
-  const forgetEndedSessions = async (current3) => {
+  const forgetEndedSessions = async (current) => {
     const stored = await claude.store.keys();
     const ended = async (recorded) => {
       const transcript = await claude.store.get(recorded);
       return typeof transcript !== "string" || !await claude.fs.exists(transcript);
     };
-    const owners = stored.filter((key) => key.startsWith(transcriptsKey) && key !== `${transcriptsKey}${current3}`);
+    const owners = stored.filter((key) => key.startsWith(transcriptsKey) && key !== `${transcriptsKey}${current}`);
     await Promise.all(owners.map(async (recorded) => {
       if (!await ended(recorded))
         return;
@@ -8036,7 +8176,7 @@ function createState({ name, initial, session, root, claude, report, changed: re
     projectRoot = next.root;
     sessionId = next.session;
     for (const [lifetime, key, saved] of loaded)
-      current2[lifetime][key] = saved === undefined ? declared[lifetime][key] : frozen(name, `${lifetime}.${key}`, saved);
+      current[lifetime][key] = saved === undefined ? declared[lifetime][key] : frozen(name, `${lifetime}.${key}`, saved);
     changed();
   };
   const copySession = async (from, to) => {
@@ -8047,7 +8187,7 @@ function createState({ name, initial, session, root, claude, report, changed: re
     }
   };
   const hasSaved = async (owner) => (await claude.store.keys()).some((key) => key.startsWith(`${name}.`) && key.endsWith(`.sessions.${owner}`));
-  const group = (lifetime) => new Proxy(current2[lifetime], {
+  const group = (lifetime) => new Proxy(current[lifetime], {
     set(target, key, value) {
       if (typeof key !== "string")
         throw new Error(`${name}: mod.state.${lifetime} keys are text, not ${String(key)}.`);
@@ -8131,7 +8271,7 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/toaster.js
+// node_modules/@cmodjs/core/runtime/toaster.js
 var failedMethod = "cmod:failed";
 var githubRepository = /^https:\/\/github\.com\/([^/]+\/[^/#?]+?)(?:\.git)?(?:\/issues)?\/?$/;
 var linkLimit = 2048;
@@ -8265,9 +8405,9 @@ function createToaster(claude, name, version) {
     }
   });
   const copy = async (text) => {
-    const copied2 = await claude.ui.copy({ text });
-    if (!copied2.isCopied)
-      throw new Error(copied2.reason);
+    const copied = await claude.ui.copy({ text });
+    if (!copied.isCopied)
+      throw new Error(copied.reason);
   };
   const press = (entry, run) => () => void Promise.resolve().then(run).catch((error) => fail({ id: `press:${entry.id}`, message: `${entry.message}: the press failed`, error, isCritical: true }));
   const logFailure = (failure) => claude.cmod.call({ to: cmodPluginName, method: failedMethod, input: failure });
@@ -8310,10 +8450,10 @@ ${description}`}${stack}`;
       if (isCritical)
         return;
       if (shows !== false)
-        return show2();
+        return show();
       claude.ui.log(`${name}: ${message}${description === undefined ? "" : `: ${description}`}`, { to: "debug" });
     };
-    const show2 = () => {
+    const show = () => {
       if (hidden.get(id) === hides)
         return;
       hidden.delete(id);
@@ -8362,7 +8502,7 @@ ${description}`}${stack}`;
     ].filter(({ sentence }) => `${message}
 ${description ?? ""}`.includes(sentence));
     if (isCritical)
-      show2();
+      show();
     claude.clock.after(0, () => void logged());
     return id;
   };
@@ -8408,8 +8548,8 @@ ${description ?? ""}`.includes(sentence));
       back();
     };
     const copyError = async () => {
-      const copied2 = await claude.ui.copy({ text: details });
-      say(copied2.isCopied ? "Copied the error." : `Could not copy it: ${copied2.reason}`);
+      const copied = await claude.ui.copy({ text: details });
+      say(copied.isCopied ? "Copied the error." : `Could not copy it: ${copied.reason}`);
     };
     const report = contact === undefined ? [] : [reportLink(contact, name, entry.message, details)];
     return [
@@ -8440,20 +8580,20 @@ ${description ?? ""}`.includes(sentence));
       if (isHeld || entries.size === 0)
         return drawn;
       const all = [...entries.values()];
-      const hidden2 = showsAll ? 0 : Math.max(all.length - visibleToasts, 0);
-      for (const entry of all.slice(hidden2))
+      const hidden = showsAll ? 0 : Math.max(all.length - visibleToasts, 0);
+      for (const entry of all.slice(hidden))
         arm(entry);
       const more = Button({
         plain: true,
         dimColor: true,
         key: "toasts:more",
-        label: `+${hidden2} more`,
+        label: `+${hidden} more`,
         onPress: () => {
           showsAll = true;
           changed();
         }
       });
-      return drawWith(table, () => Box({ flexDirection: "column", children: [drawn, ...hidden2 > 0 ? [more] : [], ...all.slice(hidden2).map(row)] }));
+      return drawWith(table, () => Box({ flexDirection: "column", children: [drawn, ...hidden > 0 ? [more] : [], ...all.slice(hidden).map(row)] }));
     }
   };
 }
@@ -8482,7 +8622,7 @@ async function contactOf(claude) {
 }
 function reportLink(contact, name, message, details) {
   const title = `${name}: ${message}`.slice(0, 120);
-  const linkOf = (body2) => contact.kind === "github" ? `https://github.com/${contact.repository}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body2)}` : `mailto:${contact.address}?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(body2)}`;
+  const linkOf = (body) => contact.kind === "github" ? `https://github.com/${contact.repository}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}` : `mailto:${contact.address}?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
   let body = details;
   while (linkOf(body).length > linkLimit && body.length > 0)
     body = `${body.slice(0, Math.floor(body.length * 0.8))}…`;
@@ -8498,7 +8638,7 @@ function clockTime(at) {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/hotkeys.js
+// node_modules/@cmodjs/core/runtime/hotkeys.js
 async function readCombos(claude, configRoot) {
   if (configRoot === undefined)
     return new Map;
@@ -8521,10 +8661,10 @@ async function createHotkeys({ name, declared, configRoot, claude, router, answe
   if (entries.length === 0)
     return {};
   const combos = await readCombos(claude, configRoot);
-  const listeners2 = new Map;
+  const listeners = new Map;
   const commands = new Map;
   for (const [hotkey, { title }] of entries) {
-    listeners2.set(hotkey, new Set);
+    listeners.set(hotkey, new Set);
     claude.command.register({ name: hotkeyCommand(name, hotkey), description: title, immediate: true }).then(({ command }) => void commands.set(command, hotkey), (error) => report({ id: `hotkey:${hotkey}`, message: `The ${title} hotkey is not added`, error }));
   }
   router.add("command.run", async (e, next) => {
@@ -8532,7 +8672,7 @@ async function createHotkeys({ name, declared, configRoot, claude, router, answe
     if (hotkey === undefined)
       return next(e);
     return answerInput(async () => {
-      for (const listener of listeners2.get(hotkey) ?? []) {
+      for (const listener of listeners.get(hotkey) ?? []) {
         try {
           await listener();
         } catch (error) {
@@ -8548,18 +8688,18 @@ async function createHotkeys({ name, declared, configRoot, claude, router, answe
       title,
       combo: combos.get(hotkeyCommand(name, hotkey)),
       onPress(listener) {
-        listeners2.get(hotkey)?.add(listener);
-        return { remove: () => void listeners2.get(hotkey)?.delete(listener) };
+        listeners.get(hotkey)?.add(listener);
+        return { remove: () => void listeners.get(hotkey)?.delete(listener) };
       }
     }
   ]));
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/pages.js
+// node_modules/@cmodjs/core/runtime/pages.js
 var askedWaitMs = 1000;
 function pagesOf(input) {
-  const listed2 = isObject(input) && Array.isArray(input["pages"]) ? input["pages"] : [];
-  return listed2.filter(isObject).flatMap((each) => typeof each["id"] === "string" && typeof each["title"] === "string" && (each["place"] === "sidebar" || each["place"] === "settings") ? [{ id: each["id"], title: each["title"], place: each["place"] }] : []);
+  const listed = isObject(input) && Array.isArray(input["pages"]) ? input["pages"] : [];
+  return listed.filter(isObject).flatMap((each) => typeof each["id"] === "string" && typeof each["title"] === "string" && (each["place"] === "sidebar" || each["place"] === "settings") ? [{ id: each["id"], title: each["title"], place: each["place"] }] : []);
 }
 function servePages({ claude, router, report, widgets, parts, tellStylers }) {
   const declared = new Map;
@@ -8598,7 +8738,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
   router.add("command.run", (e, next) => wrapped(async () => waiting.length > 0 ? {} : next(e)));
   router.add("ui.press", (e, next) => wrapped(() => next(e)));
   const ask = (mod) => {
-    const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((parts2) => void declared.set(mod, pagesOf(parts2)), (error) => claude.ui.log(`cmod: ${mod} did not list its pages: ${messageOf(error)}`, { to: "debug" })).finally(() => asking.delete(mod));
+    const pending = asking.get(mod) ?? claude.cmod.call({ to: mod, method: partMethods.list, input: null }).then((parts) => void declared.set(mod, pagesOf(parts)), (error) => claude.ui.log(`cmod: ${mod} did not list its pages: ${messageOf(error)}`, { to: "debug" })).finally(() => asking.delete(mod));
     asking.set(mod, pending);
     return pending;
   };
@@ -8608,11 +8748,11 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
     if (isStyler)
       stylers.add(mod);
     parts.forget(mod);
-    const listed2 = [...stylers];
-    tellStylers(listed2);
+    const listed = [...stylers];
+    tellStylers(listed);
     for (const told of declared.keys()) {
       if (told !== cmodPluginName)
-        claude.cmod.call({ to: told, method: partMethods.stylers, input: listed2 }).catch((error) => claude.ui.log(`cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`, { to: "debug" }));
+        claude.cmod.call({ to: told, method: partMethods.stylers, input: listed }).catch((error) => claude.ui.log(`cmod: ${told} did not hear which mods style markdown: ${messageOf(error)}`, { to: "debug" }));
     }
   };
   const update = (mod, { parts: listing, redraw, requests, isAsked }) => {
@@ -8647,7 +8787,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
       pending.then(takeWaiting);
   };
   const lastDrawn = new Map;
-  const plain2 = (data) => JSON.parse(JSON.stringify(data));
+  const plain = (data) => JSON.parse(JSON.stringify(data));
   return {
     declared: () => [...declared].map(([mod, pages]) => ({ mod, pages })),
     stylers: () => [...stylers],
@@ -8658,7 +8798,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
       const cached = `${page}\x00${given}\x00${columns}\x00${isFocused}`;
       const name = `The ${page} page of ${mod}`;
       const keyPrefix = `${mod}/${page}:`;
-      parts.fill(mod, cached, { page, params: plain2(params ?? null), columns, isFocused }, name)?.then(() => claude.ui.invalidate("ui.render"));
+      parts.fill(mod, cached, { page, params: plain(params ?? null), columns, isFocused }, name)?.then(() => claude.ui.invalidate("ui.render"));
       const failure = parts.failure(mod, cached);
       const drawnAt = (key) => parts.element(mod, key, keyPrefix, name, `page:${mod}/${page}`);
       const last = lastDrawn.get(keyPrefix);
@@ -8670,7 +8810,7 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
     press,
     update,
     tell(mod, shown) {
-      claude.cmod.call({ to: mod, method: partMethods.shown, input: plain2(shown) }).catch((error) => claude.ui.log(`cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`, { to: "debug" }));
+      claude.cmod.call({ to: mod, method: partMethods.shown, input: plain(shown) }).catch((error) => claude.ui.log(`cmod: ${mod} did not hear which of its pages show: ${messageOf(error)}`, { to: "debug" }));
     },
     apply(listener) {
       applyTo = listener;
@@ -8678,11 +8818,11 @@ function servePages({ claude, router, report, widgets, parts, tellStylers }) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/parts.js
+// node_modules/@cmodjs/core/runtime/parts.js
 var keptDrawings = 200;
 function drawnParts({ claude, report, press }) {
   const drawn = new Map;
-  const drawing2 = new Map;
+  const drawing = new Map;
   const generations = new Map;
   const keyOf = (mod, cached) => `${mod}\x00${cached}`;
   const generationOf = (mod) => generations.get(mod) ?? 0;
@@ -8701,11 +8841,11 @@ function drawnParts({ claude, report, press }) {
         if (generationOf(mod) !== generation)
           claude.ui.invalidate("ui.render");
       };
-      const pending = drawing2.get(key) ?? claude.cmod.call({ to: mod, method: partMethods.draw, input }).then((data) => keep(data ?? null), (error) => {
+      const pending = drawing.get(key) ?? claude.cmod.call({ to: mod, method: partMethods.draw, input }).then((data) => keep(data ?? null), (error) => {
         report(`draw:${mod}`, `${name} drew nothing`, error);
         keep(drawn.get(key)?.data ?? null, messageOf(error));
-      }).finally(() => drawing2.delete(key));
-      drawing2.set(key, pending);
+      }).finally(() => drawing.delete(key));
+      drawing.set(key, pending);
       return pending;
     },
     element(mod, cached, keyPrefix, name, reportId) {
@@ -8734,7 +8874,7 @@ function drawnParts({ claude, report, press }) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/watches.js
+// node_modules/@cmodjs/core/runtime/watches.js
 var watchMs = 500;
 var missingEvery = 4;
 var watchedFiles = 2000;
@@ -8821,7 +8961,7 @@ function createWatches(claude, report) {
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/widgets.js
+// node_modules/@cmodjs/core/runtime/widgets.js
 var claudeHint = "claude/hint";
 var claudeModes = "claude/modes";
 var builtInWidgets = [
@@ -8843,8 +8983,8 @@ function placedIn(layout, key) {
   return areas.find((area) => layout.areas[area].some((row) => holds(row, key)));
 }
 function declarationsOf(input) {
-  const listed2 = isObject(input) && Array.isArray(input["widgets"]) ? input["widgets"] : [];
-  return listed2.filter(isObject).flatMap((each) => {
+  const listed = isObject(input) && Array.isArray(input["widgets"]) ? input["widgets"] : [];
+  return listed.filter(isObject).flatMap((each) => {
     const known = Array.isArray(each["areas"]) ? each["areas"].filter((area) => areas.includes(area)) : [];
     const { side, size } = isObject(each["place"]) ? each["place"] : {};
     const place = { ...side === "left" || side === "right" ? { side } : {}, ...size === "fit" || size === "fill" ? { size } : {} };
@@ -8865,14 +9005,14 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
   };
   const read = async () => layoutOf(await readFile());
   const redraw = () => claude.ui.invalidate("ui.render");
-  const placed = () => [...builtInWidgets, ...[...declared].flatMap(([mod, list]) => list.map(({ id, title, areas: listed2, place: place2 }) => ({ key: `${mod}/${id}`, mod, title, areas: listed2, ...place2 === undefined ? {} : { place: place2 } })))];
+  const placed = () => [...builtInWidgets, ...[...declared].flatMap(([mod, list]) => list.map(({ id, title, areas: listed, place }) => ({ key: `${mod}/${id}`, mod, title, areas: listed, ...place === undefined ? {} : { place } })))];
   const change = (edit) => {
     saving = saving.then(async () => {
       const file = await readFile();
       stored = layoutOf(file);
-      const current2 = withNewWidgets(stored);
-      const next = edit(current2);
-      if (next !== current2) {
+      const current = withNewWidgets(stored);
+      const next = edit(current);
+      if (next !== current) {
         const kept = isObject(file) ? file : {};
         await claude.fs.write(path, `${JSON.stringify({ ...kept, ...next, areas: { ...isObject(kept["areas"]) ? kept["areas"] : {}, ...next.areas } }, null, 2)}
 `);
@@ -8887,12 +9027,12 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     layout = withNewWidgets(stored);
     redraw();
   };
-  const withNewWidgets = (current2) => placed().filter(({ key, mod }) => mod !== "claude" && placedIn(current2, key) === undefined && !placedKeys.has(key)).reduce((next, { key, areas: [area = AbovePrompt], place: place2 }) => {
+  const withNewWidgets = (current) => placed().filter(({ key, mod }) => mod !== "claude" && placedIn(current, key) === undefined && !placedKeys.has(key)).reduce((next, { key, areas: [area = AbovePrompt], place }) => {
     const [first, ...rest] = next.areas[area];
     const row = { ...first, left: first?.left ?? [], right: first?.right ?? [] };
-    const side = place2?.side ?? "left";
+    const side = place?.side ?? "left";
     return { ...next, areas: { ...next.areas, [area]: [{ ...row, [side]: [...row[side], key] }, ...rest] } };
-  }, current2);
+  }, current);
   const ask = async (mod) => {
     try {
       declared.set(mod, declarationsOf(await claude.cmod.call({ to: mod, method: partMethods.list, input: null })));
@@ -8925,19 +9065,19 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
   })().catch((error) => report("widgets:layout", "Could not list the widgets of the mods", error));
   const widgetOf = (key) => placed().find((widget) => widget.key === key);
   const cacheKey = (key, area, columns, turn) => `${key}\x00${area}\x00${columns}\x00${turn?.prompt.id ?? ""}`;
-  const nameOf2 = (widget) => `The ${widget.title} widget of ${widget.mod}`;
+  const nameOf = (widget) => `The ${widget.title} widget of ${widget.mod}`;
   const fill = (key, area, columns, turn) => {
     const widget = widgetOf(key);
     if (widget === undefined || !widget.areas.includes(area))
       return;
-    return parts.fill(widget.mod, cacheKey(key, area, columns, turn), { widget: key.slice(widget.mod.length + 1), area, columns, ...turn === undefined ? {} : { turn } }, nameOf2(widget));
+    return parts.fill(widget.mod, cacheKey(key, area, columns, turn), { widget: key.slice(widget.mod.length + 1), area, columns, ...turn === undefined ? {} : { turn } }, nameOf(widget));
   };
   const elementFor = (key, area, columns, turn) => {
     const widget = widgetOf(key);
     if (widget === undefined)
       return;
-    const element2 = parts.element(widget.mod, cacheKey(key, area, columns, turn), `${key}:`, nameOf2(widget), `widget:${key}`);
-    return element2 === undefined ? undefined : Box({ ...widgetSizes[widget.place?.size ?? "fit"], children: element2 });
+    const element = parts.element(widget.mod, cacheKey(key, area, columns, turn), `${key}:`, nameOf(widget), `widget:${key}`);
+    return element === undefined ? undefined : Box({ ...widgetSizes[widget.place?.size ?? "fit"], children: element });
   };
   const isHidden = (key) => layout.hidden.includes(key);
   const shown = (keys) => keys.filter((key) => !isHidden(key));
@@ -8981,14 +9121,14 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
     return next(e);
   });
   return {
-    update(mod, { parts: listing, redraw: redraw2 }) {
-      if (listing === undefined && redraw2 !== true)
+    update(mod, { parts: listing, redraw }) {
+      if (listing === undefined && redraw !== true)
         return;
       parts.forget(mod);
       if (listing !== undefined) {
-        const listed2 = declarationsOf(listing);
-        const isNewList = JSON.stringify(listed2) !== JSON.stringify(declared.get(mod) ?? []);
-        declared.set(mod, listed2);
+        const listed = declarationsOf(listing);
+        const isNewList = JSON.stringify(listed) !== JSON.stringify(declared.get(mod) ?? []);
+        declared.set(mod, listed);
         if (isNewList)
           return place();
       }
@@ -9004,13 +9144,14 @@ function serveWidgets({ claude, router, store, report, turnClosedBy, parts, mark
   };
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/ui/components.js
+// node_modules/@cmodjs/core/ui/components.js
 function Progress({ value, width = 24 }) {
   const filled = Math.round(Math.min(Math.max(value, 0), 100) / 100 * width);
   return Text({ children: [Text({ color: "claude", children: "█".repeat(filled) }), Text({ color: "subtle", children: "░".repeat(width - filled) })] });
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/runtime/lifecycle.js
+// node_modules/@cmodjs/core/runtime/lifecycle.js
+var listenMethods = [conversationMethods.subscribe, conversationMethods.watchBefore];
 var announcedKey = "cmod:announced";
 var cmodUpdatedKey = "cmod:cmod-updated-for";
 var installId = "cmod:install";
@@ -9113,10 +9254,11 @@ function createLifecycle(definition, permissionRoutes = () => {
   let recording;
   let missedSessionStart;
   let hasHeardSessionStart = false;
+  const heldListens = new Map;
   let settleStart = () => {
     return;
   };
-  const startSettled = new Promise((resolve2) => settleStart = resolve2);
+  const startSettled = new Promise((resolve) => settleStart = resolve);
   const claude = () => {
     if (runtime === undefined)
       throw new Error(`${definition.name}: the lifecycle has not started. registerMod(addHook, mod, options) starts it at session.start.`);
@@ -9161,10 +9303,10 @@ function createLifecycle(definition, permissionRoutes = () => {
     await install(true);
     await whenActive();
   };
-  const finish2 = async () => {
+  const finish = async () => {
     await programs?.refresh();
     phase = "ready";
-    activation ??= new Promise((resolve2) => claude().clock.after(0, () => resolve2(activate().catch(report))));
+    activation ??= new Promise((resolve) => claude().clock.after(0, () => resolve(activate().catch(report))));
     claude().ui.invalidate("ui.render");
   };
   const recordThroughCmod = async () => {
@@ -9192,13 +9334,13 @@ function createLifecycle(definition, permissionRoutes = () => {
     });
   };
   const saveOption = async (key, text) => {
-    const option2 = definition.options?.[key];
-    if (option2 === undefined || plugin === undefined)
+    const option = definition.options?.[key];
+    if (option === undefined || plugin === undefined)
       return `${definition.name} has no option ${key}.`;
-    const value = option2.type === "number" ? Number(text) : option2.type === "toggle" ? text.trim() === "true" : option2.type === "list" ? text.split(",").map((item) => item.trim()).filter((item) => item !== "") : text;
-    const misfit = option2.type === "toggle" && !["true", "false"].includes(text.trim()) ? "takes true or false" : fitsOption(option2, value);
+    const value = option.type === "number" ? Number(text) : option.type === "toggle" ? text.trim() === "true" : option.type === "list" ? text.split(",").map((item) => item.trim()).filter((item) => item !== "") : text;
+    const misfit = option.type === "toggle" && !["true", "false"].includes(text.trim()) ? "takes true or false" : fitsOption(option, value);
     if (misfit !== undefined)
-      return `${option2.title} ${misfit}.`;
+      return `${option.title} ${misfit}.`;
     const saved = await claude().process.run(["cmod", "option", plugin.name, key, Array.isArray(value) ? value.join(",") : String(value)]);
     return saved.exitCode === 0 ? undefined : cmodError(saved.stderr, "option") || `cmod option ${formatExit(saved.exitCode, "")}.`;
   };
@@ -9207,8 +9349,8 @@ function createLifecycle(definition, permissionRoutes = () => {
       return false;
     const declared = definition.options ?? {};
     const asked = missing.keys.flatMap((key) => {
-      const option2 = declared[key];
-      return option2 === undefined ? [] : [[key, option2]];
+      const option = declared[key];
+      return option === undefined ? [] : [[key, option]];
     });
     if (!await installer.options(asked, saveOption))
       return false;
@@ -9273,6 +9415,12 @@ function createLifecycle(definition, permissionRoutes = () => {
     router = activeRouter;
     phase = "active";
     stopWatchingRecord();
+    const held = [...heldListens.values()];
+    heldListens.clear();
+    for (const call of held) {
+      const failed = (error) => void toastFailure({ id: `listens:${String(call.caller)}`, message: `${String(call.caller)} hears nothing from this session`, error });
+      activeRouter.dispatch("cmod.call", call, async () => ({ deny: `${definition.name} has no method ${call.method}.` })).then((answer) => ("deny" in answer) ? failed(new Error(answer.deny)) : undefined, failed);
+    }
     runtime.claude.ui.invalidate("ui.render");
     if (definition.name === cmodPluginName)
       runtime.claude.ui.invalidate("command.describe");
@@ -9287,7 +9435,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     }
     await runtime.claude.store.set(announcedKey, { version: plugin.version ?? "" });
     const { toaster } = runtime;
-    announcementOf(runtime.claude, plugin, added, openSettings).then(({ message, ...options2 }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options2 })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
+    announcementOf(runtime.claude, plugin, added, openSettings).then(({ message, ...options }) => toaster.toast.success(message, { id: installId, duration: announcementMs, ...options })).catch((error) => toastFailure({ id: installId, message: "Could not say what it installed", error }));
   };
   const replaySessionStart = async (e) => {
     hasHeardSessionStart = true;
@@ -9329,7 +9477,7 @@ function createLifecycle(definition, permissionRoutes = () => {
     });
     if (outcome?.type === "done") {
       stopRetrying();
-      return finish2();
+      return finish();
     }
     return failInstall(outcome?.type === "failed" ? outcome.message : `cmod setup ${formatExit(code, lastError)}`, retries);
   };
@@ -9362,22 +9510,22 @@ function createLifecycle(definition, permissionRoutes = () => {
       timer = poll(cmodSlowCheckMs);
       if (latest === undefined)
         return installing("Still waiting for cmod to download cmod. See cmod's own line.");
-      const found2 = latest;
-      const tried = `${found2} to ${oldestCmodVersion}`;
+      const found = latest;
+      const tried = `${found} to ${oldestCmodVersion}`;
       return claude().store.get(cmodUpdatedKey).then(async (updated) => {
         if (updated === tried) {
           stop();
-          return fail(`${definition.name} needs cmod ${oldestCmodVersion} or later, and the newest cmod is ${found2}.`, undefined, updateAgain);
+          return fail(`${definition.name} needs cmod ${oldestCmodVersion} or later, and the newest cmod is ${found}.`, undefined, updateAgain);
         }
         await claude().store.set(cmodUpdatedKey, tried);
-        installing(`${definition.name} needs cmod ${oldestCmodVersion} or later, and this computer has cmod ${found2}, so cmod is updating itself.`);
+        installing(`${definition.name} needs cmod ${oldestCmodVersion} or later, and this computer has cmod ${found}, so cmod is updating itself.`);
         const { code, lastError } = await readLines(claude().process.spawn({ argv: ["cmod", "update", "cmod"] }), () => {
           return;
         });
         if (code === 0)
           return;
         stop();
-        fail(`${definition.name} needs cmod ${oldestCmodVersion} or later, and updating cmod ${found2} ${formatExit(code, lastError)}`, undefined, updateAgain);
+        fail(`${definition.name} needs cmod ${oldestCmodVersion} or later, and updating cmod ${found} ${formatExit(code, lastError)}`, undefined, updateAgain);
       }).catch(report);
     });
   };
@@ -9390,7 +9538,7 @@ function createLifecycle(definition, permissionRoutes = () => {
         installing(progressOf(event));
     });
     if (code === 0)
-      return finish2();
+      return finish();
     fail(`bootstrap ${formatExit(code, lastError)}`, undefined, () => bootstrap(root));
   };
   const begin = async () => {
@@ -9428,10 +9576,10 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (modifiedMs === recordMs)
       return false;
     recordMs = modifiedMs;
-    const current2 = await readStarted(claude());
-    if (!current2.isInstalled)
+    const current = await readStarted(claude());
+    if (!current.isInstalled)
       return false;
-    plugin = current2;
+    plugin = current;
     return true;
   };
   const recover = async () => {
@@ -9439,7 +9587,7 @@ function createLifecycle(definition, permissionRoutes = () => {
       return false;
     failure = undefined;
     activation = undefined;
-    await finish2();
+    await finish();
     return true;
   };
   let recordCheck;
@@ -9463,11 +9611,11 @@ function createLifecycle(definition, permissionRoutes = () => {
     if (activation !== undefined && phase !== "active")
       await activation;
   };
-  const holdUntilStarted = () => runtime === undefined ? startSettled.then(whenActive) : new Promise((resolve2) => {
-    const limit = claude().clock.after(startHoldMs, resolve2);
+  const holdUntilStarted = () => runtime === undefined ? startSettled.then(whenActive) : new Promise((resolve) => {
+    const limit = claude().clock.after(startHoldMs, resolve);
     startSettled.then(whenActive).then(() => {
       limit.cancel();
-      resolve2();
+      resolve();
     });
   });
   return {
@@ -9487,7 +9635,7 @@ function createLifecycle(definition, permissionRoutes = () => {
       if (raise === undefined || imports === undefined)
         throw new Error(`${definition.name} has not started, so ${method} has no listener yet.`);
       bind2(imports);
-      return raise(method, payload);
+      return raise(method, payload, unaborted);
     },
     async start(claudeCalls, read) {
       if (runtime !== undefined)
@@ -9513,7 +9661,7 @@ function createLifecycle(definition, permissionRoutes = () => {
         settleStart();
       }
     },
-    async route(event, e, next) {
+    async route(event, e, next, signal) {
       if (imports !== undefined)
         bind2(imports);
       const asked = e;
@@ -9548,6 +9696,12 @@ function createLifecycle(definition, permissionRoutes = () => {
         return next(e);
       }
       if (isCallToThisMod && phase !== "active") {
+        if (event === "cmod.call" && listenMethods.includes(asked.method)) {
+          heldListens.set(`${asked.caller}
+${asked.method}
+${String(asked.input.session)}`, asked);
+          return { value: null };
+        }
         return { deny: phase === "failed" ? `${definition.name} is not set up. Its toast says why.` : `${definition.name} is installing. Try again when it's ready.` };
       }
       const call = e;
@@ -9561,10 +9715,10 @@ function createLifecycle(definition, permissionRoutes = () => {
         }
       }
       if (event === "classic.UserPromptSubmit" && phase === "active" && !hasHeardSessionStart) {
-        const { session_id, transcript_path, cwd: cwd2 } = e;
-        await replaySessionStart({ session_id, transcript_path, cwd: cwd2, hook_event_name: "SessionStart", source: "resume" });
+        const { session_id, transcript_path, cwd } = e;
+        await replaySessionStart({ session_id, transcript_path, cwd, hook_event_name: "SessionStart", source: "resume" });
       }
-      const answer = router.dispatch(event, e, next);
+      const answer = router.dispatch(event, e, next, signal);
       const render = e;
       if (event !== "ui.render" || render.component !== "AbovePrompt" || runtime === undefined)
         return answer;
@@ -9599,7 +9753,7 @@ async function createMod(definition, runtime) {
   const configRoot = configHome ?? (home === undefined ? undefined : `${home}/.claude`);
   const places = { home, configRoot, projectRoot: () => modState.root };
   const files = createModFiles({ name: definition.name, claude, places, report });
-  let cwd2 = startCwd;
+  let cwd = startCwd;
   let loadedCwd = startCwd;
   let staleCwd;
   let forkedFrom;
@@ -9654,6 +9808,7 @@ async function createMod(definition, runtime) {
     followed = { ...followed, project, cwd: folder };
     client.follow(followed);
   };
+  let device;
   const imports = {
     sessions: client.sessions,
     commands: {
@@ -9719,6 +9874,12 @@ async function createMod(definition, runtime) {
       spawn: (argv, init) => claude.process.spawn({ ...init, argv })
     },
     http: { fetch: (url, init) => claude.http.fetch(url, init) },
+    device: {
+      read: () => device ??= claude.device.read().catch((error) => {
+        device = undefined;
+        throw error;
+      })
+    },
     clipboard: {
       async write(text) {
         await toaster.copy(text);
@@ -9754,10 +9915,21 @@ async function createMod(definition, runtime) {
     };
   };
   const hotkeys = await createHotkeys({ name: definition.name, declared: definition.hotkeys ?? {}, configRoot, claude, router, answerInput: area.answerInput, report });
+  const secret = async (action, key, value) => {
+    const { exitCode, stdout, stderr } = await claude.process.run(["cmod", "secret", action, definition.name, key], value === undefined ? undefined : { stdin: value });
+    if (exitCode !== 0)
+      throw new Error(`${definition.name}: mod.secrets.${action}: ${cmodError(stderr, "secret") || `cmod secret ${formatExit(exitCode, "")}.`}`);
+    return stdout;
+  };
   const mod = {
     name: definition.name,
     folder: claude.plugin.root,
     dataFolder: runtime.dataFolder,
+    secrets: {
+      get: async (key) => await secret("get", key) || undefined,
+      store: async (key, value) => void await secret("store", key, value),
+      delete: async (key) => void await secret("delete", key)
+    },
     state: modState.state,
     get options() {
       return modOptions.values;
@@ -9780,7 +9952,7 @@ async function createMod(definition, runtime) {
   const followSession = async (isAfterCd = false) => {
     try {
       const [nextRoot, reportedCwd] = await Promise.all([claude.session.root(), claude.session.cwd()]);
-      const oldCwd = cwd2;
+      const oldCwd = cwd;
       const hasMovedRoot = nextRoot !== modState.root;
       if (isAfterCd && hasMovedRoot && relativePath(nextRoot, reportedCwd) === undefined)
         staleCwd = reportedCwd;
@@ -9789,12 +9961,12 @@ async function createMod(definition, runtime) {
       const nextCwd = staleCwd === undefined ? reportedCwd : nextRoot;
       if (!hasMovedRoot && nextCwd === oldCwd)
         return;
-      cwd2 = nextCwd;
+      cwd = nextCwd;
       followFolders(nextRoot, nextCwd);
       await modState.moveTo(nextRoot).catch((error) => {
-        if (cwd2 === nextCwd)
-          cwd2 = loadedCwd;
-        followFolders(modState.root, cwd2);
+        if (cwd === nextCwd)
+          cwd = loadedCwd;
+        followFolders(modState.root, cwd);
         throw error;
       });
       if (hasMovedRoot)
@@ -9812,7 +9984,7 @@ async function createMod(definition, runtime) {
   };
   const followCurrent = async (title) => {
     const [id, model, usage] = await Promise.all([claude.session.id(), claude.session.model(), claude.session.usage()]);
-    followed = { id, title: title ?? "", project: modState.root, cwd: cwd2, model, startedAt: new Date(usage.startedAt).toISOString(), ...forkedFrom === undefined ? {} : { forkedFrom }, ...agentType === undefined ? {} : { agentType } };
+    followed = { id, title: title ?? "", project: modState.root, cwd, model, startedAt: new Date(usage.startedAt).toISOString(), ...forkedFrom === undefined ? {} : { forkedFrom }, ...agentType === undefined ? {} : { agentType } };
     client.follow(followed);
   };
   router.add("classic.SessionStart", async (e, next) => {
@@ -9883,7 +10055,7 @@ async function createMod(definition, runtime) {
     const call = e;
     if (e.method === conversationMethods.changed && call.caller === cmodPluginName) {
       const { session: changedSession, change, isInProject } = e.input;
-      client.changed(changedSession, change, isInProject !== false);
+      client.changed(changedSession, change, isInProject !== false, next.signal);
       return { value: null };
     }
     if (e.method === conversationMethods.sessionColor && call.caller === cmodPluginName) {
@@ -9892,7 +10064,7 @@ async function createMod(definition, runtime) {
     }
     const ask = beforeAskOf(call);
     if (ask !== undefined)
-      return { value: await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject) ?? null };
+      return { value: await client.answerBefore(ask.session, ask.event, ask.change, ask.isInProject, next.signal) ?? null };
     if (e.method === partMethods.changed && call.caller !== undefined && pages !== undefined) {
       const update = e.input;
       if (update.parts !== undefined && conversations !== undefined)
@@ -9975,7 +10147,7 @@ function progressOf({ done, total, label }) {
   return Box({ gap: 2, children: [Progress({ value: total > 0 ? done / total * 100 : 0 }), Text({ dimColor: true, wrap: "truncate-end", children: label })] });
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/register.js
+// node_modules/@cmodjs/core/register.js
 var lifecycle;
 var permissionCheck;
 var registered;
@@ -10046,13 +10218,14 @@ async function startMod($, eventInput, passOn) {
       dataHome: () => $.env.get("XDG_DATA_HOME"),
       configHome: () => $.env.get("CLAUDE_CONFIG_DIR")
     },
+    device: { read: () => readDevice(claude) },
     cmod: { call: (input) => $.cmod.call(input) }
   };
   const [, answer] = await Promise.all([lifecycle.start(claude, readPlugin), passOn(eventInput)]);
   return answer;
 }
 function routeToMod(_$, eventInput, passOn) {
-  return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed));
+  return lifecycle.route(passOn.event, eventInput, (passed) => passOn(passed), passOn.signal);
 }
 function routeFailure(_$, eventInput, passOn) {
   return lifecycle.caught(passOn.event, eventInput, (passed) => passOn(passed), passOn);
@@ -10060,7 +10233,7 @@ function routeFailure(_$, eventInput, passOn) {
 var withCaller = (eventInput, passOn) => ({ ...eventInput, caller: passOn.origin.plugin });
 var withoutCaller = (passOn) => (passed) => passOn(Object.fromEntries(Object.entries(passed).filter(([key]) => key !== "caller")));
 function routeCallToMod(_$, eventInput, passOn) {
-  return lifecycle.route("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn));
+  return lifecycle.route("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn), passOn.signal);
 }
 function routeCallFailure(_$, eventInput, passOn) {
   return lifecycle.caught("cmod.call", withCaller(eventInput, passOn), withoutCaller(passOn), passOn);
@@ -10124,7 +10297,7 @@ function registerMod(addHook, definition, options) {
   addHook("turn.start", routeToMod).catch(routeFailure);
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/installer.js
+// node_modules/@cmodjs/core/installer.js
 var stepId = /^[A-Za-z0-9_-]{1,64}$/;
 function checkSteps(name, steps) {
   const seen = new Set;
@@ -10139,7 +10312,7 @@ function checkSteps(name, steps) {
   }
 }
 
-// ../Developer/tracer/node_modules/@cmodjs/core/mod.js
+// node_modules/@cmodjs/core/mod.js
 var sessions = {
   get current() {
     return bound().sessions.current;
@@ -10164,7 +10337,7 @@ function defineMod(definition) {
   return definition;
 }
 
-// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-2Q2SvS/release/src/mod.ts
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-qvMhao/release/src/mod.ts
 var options = {
   tracerOnly: option.toggle({
     title: "Claude reads files only through tracer",
@@ -10177,21 +10350,21 @@ var tracer = defineMod({
   name: "tracer",
   options,
   setup(mod) {
-    const { current: current2 } = sessions;
-    const everyAgent = current2.goal;
-    everyAgent.beforeSessionStart(async (start, time2) => noteOf(await hook(mod, "SessionStart", time2, { session_id: start.session, agent_id: start.task, cwd: start.cwd, source: start.source })));
-    everyAgent.beforeContextEnd(async (context, time2) => void await hook(mod, "PreCompact", time2, { session_id: current2.id, agent_id: context.task, cwd: current2.cwd }));
-    everyAgent.beforePrompt({ task: /./ }, async (prompt, time2) => void await hook(mod, "SubagentStart", time2, { session_id: prompt.session, agent_id: prompt.task, cwd: current2.cwd }));
-    everyAgent.beforeInstructionFile(async (file, time2) => refusalOf(await hook(mod, "InstructionsLoaded", time2, { session_id: file.session, agent_id: file.task, cwd: current2.cwd, file_path: file.path })));
-    everyAgent.beforeToolCall(async (call, time2) => {
-      const printed = await hook(mod, "PreToolUse", time2, { session_id: call.session, agent_id: call.task, cwd: call.cwd, tool_name: call.name, tool_input: call.input });
+    const { current } = sessions;
+    const everyAgent = current.goal;
+    everyAgent.beforeSessionStart(async (start, time) => noteOf(await hook(mod, "SessionStart", time, { session_id: start.session, agent_id: start.task, cwd: start.cwd, source: start.source })));
+    everyAgent.beforeContextEnd(async (context, time) => void await hook(mod, "PreCompact", time, { session_id: current.id, agent_id: context.task, cwd: current.cwd }));
+    everyAgent.beforePrompt({ task: /./ }, async (prompt, time) => void await hook(mod, "SubagentStart", time, { session_id: prompt.session, agent_id: prompt.task, cwd: current.cwd }));
+    everyAgent.beforeInstructionFile(async (file, time) => refusalOf(await hook(mod, "InstructionsLoaded", time, { session_id: file.session, agent_id: file.task, cwd: current.cwd, file_path: file.path })));
+    everyAgent.beforeToolCall(async (call, time) => {
+      const printed = await hook(mod, "PreToolUse", time, { session_id: call.session, agent_id: call.task, cwd: call.cwd, tool_name: call.name, tool_input: call.input });
       const input = printed?.hookSpecificOutput?.updatedInput;
       return refusalOf(printed) ?? (input === undefined ? undefined : { input });
     });
-    everyAgent.beforeToolResult(async (result, time2) => {
+    everyAgent.beforeToolResult(async (result, time) => {
       const event = result.isError ? "PostToolUseFailure" : "PostToolUse";
       const answer = result.isError ? { error: result.output } : { tool_response: result.output };
-      return noteOf(await hook(mod, event, time2, { session_id: result.session, agent_id: result.task, cwd: result.cwd, tool_name: result.name, tool_input: result.input, ...answer }));
+      return noteOf(await hook(mod, event, time, { session_id: result.session, agent_id: result.task, cwd: result.cwd, tool_name: result.name, tool_input: result.input, ...answer }));
     });
   }
 });
@@ -10217,9 +10390,9 @@ async function hook(mod, event, { deadline }, input) {
 `).at(-1) ?? ""}`);
 }
 
-// ../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-2Q2SvS/release/hooks/register.ts
-function register(addHook, options2) {
-  registerMod(addHook, tracer, options2);
+// ../../../../private/var/folders/t0/0bwlr70s62g8frgryzv4p4fr0000gn/T/cmod-publish-tracer-qvMhao/release/hooks/register.ts
+function register(addHook, options) {
+  registerMod(addHook, tracer, options);
 }
 export {
   register
