@@ -673,6 +673,40 @@ fn every_markdown_shape_imports_the_files_claude_code_imports() {
 }
 
 #[test]
+fn a_doc_arrives_without_the_comments_claude_code_removes() {
+    let f = docs_repo();
+    f.write(
+        "sub/Claude.md",
+        concat!(
+            "# Sub rules\n\n",
+            "<!-- maintainer note: keep this short -->\n\n",
+            "Keep functions small.\n",
+            "<!-- a --> Visible after a comment.\n",
+            "Inline <!-- stays --> in a paragraph.\n\n",
+            "<!--\nA note\nover three lines\n-->\n\n",
+            "- item <!-- stays in a list -->\n",
+        ),
+    );
+    f.commit("doc with comments");
+
+    let sid = fresh_session_id("comments");
+    let r = f.trace_env(&["docs", "sub/util.py"], &[("CLAUDE_CODE_SESSION_ID", sid.as_str())]);
+    r.ok();
+    assert!(
+        r.stdout.contains(concat!(
+            "## sub/Claude.md\n\n",
+            "# Sub rules\n\n",
+            "Keep functions small.\n",
+            " Visible after a comment.\n",
+            "Inline <!-- stays --> in a paragraph.\n\n",
+            "- item <!-- stays in a list -->\n",
+        )),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
 fn imports_load_four_hops_deep() {
     let f = docs_repo();
     f.write("sub/Claude.md", "# Sub rules\n\n@one.md\n");

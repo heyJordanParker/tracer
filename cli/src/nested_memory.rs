@@ -628,6 +628,62 @@ fn scan_text(source: &str, runs: &[Range<usize>], item_text: Option<Range<usize>
     }
 }
 
+const MARKDOWN: Options = Options::ENABLE_TABLES.union(Options::ENABLE_STRIKETHROUGH);
+
+/// Each line of a doc as Claude Code shows it: a top-level HTML block that
+/// starts with a comment loses its comments, and the whole block when nothing
+/// else is left. `None` is a line the agent never sees.
+pub fn shown_lines(content: &str) -> Vec<Option<String>> {
+    let body = without_frontmatter(content);
+    let offset = content.len() - body.len();
+    let mut hidden: Vec<Range<usize>> = Vec::new();
+    let mut depth = 0usize;
+    for (event, range) in Parser::new_ext(body, MARKDOWN).into_offset_iter() {
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(tag) => {
+                depth -= 1;
+                if tag != TagEnd::HtmlBlock || depth > 0 {
+                    continue;
+                }
+                let block = &body[range.clone()];
+                let start = block.trim_start();
+                if !start.starts_with("<!--") || !start.contains("-->") {
+                    continue;
+                }
+                let at = range.start + offset;
+                if comment_re().replace_all(block, "").trim().is_empty() {
+                    let blank_lines = content[range.end + offset..].len() - content[range.end + offset..].trim_start_matches('\n').len();
+                    hidden.push(at..range.end + offset + blank_lines);
+                } else {
+                    hidden.extend(comment_re().find_iter(block).map(|comment| at + comment.start()..at + comment.end()));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut start = 0;
+    content
+        .split_inclusive('\n')
+        .map(|line| {
+            let end = start + line.len();
+            let mut text = String::new();
+            let mut cursor = start;
+            for range in hidden.iter().filter(|range| range.start < end && range.end > start) {
+                if range.start > cursor {
+                    text.push_str(&content[cursor..range.start]);
+                }
+                cursor = cursor.max(range.end);
+            }
+            if cursor < end {
+                text.push_str(&content[cursor..end]);
+            }
+            start = end;
+            (!text.is_empty()).then(|| text.trim_end_matches(['\n', '\r']).to_string())
+        })
+        .collect()
+}
+
 fn find_includes(content: &str) -> Vec<String> {
     let source = without_frontmatter(content);
     let mut paths = Vec::new();
@@ -635,8 +691,7 @@ fn find_includes(content: &str) -> Vec<String> {
     let mut hidden = 0usize;
     let mut runs: Vec<Range<usize>> = Vec::new();
     let mut item_text: Option<Range<usize>> = None;
-    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
-    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+    for (event, range) in Parser::new_ext(source, MARKDOWN).into_offset_iter() {
         let tag = match &event {
             Event::Start(tag) => Some(tag.to_end()),
             Event::End(tag) => Some(*tag),

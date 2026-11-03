@@ -79,6 +79,8 @@ pub fn deliver(
 #[derive(Clone)]
 pub struct Unread {
     pub memory: nested_memory::LoadedMemory,
+    /// Each line as Claude Code shows it, `None` for a line it hides.
+    shown: Vec<Option<String>>,
     name: String,
     pub start: usize,
     pub from: usize,
@@ -112,17 +114,20 @@ pub fn unread(memories: Vec<nested_memory::LoadedMemory>) -> Vec<Unread> {
             let total = memory.content.lines().count();
             let start = body_start(&memory.content, total);
             let hash = session::content_hash(&memory.content);
+            let shown_lines = nested_memory::shown_lines(&memory.content);
             let (from, changed) = match states.get(&memory.path) {
                 Some(session::DocState::Partial { hash: read, coverage }) if *read == hash && coverage.total_lines == total => {
                     (coverage.first_unread().clamp(start, total), None)
                 }
                 Some(session::DocState::Whole { hash: sent, lines }) if *sent != hash => {
-                    (start, Some(changed_lines(lines, &memory.content, start)))
+                    let mut changed = changed_lines(lines, &memory.content, start);
+                    changed.lines.retain(|line| shown_lines[line - 1].is_some());
+                    (start, Some(changed))
                 }
                 _ => (start, None),
             };
             let name = shown(&memory);
-            Unread { memory, name, start, from, total, changed }
+            Unread { memory, shown: shown_lines, name, start, from, total, changed }
         })
         .collect()
 }
@@ -278,7 +283,7 @@ impl Fitted {
 /// `## <path>` when that is all of it, else `## <path> (L<from>-L<through> of
 /// <total>)`, ending in the trim marker while lines remain.
 fn section(doc: &Unread, through: usize) -> String {
-    let lines: Vec<&str> = doc.memory.content.lines().collect();
+    let lines = |from: usize, through: usize| doc.shown[from - 1..through].iter().flatten().cloned().collect::<Vec<_>>().join("\n");
     if let Some(changed) = &doc.changed {
         let mut out = format!(
             "## {} (changed since sent: {} lines, {} removed)\n\n",
@@ -287,21 +292,14 @@ fn section(doc: &Unread, through: usize) -> String {
             changed.removed
         );
         for &line in &changed.lines {
-            out.push_str(&format!("L{line}: {}\n", lines[line - 1]));
+            out.push_str(&format!("L{line}: {}\n", lines(line, line)));
         }
         return out;
     }
     if doc.from_start() && through == doc.total {
-        let text = lines[doc.start - 1..].join("\n");
-        return format!("## {}\n\n{}\n", doc.name, text.trim());
+        return format!("## {}\n\n{}\n", doc.name, lines(doc.start, doc.total).trim());
     }
-    let mut out = format!(
-        "## {} (L{}-L{through} of {})\n\n{}\n",
-        doc.name,
-        doc.from,
-        doc.total,
-        lines[doc.from - 1..through].join("\n")
-    );
+    let mut out = format!("## {} (L{}-L{through} of {})\n\n{}\n", doc.name, doc.from, doc.total, lines(doc.from, through));
     if through < doc.total {
         out.push_str(&crate::output::trim_marker(
             &runnable(&doc.memory.path),
@@ -325,8 +323,8 @@ fn cut(doc: &Unread, room: usize) -> Option<(usize, String)> {
     let frame = crate::output::width(&section_frame(doc));
     let mut left = room.checked_sub(frame)?;
     let mut through = doc.from - 1;
-    for line in doc.memory.content.lines().skip(doc.from - 1) {
-        let size = crate::output::width(line) + 1;
+    for line in doc.shown.iter().skip(doc.from - 1) {
+        let size = line.as_deref().map_or(0, |line| crate::output::width(line) + 1);
         if size > left {
             break;
         }
@@ -338,7 +336,7 @@ fn cut(doc: &Unread, room: usize) -> Option<(usize, String)> {
     }
     // A line longer than the whole room is clipped and counted as read, as
     // Claude Code's Read tool clips an over-long line, so the doc moves on.
-    let line = doc.memory.content.lines().nth(doc.from - 1)?;
+    let line = doc.shown.get(doc.from - 1)?.as_deref()?;
     let shown = crate::output::clip(line, left.checked_sub(2)?);
     if shown.is_empty() {
         return None;

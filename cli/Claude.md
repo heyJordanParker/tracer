@@ -260,6 +260,7 @@ Local code-intelligence command-line interface for Agents working in a repositor
 - `output::index_state` offers each left-out repository's `IndexState` notice once per agent context, for a hook answer and a `trace` call alike.
 - `docs.rs` is doc delivery for every command and hook; `commands/docs.rs` is the `trace docs` command. `nested_memory.rs` loads the docs a path reaches, and `paths_match.rs` matches a rule's `paths:`.
 - `nested_memory::find_includes` finds a doc's `@path` imports the way Claude Code 2.1.317 does, which lexes the doc with marked 15.0.0 and scans its text tokens. marked scans a list item's raw text, code spans and comments included, never scans a table or an image's text, and never scans an escaped character.
+- `nested_memory::shown_lines` is each doc line as Claude Code shows it, without the comments of a top-level HTML block that starts with `<!--`. `docs.rs` prints those lines and keeps the file's own line numbers, so paging and the session record still count the file's lines.
 - A rule's `paths:` is one glob, a `[a, b]` flow list, or a `- ` block list.
 - Recognized project-doc files include `CLAUDE.md`, `Claude.md`, `AGENTS.md`, `Agents.md`, their `.local.md` peers, and `.claude/rules/*.md`.
 - `docs_graph` builds the doc-file graph in memory per call and caches nothing.
