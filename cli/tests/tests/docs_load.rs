@@ -623,6 +623,56 @@ fn a_nested_doc_brings_the_files_it_imports_as_claude_code_reads_them() {
 }
 
 #[test]
+fn every_markdown_shape_imports_the_files_claude_code_imports() {
+    let f = docs_repo();
+    f.write(
+        "sub/Claude.md",
+        concat!(
+            "---\ntitle: @frontmatter.md\n---\n",
+            "# Sub rules\n\n",
+            "Example:\n\n    @indented.md\n\n",
+            "<details>\n@details.md\n</details>\n\n",
+            "Run ``cat @doubled.md ` x`` here.\n\n",
+            "````\n```\n@nested-fence.md\n````\n\n",
+            "Read **@bold.md** and ~~@struck.md~~ and [@linked.md](x) and <b>@tagged.md</b>.\n\n",
+            "Open `<!--` then @after-code.md\n\n",
+            "<!-- note --> @after-comment.md\n\n",
+            "| col |\n| --- |\n| @table.md |\n\n",
+            "![@alt.md](x.png)\n\n",
+            "- Run `cat @listed.md now`\n",
+            "- see <!-- @list-comment.md -->\n",
+            "- **@held-bold.md** @held-plain.md\n\n",
+            "Write \\@escaped.md to show the syntax, and a\\_@after-escape.md\n\n",
+            "- Review with:\n  <checklist>\n  @in-tag.md\n  </checklist>\n\n",
+            "Imports:\ndoc | why\n--- | ---\n@in-table.md | rules\n",
+        ),
+    );
+    f.write("Claude.md", "\u{feff}@bom.md\n");
+    f.write("bom.md", "# bom.md\n");
+    let imported = [
+        "bold.md", "struck.md", "linked.md", "tagged.md", "after-code.md", "after-comment.md", "listed.md",
+        "list-comment.md", "held-plain.md", "held-bold.md", "after-escape.md",
+    ];
+    let skipped = [
+        "frontmatter.md", "indented.md", "details.md", "doubled.md", "nested-fence.md", "table.md", "alt.md",
+        "escaped.md", "in-tag.md", "in-table.md",
+    ];
+    for name in imported.iter().chain(&skipped) {
+        f.write(&format!("sub/{name}"), &format!("# {name}\n"));
+    }
+    f.commit("nested doc importing through every markdown shape");
+
+    let sid = fresh_session_id("import-shapes");
+    let r = f.trace_env(&["docs", "sub/util.py", "--json"], &[("CLAUDE_CODE_SESSION_ID", sid.as_str())]);
+    r.ok();
+    let expected: Vec<String> = std::iter::once("sub/Claude.md".to_string())
+        .chain(imported.iter().map(|name| format!("sub/{name}")))
+        .chain(["Claude.md".to_string(), "bom.md".to_string()])
+        .collect();
+    assert_eq!(doc_paths(&r.view()), expected, "{}", r.stdout);
+}
+
+#[test]
 fn imports_load_four_hops_deep() {
     let f = docs_repo();
     f.write("sub/Claude.md", "# Sub rules\n\n@one.md\n");

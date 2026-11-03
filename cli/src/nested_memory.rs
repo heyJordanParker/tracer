@@ -9,9 +9,11 @@
 //!
 //! Session-scoped dedupe across invocations lives in `crate::session`.
 
+use pulldown_cmark::{Event, Options, Parser, TagEnd};
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -501,86 +503,182 @@ fn is_text_file(path: &Path) -> bool {
     }
 }
 
-/// Remove `` `...` `` inline-code spans from a line.
-fn strip_inline_code(line: &str) -> String {
-    let mut out = String::new();
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '`' {
-            // consume until the next backtick; an unbalanced trailing
-            // backtick is left in place.
-            let mut span = String::from('`');
-            let mut closed = false;
-            for d in chars.by_ref() {
-                span.push(d);
-                if d == '`' {
-                    closed = true;
-                    break;
-                }
-            }
-            if !closed {
-                out.push_str(&span);
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+const JS_SPACE: &str = r"\t\n\x0B\f\r \x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}";
 
-fn strip_comments(line: &str, in_comment: &mut bool) -> String {
-    let mut out = String::new();
-    let mut rest = line;
-    loop {
-        if *in_comment {
-            match rest.find("-->") {
-                Some(end) => {
-                    rest = &rest[end + 3..];
-                    *in_comment = false;
-                }
-                None => return out,
-            }
-        }
-        match rest.find("<!--") {
-            Some(start) => {
-                out.push_str(&rest[..start]);
-                rest = &rest[start + 4..];
-                *in_comment = true;
-            }
-            None => {
-                out.push_str(rest);
-                return out;
-            }
-        }
-    }
-}
-
-fn import_pattern() -> &'static Regex {
+fn import_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?:^|\s)@((?:[^\s\\]|\\ )+)").unwrap())
+    RE.get_or_init(|| Regex::new(&format!(r"(?:^|[{JS_SPACE}])@((?:[^{JS_SPACE}\\]|\\ )+)")).unwrap())
+}
+
+fn frontmatter_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\A---\s*\n(?s:.*?)---\s*\n?").unwrap())
+}
+
+fn comment_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<!--.*?-->").unwrap())
+}
+
+fn tag_line_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r#"(?i)^(?:<([a-z][a-z0-9_-]*)(?: +[a-z:_][a-z0-9_.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?)* */?>"#,
+            r"|</([a-z][a-z0-9_-]*)\s*>)[ \t]*$",
+        ))
+        .unwrap()
+    })
+}
+
+fn table_delimiter_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(?:\| *)?:?-+:? *(?:\| *:?-+:? *)*(?:\| *)?$").unwrap())
+}
+
+fn without_frontmatter(content: &str) -> &str {
+    let plain = content.strip_prefix('\u{feff}').unwrap_or(content);
+    match frontmatter_re().find(plain) {
+        Some(frontmatter) => &plain[frontmatter.end()..],
+        None => content,
+    }
+}
+
+fn scan(text: &str, paths: &mut Vec<String>) {
+    for found in import_re().captures_iter(text) {
+        let written = found[1].split('#').next().unwrap_or_default().replace("\\ ", " ");
+        let is_path = written.starts_with("~/")
+            || (written.starts_with('/') && written != "/")
+            || written.starts_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        if is_path && !paths.contains(&written) {
+            paths.push(written);
+        }
+    }
+}
+
+fn scan_html(html: &str, paths: &mut Vec<String>) {
+    let start = html.trim_start();
+    if start.starts_with("<!--") && start.contains("-->") {
+        let rest = comment_re().replace_all(html, "");
+        if !rest.trim().is_empty() {
+            scan(&rest, paths);
+        }
+    }
+}
+
+fn opens_html_block(line: &str) -> bool {
+    tag_line_re().captures(line).is_some_and(|tag| {
+        let name = tag.get(1).or(tag.get(2)).map_or(String::new(), |name| name.as_str().to_lowercase());
+        !["script", "pre", "style", "textarea"].iter().any(|raw| name.starts_with(raw))
+    })
+}
+
+fn cell_count(row: &str) -> usize {
+    let mut cells = Vec::new();
+    let mut start = 0;
+    let mut backslashes = 0;
+    for (index, c) in row.char_indices() {
+        if c == '|' && backslashes % 2 == 0 {
+            cells.push(&row[start..index]);
+            start = index + 1;
+        }
+        backslashes = if c == '\\' { backslashes + 1 } else { 0 };
+    }
+    cells.push(&row[start..]);
+    let leading = usize::from(cells[0].trim().is_empty());
+    let trailing = usize::from(cells.len() > leading && cells[cells.len() - 1].trim().is_empty());
+    cells.len() - leading - trailing
+}
+
+fn opens_table(header: &str, delimiter: &str) -> bool {
+    let aligns = delimiter.strip_prefix('|').unwrap_or(delimiter).trim_end();
+    let aligns = aligns.strip_suffix('|').unwrap_or(aligns);
+    !header.trim().is_empty()
+        && delimiter.contains([':', '|'])
+        && table_delimiter_re().is_match(delimiter)
+        && cell_count(header) == aligns.split('|').count()
+}
+
+fn marked_block_start(source: &str, span: &Range<usize>, in_item: bool) -> Option<usize> {
+    let first_line = source[..span.start].rfind('\n').map_or(0, |newline| newline + 1);
+    let mut lines = Vec::new();
+    let mut offset = first_line;
+    for line in source[first_line..span.end].split('\n') {
+        lines.push((offset, line.trim_start_matches([' ', '\t', '>'])));
+        offset += line.len() + 1;
+    }
+    lines.iter().enumerate().find_map(|(index, &(offset, line))| {
+        let starts_block = (in_item && opens_html_block(line))
+            || lines.get(index + 1).is_some_and(|&(_, next)| opens_table(line, next));
+        starts_block.then_some(offset)
+    })
+}
+
+fn scan_text(source: &str, runs: &[Range<usize>], item_text: Option<Range<usize>>, in_item: bool, paths: &mut Vec<String>) {
+    let mut spans = item_text.iter().chain(runs);
+    let Some(first) = spans.next() else {
+        return;
+    };
+    let span = spans.fold(first.clone(), |span, next| span.start.min(next.start)..span.end.max(next.end));
+    let cut = marked_block_start(source, &span, in_item).unwrap_or(span.end);
+    for text in item_text.iter().chain(runs) {
+        if text.start < cut {
+            scan(&source[text.start..text.end.min(cut)], paths);
+        }
+    }
 }
 
 fn find_includes(content: &str) -> Vec<String> {
+    let source = without_frontmatter(content);
     let mut paths = Vec::new();
-    let mut in_fence = false;
-    let mut in_comment = false;
-    for line in content.split('\n') {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fence = !in_fence;
-            continue;
+    let mut blocks: Vec<TagEnd> = Vec::new();
+    let mut hidden = 0usize;
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    let mut item_text: Option<Range<usize>> = None;
+    let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+        let tag = match &event {
+            Event::Start(tag) => Some(tag.to_end()),
+            Event::End(tag) => Some(*tag),
+            _ => None,
+        };
+        let is_block = matches!(event, Event::Rule)
+            || tag.is_some_and(|tag| {
+                !matches!(tag, TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link | TagEnd::Image)
+            });
+        let in_item_text = matches!(blocks.as_slice(), [.., TagEnd::Item] | [.., TagEnd::Item, TagEnd::Paragraph]);
+        if is_block {
+            scan_text(source, &runs, item_text.take(), in_item_text, &mut paths);
+            runs.clear();
+        } else if in_item_text {
+            item_text = Some(item_text.map_or(range.clone(), |text| text.start..range.end));
         }
-        if in_fence {
-            continue;
+        if matches!(event, Event::Text(_)) && hidden == 0 {
+            let escaped = range.start > 0 && source.as_bytes()[range.start - 1] == b'\\';
+            match runs.last_mut() {
+                Some(run) if !escaped && run.end == range.start => run.end = range.end,
+                _ => runs.push(if escaped { range.start + 1 } else { range.start }..range.end),
+            }
         }
-        let text = strip_inline_code(&strip_comments(line, &mut in_comment));
-        for found in import_pattern().captures_iter(&text) {
-            let written = found[1].split('#').next().unwrap_or_default().replace("\\ ", " ");
-            let is_path = written.starts_with("~/")
-                || (written.starts_with('/') && written != "/")
-                || written.starts_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-            if is_path {
-                paths.push(written);
+        let Some(tag) = tag else {
+            continue;
+        };
+        let hides = matches!(tag, TagEnd::CodeBlock | TagEnd::Table | TagEnd::Image);
+        match event {
+            Event::Start(_) => {
+                hidden += usize::from(hides);
+                if is_block {
+                    blocks.push(tag);
+                }
+            }
+            _ => {
+                hidden -= usize::from(hides);
+                if tag == TagEnd::HtmlBlock {
+                    scan_html(&source[range], &mut paths);
+                }
+                if is_block {
+                    blocks.pop();
+                }
             }
         }
     }

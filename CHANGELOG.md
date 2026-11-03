@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- tracer finds a Claude.md's `@path` imports by reading the Markdown the way Claude Code does, so Claude gets the same imported files through `trace` as through Claude Code. 0.8.1 scanned the lines and disagreed on less common Markdown. It loaded imports Claude Code skips, in an indented code block, an HTML block such as `<details>`, a double-backtick code span, a fence inside a longer fence, and the frontmatter. It missed imports Claude Code loads, such as `**@x.md**`, `~~@x.md~~`, `[@x.md](…)`, `<b>@x.md</b>`, an import after a code span holding `<!--`, and a list item's `` `cat @x.md now` ``. A table, even one without a leading `|`, an image's text, an escaped `\@x.md`, and the lines after a lone tag such as `<checklist>` under a list item import nothing, as in Claude Code.
+
 ## 0.8.1
 
 - A Claude.md's `@path` imports reach Claude when it reads code through `trace`. tracer read only its own `@include <path>` form, so a nested doc arrived without the files it imports, such as `@docs/architecture.md`. tracer now follows Claude Code's rules: an `@` at the start of a word outside code and HTML comments, a path relative to the importing doc or from `~/`, `\ ` for a space, text files only, and four hops deep. A project doc's imports stay inside the repository, and `~/.claude/` docs import from anywhere. `@include <path>` is no longer read.
