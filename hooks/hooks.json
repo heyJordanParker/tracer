@@ -1,6 +1,0 @@
-{
-  "description": "tracer hooks module",
-  "modules": [
-    "./register.ts"
-  ]
-}

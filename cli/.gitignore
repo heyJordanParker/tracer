@@ -1,5 +1,0 @@
-# Rust build output, in a dot-folder the Claude Code watcher skips
-/.target/
-
-# The release files `cargo xtask dist` writes for cmod publish
-/dist/
