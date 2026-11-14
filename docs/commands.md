@@ -53,7 +53,7 @@ If A imports B, B is a dependency of A, and A is a usage of B.
 
 | Command | Answers |
 |---|---|
-| `trace read <paths>` | Whole files, cleaned, with line numbers, fitted to 30,000 characters. A cut read ends with the command for the next window. |
+| `trace read <paths>` | Whole files as written, with line numbers and a license header folded to one line, fitted to 30,000 characters. A cut read ends with the command for the next window. |
 | `trace read <file> --method <name>` | One function or method. |
 | `trace read <file> --lines L1:L2` | A line range. |
 | `trace read <file> --between START END` | The section between two anchors. |

@@ -993,7 +993,7 @@ fn source_edit_after_output_starts_keeps_the_captured_hash() {
 }
 
 #[test]
-fn cleaned_read_coverage_records_only_delivered_source_spans() {
+fn read_coverage_records_only_delivered_source_spans() {
     let f = Fixture::new();
     f.write(
         "licensed.rs",
@@ -1015,25 +1015,21 @@ fn cleaned_read_coverage_records_only_delivered_source_spans() {
     let licensed_fraction = read_fraction_for(&status_json(&f, &env), "licensed.rs").unwrap();
     assert!(
         (licensed_fraction - 3.0 / 7.0).abs() < 1e-9,
-        "cleaned delivery must cover shebang, retained blank, and function only, got {licensed_fraction}"
+        "a whole read covers the shebang, the blank, and the function, never the folded notice, got {licensed_fraction}"
     );
 
-    f.trace_env(
-        &["read", "licensed.rs", "--lines", "3:6", "--raw", "--json"],
-        &env,
-    )
-    .ok();
-    let licensed_after_raw = read_fraction_for(&status_json(&f, &env), "licensed.rs").unwrap();
+    f.trace_env(&["read", "licensed.rs", "--lines", "3:6", "--json"], &env).ok();
+    let licensed_after_window = read_fraction_for(&status_json(&f, &env), "licensed.rs").unwrap();
     assert!(
-        (licensed_after_raw - 1.0).abs() < 1e-9,
-        "raw delivery of the omitted notice must complete coverage, got {licensed_after_raw}"
+        (licensed_after_window - 1.0).abs() < 1e-9,
+        "the window the fold names completes coverage, got {licensed_after_window}"
     );
 
     f.trace_env(&["read", "decorated.rs", "--json"], &env).ok();
     let decorated_fraction = read_fraction_for(&status_json(&f, &env), "decorated.rs").unwrap();
     assert!(
-        (decorated_fraction - 4.0 / 6.0).abs() < 1e-9,
-        "coverage must exclude the decorative line and collapsed blank, got {decorated_fraction}"
+        (decorated_fraction - 1.0).abs() < 1e-9,
+        "a read prints separator and blank lines, so it covers them, got {decorated_fraction}"
     );
 
     f.trace_env(&["read", "plain.rs", "--json"], &env).ok();

@@ -1993,7 +1993,7 @@ fn partial_clone_answers_without_fetching_and_still_reads_old_versions() {
     let walks = warm.stderr.lines().filter(|line| line.starts_with("timing git log")).count();
     assert_eq!(walks, 0, "a clone without trees walks once per HEAD, never on every call: {}", warm.stderr);
 
-    let old = trace(&clone, &["read", "app.py", "--revision", "HEAD~1", "--raw"]);
+    let old = trace(&clone, &["read", "app.py", "--revision", "HEAD~1"]);
     old.ok();
     assert!(old.stdout.contains("VALUE = 'first'"), "{}", old.stdout);
 }

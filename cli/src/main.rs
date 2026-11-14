@@ -353,7 +353,7 @@ enum Command {
         /// away, so nothing is recorded as shown and the process ends.
         #[arg(long, value_name = "MS")]
         deadline_ms: u64,
-        /// Refuse shell commands that read files without tracer when tracer gives the same answer.
+        /// Refuse shell commands that read, search, or list files without tracer, and name the trace command for each.
         #[arg(long)]
         tracer_only: bool,
     },
@@ -406,7 +406,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Cleaned read: whole file, method, line range, or anchor section; worktree or git ref.
+    /// Read files as written, numbered by line: whole file, method, line range, or anchor section; worktree or git ref.
     Read {
         #[arg(required = true)]
         paths: Vec<String>,
@@ -414,8 +414,6 @@ enum Command {
         method: Option<String>,
         #[arg(long)]
         json: bool,
-        #[arg(long)]
-        raw: bool,
         /// Read the files at a commit, branch, or tag instead of the working
         /// tree.
         #[arg(long, value_name = "REV")]
@@ -809,7 +807,6 @@ fn run() -> Result<()> {
             paths,
             method,
             json,
-            raw,
             revision,
             lines,
             between,
@@ -821,7 +818,6 @@ fn run() -> Result<()> {
                 &paths,
                 method.as_deref(),
                 json,
-                raw,
                 revision.as_deref(),
                 lines.as_deref(),
                 between.map(|v| (v[0].clone(), v[1].clone())),

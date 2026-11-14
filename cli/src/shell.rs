@@ -31,10 +31,10 @@ pub struct Command {
     /// Whether `xargs` runs it, adding arguments it reads from its input, so
     /// `argv` is not every argument the command gets.
     pub fed: bool,
-    /// Whether something other than the terminal takes its input, output,
-    /// or exit status: a redirect of its input or output, a command
-    /// substitution its output becomes, or a condition, `&&`, or `||` that
-    /// tests how it exits.
+    /// Whether something other than the terminal takes its input or output,
+    /// or its exit status decides a branch: a redirect of its input or
+    /// output, a command substitution its output becomes, or the condition
+    /// of an `if` or a `while`.
     pub redirected: bool,
 }
 
@@ -120,14 +120,6 @@ impl Reader<'_> {
             "command" => self.command(node, input),
             "redirected_statement" => self.marked(redirects_terminal(node, self.line), |reader| reader.children(node, input)),
             "command_substitution" | "process_substitution" => self.marked(true, |reader| reader.children(node, None)),
-            "list" => {
-                let mut cursor = node.walk();
-                let operands: Vec<Node> = node.named_children(&mut cursor).collect();
-                let last = operands.len().saturating_sub(1);
-                for (index, operand) in operands.into_iter().enumerate() {
-                    self.marked(index < last, |reader| reader.walk(operand, if index == 0 { input } else { None }));
-                }
-            }
             "if_statement" | "elif_clause" | "while_statement" => {
                 let mut cursor = node.walk();
                 let conditions: Vec<usize> = node.children_by_field_name("condition", &mut cursor).map(|condition| condition.id()).collect();
@@ -143,6 +135,9 @@ impl Reader<'_> {
                 for part in node.named_children(&mut cursor) {
                     let before = self.commands.len();
                     self.walk(part, feeding);
+                    if let Some(source) = feeding.filter(|source| !self.commands[before..].iter().any(|command| command.input == Some(*source))) {
+                        self.commands[source].redirected = true;
+                    }
                     if self.commands.len() > before {
                         feeding = Some(self.commands.len() - 1);
                     }
@@ -192,13 +187,14 @@ impl Reader<'_> {
             }
         }
         let argv = command.argv.clone();
+        let prints = matches!(command.program(), "echo" | "printf") && !command.redirected;
         self.commands.push(command);
         let script = self.nested(&argv, &ends, &words, false);
         // A command substitution in an argument runs commands of its own. A
         // `-c` script was read whole, its substitutions with it.
         for argument in &words[1..] {
             if script.is_none_or(|script| script.id() != argument.id()) {
-                self.substitutions(*argument);
+                self.substitutions(*argument, prints);
             }
         }
     }
@@ -261,16 +257,16 @@ impl Reader<'_> {
         true
     }
 
-    fn substitutions(&mut self, node: Node) {
+    fn substitutions(&mut self, node: Node, prints: bool) {
         if node.kind() == "command_substitution" || node.kind() == "process_substitution" {
             let folder = self.folder.clone();
-            self.marked(true, |reader| reader.children(node, None));
+            self.marked(!prints, |reader| reader.children(node, None));
             self.folder = folder;
             return;
         }
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            self.substitutions(child);
+            self.substitutions(child, prints);
         }
     }
 
@@ -564,9 +560,9 @@ mod tests {
         assert_eq!(redirected("rg x < a"), [pair("rg", true)]);
         assert_eq!(redirected(r#"rg x <<< "$y""#), [pair("rg", true)]);
         assert_eq!(redirected("n=$(grep -c x a)"), [pair("grep", true)]);
-        assert_eq!(redirected("grep -l x a || echo none"), [pair("grep", true), pair("echo", false)]);
+        assert_eq!(redirected("grep -l x a || echo none"), [pair("grep", false), pair("echo", false)]);
         assert_eq!(redirected("if grep -q x a; then cat a; fi"), [pair("grep", true), pair("cat", false)]);
-        assert_eq!(redirected("cd src && cat a"), [pair("cd", true), pair("cat", false)]);
+        assert_eq!(redirected("cd src && cat a"), [pair("cd", false), pair("cat", false)]);
         assert_eq!(redirected("cat a 2>/dev/null"), [pair("cat", false)]);
         assert_eq!(redirected("cat a >&2"), [pair("cat", false)]);
         assert_eq!(redirected("cat a | head"), [pair("cat", false), pair("head", false)]);
