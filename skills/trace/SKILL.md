@@ -26,11 +26,8 @@ Example: `trace list src/` replaces `ls src/`; `trace tree src/` replaces `tree 
 
 ### Do not read repository code with git
 Use the matching `trace` subcommand for the git forms trace already answers.
-Example: `trace read <path> --revision <rev>` replaces `git show <rev>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --revision <rev>` replaces `git grep <pattern> <rev>`; `trace blame <file>` replaces `git blame`; `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S`; `trace diff` replaces `git diff --name-status`.
-Every other git command passes, including `git status`, `git branch`, `git tag`, `git rev-parse`, `git reflog`, `git stash`, `git merge-base`, `git describe`, `git ls-files`, plain `git diff`, `git log -p`, and `git log -G`.
-
-### Bound a search before sorting it
-A search piped into `sort` or `uniq` holds its whole output in memory. Count with `rg -c`, cap with `rg --max-count <n>`, or put `head -<n>` before the sort.
+Example: `trace read <path> --revision <rev>` replaces `git show <rev>:<path>` and `git cat-file -p`; `trace grep <pattern>` replaces `git grep <pattern>`; `trace grep <pattern> --revision <rev>` replaces `git grep <pattern> <rev>`; `trace blame <file>` replaces `git blame`; `trace history` replaces `git log`, `trace history <file>` replaces `git log -- <file>`; `trace history <file> <symbol>` replaces `git log -L`; `trace history --contains <pattern>` replaces `git log -S` and `git log -G`; `trace history --commit <rev>` replaces `git show <rev>`; `trace diff` replaces `git diff`; `trace status` replaces `git status`.
+Every other git command passes, including `git branch`, `git tag`, `git rev-parse`, `git reflog`, `git stash`, `git merge-base`, `git describe`, and `git ls-files`.
 
 ### Find the newest artifact with `trace list --recent`
 `trace list` lists the filesystem, so gitignored artifact directories (test runs, logs, builds) list too. `--recent` orders newest-first by mtime, `--limit N` caps the rows, and `entries=N` always carries the full count.
@@ -121,7 +118,7 @@ Never: `git show` for a commit message.
 ## 5. Read with trace
 
 ### Use `trace read` instead of raw reads
-`trace read` strips Fluff and keeps line numbers. Read whole files, several files, methods, line ranges, anchor ranges, or a file at a git revision.
+`trace read` prints the file as written, with line numbers, its facts, and its declarations. A license header prints as one line naming the `--lines` that show it. Read whole files, several files, methods, line ranges, anchor ranges, or a file at a git revision.
 
 Template:
   ```bash

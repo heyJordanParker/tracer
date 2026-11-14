@@ -33,7 +33,7 @@ Template:
   trace pattern <pattern> -t <type> [paths...]
   trace logs [<pattern>] [--path <p>] [--file <glob>] [--since <when>] [--until <when>] [--around N] [--limit N]
   trace find <pattern> [bases...] [--path <p>] [--exclude <p>]... [--type f|d] [--limit N] [--sort complexity|recent|path]
-  trace read <paths...> [--method <name>] [--revision <rev>] [--lines L1:L2] [--between START END] [--diff] [--raw] [--docs]
+  trace read <paths...> [--method <name>] [--revision <rev>] [--lines L1:L2] [--between START END] [--diff] [--docs]
   trace docs <paths...> [--directory] [--skip <path>]... [--source <s>]
   trace docs <path> --graph
   trace docs status [<path>]
@@ -154,11 +154,11 @@ One line is one entry. A line carrying no timestamp attaches to the entry above 
 ### Project docs follow the answer in a session
 In a session, `read` and every other command that takes paths print the ancestor docs after the answer, once per context. Outside a session, pass `--docs` to load them; `--json` carries them only with `--docs`.
 
-### `--raw` skips cleaning
-Default reads strip generated banners, decorative separators, runs of blank lines, and prefix preserved lines with `L<n>:`.
+### A read prints every line as written
+Every line carries `L<n>:`, separators and blank lines included. A whole file's leading license header or generated-file notice prints as one line, such as `L1-L14: license header (trace read src/Engine.java --lines 1:14)`, and any window over those lines prints them.
 
 ### Several files share one budget
-Each file of a multi-file read gets an even share of the 30,000 characters, and a read cut at its share ends with its own trim marker. The marker sits inside the content stream and survives `--raw`. `--json` carries `truncated`, `shown_lines` as `[first, last]`, and `total_lines` on every read.
+Each file of a multi-file read gets an even share of the 30,000 characters, and a read cut at its share ends with its own trim marker. The marker sits inside the content stream. `--json` carries `truncated`, `shown_lines` as `[first, last]`, and `total_lines` on every read.
 
 ### `--revision` reads a file at a commit, branch, or tag
 Use `--diff` with `--revision` to append a symbol-level diff of added, removed, and changed top-level exports.

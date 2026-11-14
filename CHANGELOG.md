@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0
+
+- With "Claude reads files only through tracer" on, Claude reads every file through tracer. A raw read, search, or listing of a file or folder is refused whatever its flags, so `grep -m 20`, `head -c 600`, `tail -5`, `awk`, a `sed` script, `find -mtime`, `git log`, `git diff`, `git status`, and a reader piped into `head` or `wc` no longer get past it. The refusal names the nearest `trace` command and what it leaves out: `Left out: -m 30, | head -5`. In the last week's sessions, 1,102 of 1,231 raw reads got past the old rule, which refused a command only when a `trace` command gave the exact same answer.
+- A command whose output Claude never reads still runs: one whose output goes to a file, a variable, an `if`, or a program that is not a text filter, such as `curl`, `jq`, or `git apply`. So does one no `trace` command answers: `tail -f`, `sed -i`, `find -exec`, a binary file, and `git diff --no-index`.
+- `trace read` has one mode: the file as written, every line numbered, separators and blank lines included. A whole file's leading license header or generated-file notice prints as one line naming the window that shows it, `L1-L14: license header (trace read src/Engine.java --lines 1:14)`. `--raw` is gone, and so is the `--json` query's `raw` key. Agents passed `--raw` on 23% of reads, learned from tracer's own refusals, its help, and its trim markers, because the default read dropped lines without saying so.
+- A new session no longer shows tracer error toasts while cmod is still installing, such as `Could not read the tasks it listens under: cmod is installing` and `Changes nothing in session …`. The mod runs on `@cmodjs/core` 6.1.0, so a refusal from an installing cmod counts as a wait, a call nothing answered goes to the Log as a warning, and every toast uses cmod's aligned layout.
+- The mod needs cmod 6.1.0 or newer.
+
 ## 0.8.3
 
 - A Claude.md reaches Claude through `trace` without the HTML comments Claude Code removes, so a note written for people costs Claude no context. As in Claude Code, a comment on its own lines goes with the blank lines after it, and a comment inside a paragraph or a list item stays.

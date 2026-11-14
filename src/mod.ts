@@ -4,7 +4,7 @@ import { option } from '../node_modules/@cmodjs/core/options.js'
 const options = {
   tracerOnly: option.toggle({
     title: 'Claude reads files only through tracer',
-    description: "Claude can't read, search, or list files with grep, cat, ls, find, or git blame when tracer gives the same answer. It uses tracer instead, so every read comes with what tracer knows about the file.",
+    description: "Claude can't read, search, or list files with grep, cat, ls, find, or git, whatever their flags. It uses tracer instead, so every read comes with what tracer knows about the file.",
     default: false,
   }),
 }
