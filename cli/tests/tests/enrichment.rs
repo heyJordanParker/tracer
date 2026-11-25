@@ -4352,6 +4352,7 @@ fn structure_shows_whole_facts_again_for_a_file_the_budget_cut_to_its_path() {
         f.write(&format!("beta_{n:03}.py"), "from alpha import first\n\n\ndef third():\n    return first()\n");
     }
     f.commit("many files");
+    f.trace(&["cache", "build", "."]).ok();
     let sid = fresh_session_id("structure-cut");
     let env = [("AGENT_SESSION_ID", sid.as_str())];
 
@@ -4680,6 +4681,7 @@ fn a_call_whose_other_call_sites_overrun_the_budget_is_still_named() {
         "<?php\nclass Split {\n    public function pay(Ledger $ledger, int $cents): int\n    {\n        $ledger->record($cents);\n        return $ledger->record($cents);\n    }\n}\n",
     );
     f.commit("many callers");
+    f.trace(&["cache", "build", "."]).ok();
     let session = [("AGENT_SESSION_ID", "calls-overrun")];
 
     let read = f.trace_env(&["read", "checkout.php", "--lines", "6:6"], &session);
@@ -4717,6 +4719,7 @@ fn a_window_whose_call_heads_overrun_their_share_still_prints_code_within_the_bu
     let f = Fixture::new();
     book_calling_ledger(&f, 1000);
     f.commit("a thousand calls");
+    f.trace(&["cache", "build", "."]).ok();
 
     let read = f.trace(&["read", "book.php", "--lines", "6:1005"]);
     read.ok();
@@ -4735,6 +4738,58 @@ fn a_window_whose_call_heads_overrun_their_share_still_prints_code_within_the_bu
     let size = context.stdout.chars().count();
     assert!(size <= 30_000, "context spent {size} characters of the 30,000 budget");
     assert!(context.stdout.contains("  ledger.php  {calls: 1000}"), "the calls fold to one line per file");
+}
+
+#[test]
+fn a_window_read_while_the_index_builds_fits_its_notice_within_the_budget() {
+    let f = Fixture::new();
+    book_calling_ledger(&f, 1000);
+    f.commit("a thousand calls");
+    let _building = tracer_cli_tests::hold_index_lock(&f.root, "relations_edges");
+
+    for args in [
+        &["read", "book.php", "--lines", "6:1005"][..],
+        &["context", "book.php", "--offset", "6", "--limit", "1000", "--no-record"][..],
+    ] {
+        let run = f.trace(args);
+        run.ok();
+        assert!(run.stdout.contains("index: still building"), "the index was ready: {}", run.stdout);
+        let size = run.stdout.encode_utf16().count();
+        let tail: Vec<&str> = run.stdout.lines().rev().take(3).collect();
+        assert!(size <= 30_000, "{} spent {size} characters of the 30,000 budget, ending {tail:?}", args[0]);
+    }
+}
+
+#[test]
+fn a_window_read_of_another_repository_while_its_index_builds_fits_its_notice_within_the_budget() {
+    let f = Fixture::new();
+    book_calling_ledger(&f, 1000);
+    f.commit("a thousand calls");
+    let _building = tracer_cli_tests::hold_index_lock(&f.root, "relations_edges");
+
+    let run = f.trace_in(&f.tmp, ["read", &f.path("book.php"), "--lines", "6:1005"], &[]);
+    run.ok();
+    assert!(run.stdout.contains("index: still building"), "the index was ready: {}", run.stdout);
+    let size = run.stdout.encode_utf16().count();
+    let tail: Vec<&str> = run.stdout.lines().rev().take(3).collect();
+    assert!(size <= 30_000, "read spent {size} characters of the 30,000 budget, ending {tail:?}");
+}
+
+#[test]
+fn a_read_that_leaves_out_two_repositories_fits_both_notices_within_the_budget() {
+    let (f, g) = (Fixture::new(), Fixture::new());
+    for fixture in [&f, &g] {
+        book_calling_ledger(fixture, 1000);
+        fixture.commit("a thousand calls");
+    }
+    let _building = [&f, &g].map(|fixture| tracer_cli_tests::hold_index_lock(&fixture.root, "relations_edges"));
+
+    let run = f.trace(&["read", "book.php", &g.path("book.php"), "--lines", "6:1005"]);
+    run.ok();
+    assert_eq!(run.stdout.matches("index: still building").count(), 2, "{}", run.stdout);
+    let size = run.stdout.encode_utf16().count();
+    let tail: Vec<&str> = run.stdout.lines().rev().take(4).collect();
+    assert!(size <= 30_000, "read spent {size} characters of the 30,000 budget, ending {tail:?}");
 }
 
 #[test]

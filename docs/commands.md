@@ -95,7 +95,7 @@ A windowed read adds a `calls:` block: each function the window calls, with its 
 
 | Command | Answers |
 |---|---|
-| `trace doctor` | Checks `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`, and prints the install command for each one missing. |
+| `trace doctor` | Checks `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`, and prints the install command for each one missing. It lists `mago`, which reads `.sharp` files, as optional. |
 | `trace cache build [<path>]` | Builds the per-file facts, the relations index, and git activity ahead of the first query. |
 | `trace cache stats` | The cache's entries and size. |
 | `trace cache clear [--all]` | Empties the per-file cache, or with `--all` the whole `.tracer-cache/`. |

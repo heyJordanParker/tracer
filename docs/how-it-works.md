@@ -1,12 +1,12 @@
 # How it works
 
-`trace` is one Rust binary. It parses code with tree-sitter grammars compiled into it, and runs `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` for what they do best. Everything it learns about a repository lives in `.tracer-cache/` at the repository's root, which writes its own `.gitignore`.
+`trace` is one Rust binary. It parses code with tree-sitter grammars compiled into it, and runs `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` for what they do best, and `mago` for `.sharp` files. Everything it learns about a repository lives in `.tracer-cache/` at the repository's root, which writes its own `.gitignore`.
 
 ## Declarations
 
-Each file's declarations come from a tree-sitter extractor for C, Go, Java, PHP, Python, Ruby, Rust, and TypeScript, TSX, and JSX, plus Bash and Lua for complexity. A declaration's row is its own source text, attributes, modifiers, name, parameters, return type, and heritage, with every body elided as `{ … }`. A language with no extractor falls back to `universal-ctags`.
+Each file's declarations come from a tree-sitter extractor for C, Go, Java, PHP, Python, Ruby, Rust, and TypeScript, TSX, and JSX, plus Bash and Lua for complexity. A declaration's row is its own source text, attributes, modifiers, name, parameters, return type, and heritage, with every body elided as `{ … }`. A PHP# `.sharp` file's declarations, imports, call sites, and per-function complexity come from `mago outline`, the Language Server Protocol's document-symbol tree, from the project's `vendor/bin/mago`, else the `mago` on `PATH`, which also takes over when the project's has no `outline` or can't run on this machine. One `mago` start reads up to 512 working-tree files from disk, and a file at a revision goes to `mago` on its stdin. tracer asks each `mago` build once whether it has `outline`, and a `.sharp` file has no declarations under one without it. A language with no extractor falls back to `universal-ctags`.
 
-Cyclomatic complexity is counted per function by walking its tree for decision points: `if`, each loop, each `case` and `catch`, `&&`, `||`, `??`, ternaries, and comprehension clauses. `scc` counts the repository's lines and languages once, into a snapshot that a later call recounts only for the files that changed, and `trace stats` reads it.
+Cyclomatic complexity is counted per function by walking its tree for decision points: `if`, each loop, each `case` and `catch`, `&&`, `||`, `??`, ternaries, and comprehension clauses. A `.sharp` file takes the complexity `mago outline` counts. `scc` counts the repository's lines and languages once, into a snapshot that a later call recounts only for the files that changed, and `trace stats` reads it.
 
 ## The cache
 
@@ -37,7 +37,7 @@ Every `trace` call, a background build included, stops once it has spent 10 minu
 
 ## Resolving a symbol
 
-`trace callers` resolves each call site when you ask, from the files the relations index says mention the name. It reads imports the way the language does: PHP's PSR-4 from `composer.json`, TypeScript's `paths` and `baseUrl` from `tsconfig.json`, and Rust's crates, modules, `use` items, and re-exports from `Cargo.toml` and the code. Each site carries a confidence:
+`trace callers` resolves each call site when you ask, from the files the relations index says mention the name. It reads imports the way the language does: PHP's PSR-4 from `composer.json`, TypeScript's `paths` and `baseUrl` from `tsconfig.json`, and Rust's crates, modules, `use` items, and re-exports from `Cargo.toml` and the code. A call resolves only to a declaration in its own language, except that PHP and PHP# resolve with each other: a PHP# class is the engine class PHP calls, so `import Paging.Store;` and `use Paging\Store;` both reach `Store.sharp` or `Store.php` through PSR-4, and a class inherits methods from a parent in the other language. A call chain such as PHP's `Client::make()->post()->json()` or PHP#'s `Client.make().post().json()` follows the class each method states it returns, read from a PHP method's return type and from the `returnType` `mago outline` gives a PHP# method. A PHP# call names the call it is made on through the outline's `receiverCall`. Each site carries a confidence:
 
 - `EXTRACTED`: the code names the declaration, through an import or in the same file.
 - `INFERRED`: the name and shape match, and nothing proves another target.

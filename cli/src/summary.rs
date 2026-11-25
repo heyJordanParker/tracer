@@ -329,7 +329,7 @@ mod tests {
             mtime_ns: 0,
             size_bytes: 0,
             extraction_failure: None,
-            ctags: None,
+            reader: None,
             leading_comment: None,
         }
     }

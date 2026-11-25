@@ -77,10 +77,7 @@ pub fn run(event: &str, harness: Harness, deadline_ms: u64, tracer_only: bool) -
         tracer_only,
     };
     let mut delivery = crate::session::Delivery::default();
-    // The notice of an index part left out follows the answer, so its room
-    // is kept from the start.
-    let notice = crate::cache::worktree_root_for(&input.cwd).map_or(0, |root| crate::relations::notice(&root).len());
-    let mut answer = crate::output::within(Some(BUDGET - notice), || events::answer(&input, &mut delivery))?;
+    let mut answer = crate::output::within(Some(BUDGET), || events::answer(&input, &mut delivery))?;
     let notice = crate::output::index_state(&mut delivery);
     if !notice.is_empty() {
         answer.context = format!("{}\n{notice}", answer.context.trim_end_matches('\n'));

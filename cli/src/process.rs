@@ -377,17 +377,24 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
     child.wait_with_output()
 }
 
-/// `output`, ended at `limit`: `None` when the child ran out of time and was
-/// killed. A thread waits on the child while this one waits on the thread,
-/// so a child that finishes in time costs no extra latency.
-pub fn output_within(command: &mut Command, limit: Duration) -> io::Result<Option<Output>> {
+/// `output` with `input` on the child's stdin, ended at `limit`: `None` when
+/// the child ran out of time and was killed. A thread writes `input` and
+/// another waits on the child while this one waits on the thread, so a child
+/// that finishes in time costs no extra latency, and one that writes its
+/// output before it reads all of `input` never blocks on a full pipe.
+pub fn output_within(command: &mut Command, input: &[u8], limit: Duration) -> io::Result<Option<Output>> {
     command
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut running = spawn(command)?;
-    let child = running.0.take().expect("child present until waited");
+    let mut child = running.0.take().expect("child present until waited");
     let pid = child.id();
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let input = input.to_vec();
+    std::thread::spawn(move || {
+        let _ = io::Write::write_all(&mut stdin, &input);
+    });
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(child.wait_with_output());

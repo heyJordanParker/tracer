@@ -4,7 +4,7 @@
 use crate::extraction::{self, RefShape};
 use crate::file_facts::{self, FileFacts};
 use crate::relations::modules::ModulePaths;
-use crate::relations::{same_name, shape_matches, Candidate, Relations};
+use crate::relations::{resolves_as, same_name, shape_matches, Candidate, Relations};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -89,7 +89,7 @@ fn declared_return(
     let php = Some("php");
     let mut returned = facts
         .iter()
-        .filter(|(_, f)| f.language.as_deref() == php)
+        .filter(|(_, f)| resolves_as(f.language.as_deref()) == php)
         .filter_map(|(path, f)| f.extraction.as_ref().map(|extracted| (path, extracted)))
         .flat_map(|(path, extracted)| {
             extracted
@@ -101,15 +101,19 @@ fn declared_return(
                         && declaration.container.as_deref().is_some_and(|container| same_name(php, container, class))
                 })
                 .map(move |declaration| {
-                    extraction::php::returned_class(declaration).filter(|named| {
-                        !extracted.imports.iter().any(|import| {
-                            relations
-                                .resolve_import(path, import, php, modules, &extracted.imports)
-                                .invalid_bindings
-                                .iter()
-                                .any(|binding| same_name(php, binding, named))
-                        })
-                    })
+                    let written = declaration.returned_class.as_deref()?;
+                    let (named, qualified) = match written.rsplit_once('\\') {
+                        Some((module, named)) => (named, Some(stated_import(module, named, declaration.line))),
+                        None => (written, None),
+                    };
+                    let outside = qualified.iter().chain(&extracted.imports).any(|import| {
+                        relations
+                            .resolve_import(path, import, php, modules, &extracted.imports)
+                            .invalid_bindings
+                            .iter()
+                            .any(|binding| same_name(php, binding, named))
+                    });
+                    (!outside).then(|| named.to_string())
                 })
         });
     let first = returned.next()??;
@@ -118,15 +122,30 @@ fn declared_return(
         .then_some(first)
 }
 
+/// The `use module\named;` a return type stated by its full name stands for,
+/// so the type reaches outside the repository exactly when that `use` would.
+fn stated_import(module: &str, named: &str, line: i64) -> extraction::Import {
+    extraction::Import {
+        module: module.to_string(),
+        symbol: Some(named.to_string()),
+        locals: Vec::new(),
+        line,
+        end_line: line,
+        block: None,
+        visibility: None,
+    }
+}
+
 /// The PHP types the index's files declare, each with what it inherits from,
 /// read from each file's [`Built`], so walking a lineage reads no file.
 pub(super) struct Ancestry<'r> {
     relations: &'r Relations,
+    modules: &'r ModulePaths<'r>,
     declared: HashMap<String, Vec<(&'r str, &'r [(String, bool)])>>,
 }
 
 impl<'r> Ancestry<'r> {
-    pub(super) fn new(relations: &'r Relations) -> Self {
+    pub(super) fn new(relations: &'r Relations, modules: &'r ModulePaths<'r>) -> Self {
         let mut declared: HashMap<String, Vec<(&'r str, &'r [(String, bool)])>> = HashMap::new();
         for (file, built) in &relations.built_from {
             for (name, supertypes) in &built.inherits {
@@ -136,7 +155,7 @@ impl<'r> Ancestry<'r> {
                     .push((&**file, supertypes.as_slice()));
             }
         }
-        Ancestry { relations, declared }
+        Ancestry { relations, modules, declared }
     }
 
     /// The files that declare the type `file` names `supertype`: the ones it
@@ -177,13 +196,55 @@ impl<'r> Ancestry<'r> {
         written
     }
 
-    /// The files that declare the class a reference in `file` names `class`,
-    /// read through the `use` items of the file.
-    pub(super) fn named_in(&self, file: &str, class: &str, imports: &[extraction::Import]) -> Vec<&'r str> {
-        let bound = imports
+    /// The files that declare the class a reference at `line` of `file`
+    /// names `class`. An unqualified name is read through the `use` items of
+    /// the file. A qualified name is its full name, written after a leading
+    /// `\` or after the path of the `use` that binds its first segment, read
+    /// the way a `use` of that full name resolves, else every declaration of
+    /// its last segment.
+    pub(super) fn named_in(&self, file: &str, class: &str, line: i64, imports: &[extraction::Import]) -> Vec<&'r str> {
+        let binds =
+            |import: &extraction::Import, name: &str| import.binding().is_some_and(|binding| binding.eq_ignore_ascii_case(name));
+        let Some((first, rest)) = class.split_once('\\') else {
+            return self.declaring(file, class, imports.iter().any(|import| binds(import, class)));
+        };
+        let full = match first {
+            "" => Some(rest.to_string()),
+            _ => imports.iter().find(|import| binds(import, first)).map(|import| match &import.symbol {
+                Some(symbol) => format!("{}\\{symbol}\\{rest}", import.module),
+                None => format!("{}\\{rest}", import.module),
+            }),
+        };
+        let reached = match full.as_deref().and_then(|full| full.rsplit_once('\\')) {
+            Some((module, named)) => {
+                let import = stated_import(module, named, line);
+                self.relations.resolve_import(file, &import, Some("php"), self.modules, imports).targets
+            }
+            None => Vec::new(),
+        };
+        let declaring: Vec<&'r str> = self.relations.defined_in(class.rsplit('\\').next().unwrap_or(class)).collect();
+        let named: Vec<&'r str> =
+            declaring.iter().copied().filter(|declared| reached.iter().any(|(target, _, _)| target == declared)).collect();
+        if named.is_empty() { declaring } else { named }
+    }
+
+    pub(super) fn without_namesakes<'c>(
+        &self,
+        file: &str,
+        class: &str,
+        line: i64,
+        imports: &[extraction::Import],
+        candidates: &[&'c Candidate],
+    ) -> Vec<&'c Candidate> {
+        let named = self.named_in(file, class, line, imports);
+        candidates
             .iter()
-            .any(|import| import.binding().is_some_and(|binding| binding.eq_ignore_ascii_case(class)));
-        self.declaring(file, class, bound)
+            .copied()
+            .filter(|candidate| {
+                named.contains(&candidate.file.as_str())
+                    || !shape_matches(candidate, Some("php"), RefShape::Static, Some(class))
+            })
+            .collect()
     }
 
     /// Every type the declarations of `class` in `files` inherit from,
@@ -224,7 +285,8 @@ impl<'r> Ancestry<'r> {
         {
             return None;
         }
-        self.ancestors(class, &self.named_in(file, class, imports))
+        let named = self.named_in(file, class, reference.line, imports);
+        self.ancestors(class.rsplit('\\').next().unwrap_or(class), &named)
             .into_iter()
             .find_map(|(ancestor, declaring)| {
                 let reached: Vec<&'c Candidate> = candidates

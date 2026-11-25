@@ -56,7 +56,7 @@ fn session_start(input: &Input, delivery: &mut Delivery) -> String {
         false => String::new(),
     };
     let primer = crate::cache::worktree_root_for(&input.cwd)
-        .map(|root| crate::primer::delivered(&root, room.saturating_sub(folder.len()), delivery))
+        .map(|root| crate::output::within(Some(room.saturating_sub(folder.len())), || crate::primer::delivered(&root, delivery)))
         .unwrap_or_default();
     [primer, folder].iter().filter(|part| !part.trim().is_empty()).map(|part| part.trim_matches('\n')).collect::<Vec<_>>().join(SEPARATOR)
 }

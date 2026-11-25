@@ -273,6 +273,7 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                             self_type: None,
                             module_file: None,
                             supertypes: Vec::new(),
+                            returned_class: None,
                             visibility: Visibility::Unknown,
                         });
                     }

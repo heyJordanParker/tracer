@@ -161,18 +161,19 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// The primer a session starts with, as extra context in `room`: offered as
+/// The primer a session starts with, as extra context in its budget: offered as
 /// the repository's `Primer`, one line per section keyed by its heading, so
 /// a resumed session that holds it gets nothing and a repository that
 /// changed since gets only the sections that changed. Sections that don't
 /// fit are left out from the last, and stay unshown. Every part builds until
 /// the hook's deadline leaves only room to print, and a part not ready by
 /// then is left out, the footer when its scc count is not.
-pub fn delivered(repo_root: &Path, room: usize, delivery: &mut crate::session::Delivery) -> String {
+pub fn delivered(repo_root: &Path, delivery: &mut crate::session::Delivery) -> String {
     use crate::session::{Kind, Offer};
     let key = repo_root.to_string_lossy();
     let limit = crate::process::warm_limit();
     let (sections, counted) = sections(repo_root, || relations::within(repo_root, limit), Some(limit));
+    let room = crate::output::budget().unwrap_or(usize::MAX);
     let sections: Vec<(String, String)> = sections
         .into_iter()
         .filter(|section| !section.trim().is_empty())

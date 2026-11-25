@@ -13,6 +13,7 @@ pub mod php;
 pub mod python;
 pub mod ruby;
 pub mod rust;
+pub mod sharp;
 pub mod typescript;
 
 use serde::{Deserialize, Serialize};
@@ -156,7 +157,10 @@ pub fn innermost(spans: impl IntoIterator<Item = (i64, i64)>, line: i64) -> Opti
 /// `mod` item's `#[path]` value. `supertypes` are the types a PHP class,
 /// interface, trait, or enum names after `extends` and `implements` and in
 /// its body's trait `use`, each by its last segment, nearest first: its
-/// traits, then its parent, then its interfaces.
+/// traits, then its parent, then its interfaces. `returned_class` is the
+/// class a PHP or PHP# function states it returns, which a member call on its
+/// result resolves against: its last segment, or its full name in PHP's form,
+/// `App\Http\Response`, when the extractor reads it qualified.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Declaration {
     pub name: String,
@@ -175,6 +179,8 @@ pub struct Declaration {
     pub module_file: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supertypes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned_class: Option<String>,
     #[serde(default)]
     pub visibility: Visibility,
 }
@@ -484,33 +490,68 @@ impl ExtractionResult {
 
 #[derive(Default, Deserialize, Serialize)]
 struct CtagsMap {
-    binary: Option<CtagsBinary>,
+    binary: Option<Reader>,
     extensions: HashMap<String, String>,
     /// Why `ctags --list-maps` failed, stored for this build of `ctags`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
 }
 
-/// One build of `ctags`: the file on `PATH`, its size, and when it changed.
+/// One build of the program that reads a file no tree-sitter grammar
+/// parses, `ctags` or `mago`: its file, its size, and when it changed.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct CtagsBinary {
+pub struct Reader {
     path: String,
     size: u64,
     modified_nanos: u128,
 }
 
-/// The `ctags` build a file's declarations come from: the one on `PATH`,
-/// `None` when there is none, for a file whose extension no tree-sitter
-/// extractor reads, and `None` for every other file.
-pub fn ctags_build(path: &str) -> Option<CtagsBinary> {
-    reads_through_ctags(path).then(|| ctags_binary().cloned()).flatten()
+impl Reader {
+    /// The build at `path`, its links followed, or `None` when no file is
+    /// there.
+    fn at(path: &Path) -> Option<Reader> {
+        let path = path.canonicalize().ok().filter(|path| path.is_file())?;
+        let metadata = fs::metadata(&path).ok()?;
+        let modified_nanos = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+        Some(Reader {
+            path: path.to_string_lossy().into_owned(),
+            size: metadata.len(),
+            modified_nanos,
+        })
+    }
+
+    /// The first build named `name` on `PATH`.
+    fn on_path(name: &str) -> Option<Reader> {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths).find_map(|directory| Reader::at(&directory.join(name)))
+    }
+
+    /// The build's file, its links followed.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
 }
 
-/// Whether facts extracted under `stored`, the `ctags_build` of their time,
-/// still hold: a file `ctags` reads holds only while that build is on
-/// `PATH`, so installing or replacing `ctags` extracts it again.
-pub fn ctags_build_holds(path: &str, stored: Option<&CtagsBinary>) -> bool {
-    !reads_through_ctags(path) || stored == ctags_binary()
+/// The reader build that gives `path`'s declarations: `mago` for a `.sharp`
+/// file, the `ctags` on `PATH` for any other file no tree-sitter extractor
+/// reads, `None` when that program is missing, and `None` for every other
+/// file.
+pub fn reader(path: &Path) -> Option<Reader> {
+    let path_text = path.to_string_lossy();
+    if sharp::reads(&path_text) {
+        sharp::mago(path)
+    } else if reads_through_ctags(&path_text) {
+        ctags_binary().cloned()
+    } else {
+        None
+    }
+}
+
+/// Whether facts extracted under `stored`, the `reader` of their time,
+/// still hold: they hold only while that build still reads `path`, so
+/// installing or replacing `ctags` or `mago` extracts the file again.
+pub fn reader_holds(path: &Path, stored: Option<&Reader>) -> bool {
+    reader(path).as_ref() == stored
 }
 
 fn reads_through_ctags(path: &str) -> bool {
@@ -520,20 +561,26 @@ fn reads_through_ctags(path: &str) -> bool {
         .is_some_and(|extension| !supported_extensions().contains(&extension.to_lowercase().as_str()))
 }
 
-/// Extensions with a tree-sitter extractor (lowercase, no leading dot).
+/// Extensions tracer reads as code with an extractor of its own: a
+/// tree-sitter grammar, or `mago outline` for `.sharp` (lowercase, no
+/// leading dot).
 pub fn supported_extensions() -> &'static [&'static str] {
     &[
-        "py", "ts", "tsx", "js", "jsx", "php", "rs", "go", "rb", "java", "c", "h",
+        "py", "ts", "tsx", "js", "jsx", "php", "rs", "go", "rb", "java", "c", "h", sharp::EXTENSION,
     ]
 }
 
+/// Whether a file's declarations can be read now: a `.sharp` file while
+/// `mago` is installed, a language with a tree-sitter extractor, or one the
+/// `ctags` on `PATH` maps.
 pub fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            let extension = extension.to_lowercase();
-            supported_extensions().contains(&extension.as_str())
-                || ctags_languages(path).contains_key(&extension)
+        .is_some_and(|extension| match extension.to_lowercase().as_str() {
+            sharp::EXTENSION => sharp::mago(path).is_some(),
+            extension => {
+                supported_extensions().contains(&extension) || ctags_languages(path).contains_key(extension)
+            }
         })
 }
 
@@ -541,39 +588,31 @@ pub fn is_supported(path: &Path) -> bool {
 pub enum Extraction {
     /// No extractor knows the file's language.
     Unsupported,
-    /// `ctags` exited with an error or ran past `CTAGS_LIMIT`. The failure is
-    /// already reported; it is stored with the file's facts, so the same
-    /// content is never retried and every later answer names it again.
+    /// The file's reader, `ctags` or `mago outline`, exited with an error,
+    /// ran past its time limit, or printed what it could not read. The
+    /// failure is already reported; it is stored with the file's facts, so
+    /// the same content is never retried and every later answer names it
+    /// again.
     Failed(Failure),
     Extracted(ExtractionResult),
 }
 
-/// Why `ctags` gave a file no declarations. Stored with the file's
-/// `ctags_build`, it holds only while that build is the one on `PATH`.
+/// Why a file's reader gave it no declarations. Stored with the file's
+/// `reader`, it holds only while that build reads the file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Failure {
     pub reason: String,
 }
 
-impl Extraction {
-    /// The declarations, when there are any to read.
-    pub fn extracted(self) -> Option<ExtractionResult> {
-        match self {
-            Extraction::Extracted(result) => Some(result),
-            Extraction::Unsupported | Extraction::Failed(_) => None,
-        }
-    }
-}
-
 /// Dispatch to the per-language extractor: a language with a tree-sitter
 /// extractor is parsed by the grammar `ccn::lang_for_path` names, and any
-/// other goes to `ctags`.
+/// other goes to `extract_without_grammar`.
 pub fn extract(source: &[u8], path: &str) -> Extraction {
     let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_lowercase) else {
         return Extraction::Unsupported;
     };
-    if !supported_extensions().contains(&ext.as_str()) {
-        return ctags_extract(source, path, &ext);
+    if sharp::reads(path) || !supported_extensions().contains(&ext.as_str()) {
+        return extract_without_grammar(source, path).0;
     }
     let tree = crate::ccn::lang_for_path(path).and_then(|(_, language)| {
         let mut parser = tree_sitter::Parser::new();
@@ -582,6 +621,20 @@ pub fn extract(source: &[u8], path: &str) -> Extraction {
     });
     tree.and_then(|tree| extract_from_tree(&tree, source, path))
         .map_or(Extraction::Unsupported, Extraction::Extracted)
+}
+
+/// The declarations of a file no tree-sitter extractor reads, beside the
+/// per-function complexity its reader gives: `mago outline` reads a
+/// `.sharp` file and gives both, and `ctags` reads any other language it
+/// maps and gives no complexity.
+pub fn extract_without_grammar(source: &[u8], path: &str) -> (Extraction, Vec<crate::ccn::FunctionFact>) {
+    if sharp::reads(path) {
+        return sharp::extract(source, path);
+    }
+    match Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_lowercase) {
+        Some(ext) => (ctags_extract(source, path, &ext), Vec::new()),
+        None => (Extraction::Unsupported, Vec::new()),
+    }
 }
 
 /// The extraction of a file parsed once into `tree` by the grammar its
@@ -737,15 +790,17 @@ fn is_comment_line(line: &str) -> bool {
             || line.strip_prefix('#').is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t', '#'])))
 }
 
-/// Names a `ctags` failure, with the file it failed on when there is one.
-/// One line per run: a broken `ctags` fails every file in its languages, and
-/// the first names the cause.
-pub fn report_failure(path: Option<&str>, reason: &str) {
-    static REPORTED: std::sync::Once = std::sync::Once::new();
-    REPORTED.call_once(|| match path {
-        Some(path) => crate::process::report(&format!("ctags failed on {path}: {reason}")),
-        None => crate::process::report(&format!("ctags failed: {reason}")),
-    });
+/// Whether a `ctags` failure was named in this run.
+static CTAGS_REPORTED: std::sync::Once = std::sync::Once::new();
+
+/// Names the failure of the reader of `path`, `mago outline` for a `.sharp`
+/// file and `ctags` for any other. One line per reader per run: a broken
+/// reader fails every file it reads, and the first names the cause.
+pub fn report_failure(path: &str, reason: &str) {
+    match sharp::reads(path) {
+        true => sharp::report_failure(path, reason),
+        false => CTAGS_REPORTED.call_once(|| crate::process::report(&format!("ctags failed on {path}: {reason}"))),
+    }
 }
 
 /// How long one file's `ctags` run may take. Generous, so a machine busy
@@ -769,7 +824,7 @@ fn ctags_map(path: &Path) -> &'static CtagsMap {
     MAP.get_or_init(|| {
         let map = crate::cache::index(&CtagsIndex { binary: binary.clone() }, &root).ready().unwrap_or_default();
         if let Some(failure) = &map.failure {
-            report_failure(None, failure);
+            CTAGS_REPORTED.call_once(|| crate::process::report(&format!("ctags failed: {failure}")));
         }
         map
     })
@@ -780,7 +835,7 @@ fn ctags_languages(path: &Path) -> &'static HashMap<String, String> {
 }
 
 struct CtagsIndex {
-    binary: CtagsBinary,
+    binary: Reader,
 }
 
 impl crate::cache::Index for CtagsIndex {
@@ -810,25 +865,9 @@ impl crate::cache::Index for CtagsIndex {
 
 /// The `ctags` on `PATH`, or `None` when there is none: its languages are
 /// then unsupported, and `trace doctor` names the install command.
-fn ctags_binary() -> Option<&'static CtagsBinary> {
-    static BINARY: OnceLock<Option<CtagsBinary>> = OnceLock::new();
-    BINARY
-        .get_or_init(|| {
-            let path = std::env::var_os("PATH")
-                .into_iter()
-                .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-                .map(|directory| directory.join("ctags"))
-                .find(|candidate| candidate.is_file())
-                .and_then(|candidate| candidate.canonicalize().ok())?;
-            let metadata = fs::metadata(&path).ok()?;
-            let modified_nanos = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
-            Some(CtagsBinary {
-                path: path.to_string_lossy().into_owned(),
-                size: metadata.len(),
-                modified_nanos,
-            })
-        })
-        .as_ref()
+fn ctags_binary() -> Option<&'static Reader> {
+    static BINARY: OnceLock<Option<Reader>> = OnceLock::new();
+    BINARY.get_or_init(|| Reader::on_path("ctags")).as_ref()
 }
 
 /// Every extension `ctags` maps to a language, or why `ctags` couldn't
@@ -884,7 +923,7 @@ fn ctags_extract(source: &[u8], path: &str, extension: &str) -> Extraction {
     match tags {
         Ok(result) => Extraction::Extracted(result),
         Err(reason) => {
-            report_failure(Some(&crate::cache::relative_to_root(Path::new(path), &root)), &reason);
+            report_failure(&crate::cache::relative_to_root(Path::new(path), &root), &reason);
             Extraction::Failed(Failure { reason })
         }
     }
@@ -911,6 +950,7 @@ fn run_ctags(source: &[u8], extension: &str, language: &str, root: &Path) -> Res
                     "-",
                 ])
                 .arg(source_file.path()),
+            &[],
             CTAGS_LIMIT,
         )
     })
@@ -965,6 +1005,7 @@ fn ctags_declarations(source: &[u8], language: &str, tags: &str) -> Option<Extra
             self_type: None,
             module_file: None,
             supertypes: Vec::new(),
+            returned_class: None,
             visibility,
         });
     }

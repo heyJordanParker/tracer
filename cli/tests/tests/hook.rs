@@ -395,6 +395,21 @@ fn a_read_while_the_index_builds_leaves_its_relations_out_and_says_so_once() {
     assert!(built.contains("imported_by: 1") && !built.contains("index: still building"), "{built}");
 }
 
+#[test]
+fn a_read_of_another_repository_while_its_index_builds_fits_its_notice_within_the_answer() {
+    let f = shop();
+    let notes: String = (0..2000).map(|n| format!("Note {n:04} on how the shop counts its cents.\n")).collect();
+    f.write("Claude.md", &format!("# Shop\n\n{notes}"));
+    f.commit("long notes");
+    let _building = tracer_cli_tests::hold_index_lock(&f.root, "relations_edges");
+    let mut away = read(&f, "src/lib.rs");
+    away["cwd"] = f.tmp.to_string_lossy().into();
+    let context = f.hook("PostToolUse", "codex", &away, &[], &[]).context();
+    assert!(context.contains("Note 0000") && context.contains("index: still building"), "{context}");
+    let size = context.encode_utf16().count();
+    assert!(size <= 10_000, "the answer spent {size} characters of the 10,000 a hook shows whole");
+}
+
 /// A session that starts while the relations index can't be built in time
 /// still gets every primer section that needs no index, before its deadline.
 #[test]
@@ -551,6 +566,7 @@ fn a_native_grep_gets_its_matches_under_their_declarations_once() {
 #[test]
 fn a_native_glob_gets_each_files_facts_once() {
     let f = shop();
+    f.trace(&["cache", "build", "."]).ok();
     let glob = || {
         let files = json!([f.path("src/lib.rs"), f.path("src/shop.rs")]);
         f.hook("PostToolUse", "claude", &input(&f, json!({"tool_name": "Glob", "tool_input": {"pattern": "**/*.rs"}, "tool_response": {"filenames": files}})), &[], &[])
@@ -563,6 +579,7 @@ fn a_native_glob_gets_each_files_facts_once() {
 #[test]
 fn the_agents_own_edit_shows_only_the_facts_it_changed_and_the_callers_to_update() {
     let f = shop();
+    f.trace(&["cache", "build", "."]).ok();
     f.hook("PostToolUse", "claude", &read(&f, "src/lib.rs"), &[], &[]).ok();
     f.write("src/lib.rs", &LIB.replace("percent > 100", "percent >= 100"));
     let patch = json!([{"oldStart": 8, "oldLines": 3, "newStart": 8, "newLines": 3, "lines": [
@@ -591,6 +608,7 @@ fn another_agents_edit_shows_the_changed_rows_and_where_the_rest_moved() {
 #[test]
 fn a_codex_patch_is_the_agents_own_edit_and_brings_the_docs_its_file_reaches() {
     let f = shop();
+    f.trace(&["cache", "build", "."]).ok();
     let home = home_with_rules(&f, &[("rust.md", "---\npaths: [\"**/*.rs\"]\n---\n\nReturn early.\n")]);
     let env = [("HOME", home.as_str())];
     f.write("src/lib.rs", &LIB.replace("percent > 100", "percent >= 100"));

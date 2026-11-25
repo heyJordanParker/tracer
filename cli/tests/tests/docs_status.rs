@@ -838,6 +838,7 @@ fn empty_native_read_does_not_record_whole_file_coverage() {
 #[test]
 fn closed_stdout_does_not_record_human_or_json_delivery() {
     let f = coverage_repo();
+    f.trace(&["cache", "build", "."]).ok();
     let sid = fresh_session_id("native-read-closed-stdout");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 
@@ -877,6 +878,7 @@ fn closed_stdout_does_not_record_human_or_json_delivery() {
 #[test]
 fn closed_stdout_does_not_record_docs_delivery() {
     let f = docs_repo();
+    f.trace(&["cache", "build", "."]).ok();
     let sid = fresh_session_id("docs-closed-stdout");
     let env = [("CLAUDE_CODE_SESSION_ID", sid.as_str())];
 

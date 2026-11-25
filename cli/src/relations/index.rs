@@ -8,7 +8,7 @@ use crate::relations::manifests::{CargoManifests, Roots};
 use crate::relations::modules::{inline_module, tail, ModulePaths};
 use crate::relations::{
     confidence_code, confidence_name, normalized_path, Built, BuiltEntry, DeclaredType, DirectoryIndex,
-    DirectoryMetrics, Importer, Inherits, InlineModule, ModuleFile, ModuleRows, Relations, StoredBuilt,
+    resolves_as, DirectoryMetrics, Importer, Inherits, InlineModule, ModuleFile, ModuleRows, Relations, StoredBuilt,
     CONFIDENCE_AMBIGUOUS,
 };
 use serde::{Deserialize, Serialize};
@@ -226,7 +226,7 @@ impl Relations {
             Arc::clone(&path),
             Built {
                 key: key.to_string(),
-                language: facts.language.clone(),
+                language: resolves_as(facts.language.as_deref()).map(str::to_string),
                 annotations,
                 module_files: facts
                     .extraction

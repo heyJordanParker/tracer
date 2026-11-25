@@ -135,8 +135,13 @@ impl<'a> ModulePaths<'a> {
             for prefix in prefixes {
                 if let Some(rest) = module_path.strip_prefix(prefix.as_str()) {
                     let base = self.roots.php[prefix].as_str();
-                    let wanted = format!("{base}/{}.php", rest.replace('\\', "/"));
-                    return Some(self.files_named(&wanted, language));
+                    let wanted = format!("{base}/{}", rest.replace('\\', "/"));
+                    return Some(
+                        ["php", extraction::sharp::EXTENSION]
+                            .iter()
+                            .flat_map(|extension| self.files_named(&format!("{wanted}.{extension}"), language))
+                            .collect(),
+                    );
                 }
             }
             return Some(Vec::new());

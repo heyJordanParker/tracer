@@ -156,6 +156,8 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                     }
                     if seen.insert((name.to_string(), line)) {
                         ranges.push(n.byte_range());
+                        let header = php_header(n, source);
+                        let returned = (k == "function").then(|| returned_class(&header, decl_container.as_deref())).flatten();
                         out.push(Declaration {
                             name: name.to_string(),
                             kind: k.to_string(),
@@ -164,11 +166,12 @@ fn walk_declarations(root: Node, source: &[u8]) -> Vec<Declaration> {
                             end_line: php_end_line(n),
                             container: decl_container,
                             parent: None,
-                            header: php_header(n, source),
+                            header,
                             annotations: php_annotations(n, source),
                             self_type: None,
                             module_file: None,
                             supertypes: php_supertypes(n, source),
+                            returned_class: returned,
                             visibility: visibility(n, source),
                         });
                     }
@@ -473,7 +476,7 @@ fn walk_references(root: Node, source: &[u8]) -> Vec<Reference> {
                 // grammars — the class name is the scope.
                 if let Some(name_node) = n.child_by_field_name("name") {
                     if name_node.utf8_text(source).ok() == Some("class") {
-                        if let Some(name) = scope_class {
+                        if let Some(name) = scope_class.as_deref().map(short_name).map(str::to_string) {
                             out.push(Reference {
                                 name: name.clone(),
                                 line,
@@ -667,7 +670,7 @@ fn scope_class(call: Node, source: &[u8]) -> Option<String> {
     let scope = call.child_by_field_name("scope")?;
     match scope.utf8_text(source).ok()? {
         "self" | "static" => this_class(call, source),
-        _ => last_name_segment(scope, source),
+        written => Some(written.replace("\\\\", "\\")),
     }
 }
 
@@ -714,7 +717,7 @@ fn constructed_class(value: Node, source: &[u8], resolving: &[&str]) -> Option<S
         "member_call_expression" | "nullsafe_member_call_expression" => {
             result_of(member_receiver(value, source, resolving)?, value, source)
         }
-        "scoped_call_expression" => result_of(scope_class(value, source)?, value, source),
+        "scoped_call_expression" => result_of(short_name(&scope_class(value, source)?).to_string(), value, source),
         _ => None,
     }
 }
@@ -895,8 +898,11 @@ fn single_type(node: Node, source: &[u8]) -> Option<String> {
     }
 }
 
-pub fn returned_class(method: &Declaration) -> Option<String> {
-    let header = method.header.trim_end();
+/// The one class a method's `header` states it returns, by its last segment:
+/// `?T` and a union with one class as `T`, and `self` and `static` as its
+/// `container`.
+fn returned_class(header: &str, container: Option<&str>) -> Option<String> {
+    let header = header.trim_end();
     let signature = header
         .strip_suffix("{ … }")
         .or_else(|| header.strip_suffix(';'))
@@ -922,14 +928,16 @@ pub fn returned_class(method: &Declaration) -> Option<String> {
         return None;
     }
     match class.to_ascii_lowercase().as_str() {
-        "self" | "static" => method.container.clone(),
+        "self" | "static" => container.map(str::to_string),
         _ => class.rsplit('\\').next().map(str::to_string),
     }
 }
 
 fn last_name_segment(node: Node, source: &[u8]) -> Option<String> {
     let txt = node.utf8_text(source).ok()?;
-    let normalized = txt.replace("\\\\", "\\");
-    let seg = normalized.rsplit('\\').next().unwrap_or(&normalized);
-    Some(seg.to_string())
+    Some(short_name(&txt.replace("\\\\", "\\")).to_string())
+}
+
+fn short_name(written: &str) -> &str {
+    written.rsplit('\\').next().unwrap_or(written)
 }

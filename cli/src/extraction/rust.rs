@@ -469,6 +469,7 @@ fn walk_declarations(root: Node, source: &[u8], imports: &[Import]) -> Vec<Decla
                                 .then(|| path_attribute(&attributes, source))
                                 .flatten(),
                             supertypes: Vec::new(),
+                            returned_class: None,
                             visibility: if follows_holder(n) { Visibility::Unknown } else { declared(n, source) },
                         });
                     }

@@ -271,6 +271,7 @@ fn directory_baseline_is_shared_across_agents_and_survives_context_reset() {
     f.write("inside/main.py", "class Main:\n    pass\n");
     f.write("consumer.py", "from inside.main import Main\n");
     f.commit("initial directory graph");
+    f.trace(&["cache", "build", "."]).ok();
 
     let agent_a = [("AGENT_SESSION_ID", SESSION), ("TRACER_AGENT_ID", "a")];
     let agent_b = [("AGENT_SESSION_ID", SESSION), ("TRACER_AGENT_ID", "b")];
@@ -290,6 +291,7 @@ fn directory_baseline_is_shared_across_agents_and_survives_context_reset() {
         "inside/main.py",
         "from outside.one import one\nfrom outside.two import two\n\nclass Main:\n    def run(self):\n        return one() + two()\n",
     );
+    f.trace(&["cache", "build", "."]).ok();
     let second = f.trace_env(&["read", "inside/main.py"], &agent_b);
     second.ok();
     assert!(
@@ -321,6 +323,7 @@ fn missing_no_record_target_records_its_parent_directory_baseline() {
     let f = Fixture::new();
     f.write("inside/main.py", "def main():\n    return 0\n");
     f.commit("initial directory");
+    f.trace(&["cache", "build", "."]).ok();
     let env = [("AGENT_SESSION_ID", SESSION)];
 
     let missing = f.trace_env(&["context", "inside/new.py", "--no-record"], &env);

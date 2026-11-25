@@ -33,7 +33,7 @@ type FileContext = (String, Option<Map<String, Value>>, Vec<surface::Row>, Deliv
 /// The context `trace hook` adds to a native Read of `lines` of `p`, once
 /// per agent context, with the delivery that records the lines as `seen`.
 pub(crate) fn read_context(p: &Path, lines: Option<(usize, usize)>, seen: bool) -> Result<(String, Delivery)> {
-    let (text, _, _, shown) = file_mode(p, lines, seen, crate::output::budget(), true)?;
+    let (text, _, _, shown) = file_mode(p, lines, seen, true)?;
     Ok((text, shown))
 }
 
@@ -66,10 +66,9 @@ fn file_mode(
     p: &Path,
     lines: Option<(usize, usize)>,
     record: bool,
-    budget: Option<usize>,
     once: bool,
 ) -> Result<FileContext> {
-    crate::timing::phase("render", || file_mode_inner(p, lines, record, budget, once))
+    crate::timing::phase("render", || file_mode_inner(p, lines, record, once))
 }
 
 /// A file's context: its facts as YAML front matter — with the docs governing
@@ -81,7 +80,6 @@ fn file_mode_inner(
     p: &Path,
     lines: Option<(usize, usize)>,
     record: bool,
-    budget: Option<usize>,
     once: bool,
 ) -> Result<FileContext> {
     // The agent's Read tool just showed it these lines, so they are seen.
@@ -113,6 +111,7 @@ fn file_mode_inner(
             .map(rows_for)
             .unwrap_or_default();
         let file = p.to_string_lossy();
+        let budget = crate::output::budget();
         let text = match once {
             true => surface::delivered(&rows, &file, window, budget, p, &mut shown, held),
             false => surface::render_within(&rows, &file, window, budget, held),
@@ -147,6 +146,7 @@ fn file_mode_inner(
     }
     // The rows fit in what the front matter leaves, each still named.
     let mut out = summary::front_matter_once(None, p, shown_facts.as_ref(), &map, &mut shown, once);
+    let budget = crate::output::budget();
     let rows_budget = budget.map(|budget| budget.saturating_sub(out.len()));
     out.push_str(&match once {
         true => surface::delivered(&rows, &relative, window, rows_budget, p, &mut shown, held),
@@ -340,8 +340,8 @@ pub fn run(
                     let (content, facts) = directory_context(&p);
                     (content, None, facts, Vec::new())
                 } else {
-                    let budget = crate::output::budget().map(|budget| budget / paths.len());
-                    match file_mode(&p, read_range(offset, limit), record, budget, !json) {
+                    let share = crate::output::budget().map(|budget| budget / paths.len());
+                    match crate::output::within(share, || file_mode(&p, read_range(offset, limit), record, !json)) {
                         Ok((content, facts, surface_rows, delivery)) => {
                             shown = delivery;
                             let error = content

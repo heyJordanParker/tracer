@@ -114,7 +114,8 @@ pub struct Relations {
 }
 
 /// What the index knows about a file without opening it: the content key its
-/// rows were absorbed from, and its language. The language is stored because
+/// rows were absorbed from, and the language it resolves as, through
+/// [`resolves_as`]. The language is stored because
 /// every module path is spelled from it, and reading it back out of 3,030
 /// per-file entries cost 0.12s on laravel-framework — on `callers`, `usages`,
 /// `dependencies`, and the primer alike. `module_files` are the `mod` items
@@ -404,7 +405,6 @@ fn shape_matches(
     shape: RefShape,
     receiver: Option<&str>,
 ) -> bool {
-    // Same-language only — the rule that removes every cross-language edge.
     if candidate.language.as_deref() != referrer_language {
         return false;
     }
@@ -462,6 +462,17 @@ fn constructs_by_call(language: Option<&str>) -> bool {
 
 fn types_member_receiver(language: Option<&str>) -> bool {
     matches!(language, Some("php") | Some("rust"))
+}
+
+/// The language a file of `language` resolves as: the files it resolves
+/// with, and the rules it resolves by. A PHP# class is the engine class PHP
+/// calls, so a `.sharp` file resolves as PHP, and every other language as
+/// itself. Every language the relations compare passes through here first.
+fn resolves_as(language: Option<&str>) -> Option<&str> {
+    match language {
+        Some(extraction::sharp::EXTENSION) => Some("php"),
+        other => other,
+    }
 }
 
 static MEMO: memo::Memo<Relations> = OnceLock::new();

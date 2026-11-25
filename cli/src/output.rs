@@ -79,18 +79,20 @@ pub fn trace_command() -> String {
 }
 
 thread_local! {
-    static SHARE: std::cell::Cell<Option<Option<usize>>> = const { std::cell::Cell::new(None) };
+    static SHARE: std::cell::Cell<Option<(Option<usize>, usize)>> = const { std::cell::Cell::new(None) };
 }
 
 /// The characters text output fits in; `None` when unbounded.
 pub fn budget() -> Option<usize> {
-    SHARE
+    let room = index_state_room();
+    let (share, opened) = SHARE
         .with(std::cell::Cell::get)
-        .unwrap_or_else(|| BUDGET.get().copied().unwrap_or(Some(DEFAULT_BUDGET)))
+        .unwrap_or_else(|| (BUDGET.get().copied().unwrap_or(Some(DEFAULT_BUDGET)), 0));
+    share.map(|share| share.saturating_sub(room.saturating_sub(opened)))
 }
 
 pub fn within<T>(share: Option<usize>, run: impl FnOnce() -> T) -> T {
-    let before = SHARE.with(|cell| cell.replace(Some(share)));
+    let before = SHARE.with(|cell| cell.replace(Some((share, index_state_room()))));
     let out = run();
     SHARE.with(|cell| cell.set(before));
     out
@@ -292,16 +294,16 @@ pub fn run_streamed(
     command: impl FnOnce(&Sink) -> Result<()>,
 ) -> Result<()> {
     guard(as_json, filter)?;
+    let sink = Sink { as_json, filter };
     if as_json {
         crate::process::whole();
+        return command(&sink);
     }
-    command(&Sink { as_json, filter })?;
-    if !as_json {
-        let mut delivery = crate::session::Delivery::default();
-        print!("{}", index_state(&mut delivery));
-        std::io::stdout().flush()?;
-        delivery.commit();
-    }
+    command(&sink)?;
+    let mut delivery = crate::session::Delivery::default();
+    print!("{}", index_state(&mut delivery));
+    std::io::stdout().flush()?;
+    delivery.commit();
     Ok(())
 }
 
@@ -339,6 +341,13 @@ pub fn index_state(delivery: &mut crate::session::Delivery) -> String {
             (!matches!(offer, crate::session::Offer::Same)).then_some(line)
         })
         .collect()
+}
+
+fn index_state_room() -> usize {
+    crate::relations::left_out_roots()
+        .iter()
+        .map(|root| width(&crate::relations::notice(root)))
+        .sum()
 }
 
 /// The lifecycle for a command whose result is one `Value`. `Value` is

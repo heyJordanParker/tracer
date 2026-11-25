@@ -163,6 +163,7 @@ fn declaration(node: Node, name: Node, source: &[u8], kind: &str, container: Opt
         self_type: None,
         module_file: None,
         supertypes: Vec::new(),
+        returned_class: None,
         visibility,
     }
 }

@@ -62,6 +62,22 @@ brew install ripgrep ast-grep scc universal-ctags   # macOS
 
 On Linux, install `ripgrep` and `universal-ctags` from your distribution, and `ast-grep` and `scc` from their release pages, or use Homebrew on Linux.
 
+## Read PHP# files
+
+`trace` reads a `.sharp` file through `mago`, PHP#'s checker. It runs the project's `vendor/bin/mago`, else the `mago` on your `PATH`, which also takes over when the project's has no `outline` or can't run on this machine, as when Composer installed it in a Linux container. Install it in the project with Composer, at the project's PHP# version:
+
+```bash
+composer require --dev heyjordanparker/mago-sharp
+```
+
+Or install it on your `PATH` from php-sharp's GitHub releases:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/heyJordanParker/php-sharp/master/sharp/mago/scripts/install.sh | bash
+```
+
+`mago self-update` moves an installed `mago` to the latest release. tracer reads `.sharp` files with the `mago` of PHP# 0.8.1 or later, which has `mago outline`, and `trace doctor` names an older one. Without `mago`, or with an older one, a `.sharp` file prints its lines with no declarations, and every other command answers as usual.
+
 ## Check the install
 
 ```bash
@@ -69,7 +85,7 @@ trace --version
 trace doctor
 ```
 
-`trace doctor` checks `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`, and prints the install command for each one that is missing. Every other command fails with the same message while one is missing.
+`trace doctor` checks `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`, and prints the install command for each one that is missing. Every other command fails with the same message while one is missing. It lists `mago` as optional, with its install command, or names the `mago` it found that has no `outline` command, and never fails for it.
 
 ## Platforms
 

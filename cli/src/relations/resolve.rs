@@ -10,7 +10,7 @@ use crate::relations::modules::{
 };
 use crate::relations::types::{type_scope, Scope, TypeOwners, TypePaths};
 use crate::relations::{
-    confidence_code, confidence_name, file_to_module, get, same_name, shape_matches, types_member_receiver, weaker,
+    confidence_code, confidence_name, file_to_module, get, resolves_as, same_name, shape_matches, types_member_receiver, weaker,
     Candidate, Relations, CONFIDENCE_AMBIGUOUS, CONFIDENCE_EXTRACTED, CONFIDENCE_INFERRED,
 };
 use rayon::prelude::*;
@@ -25,17 +25,18 @@ use std::sync::OnceLock;
 /// from a child module's file, and so does a member of a PHP trait, which
 /// the classes using it take in.
 fn candidates_in<'a>(path: &'a str, facts: &'a FileFacts, name: &'a str) -> impl Iterator<Item = Candidate> + 'a {
+    let language = resolves_as(facts.language.as_deref());
     facts.extraction.iter().flat_map(move |extraction| {
         extraction
             .declarations
             .iter()
-            .filter(move |declaration| same_name(facts.language.as_deref(), &declaration.name, name))
+            .filter(move |declaration| same_name(language, &declaration.name, name))
             .map(move |declaration| Candidate {
                 file: path.to_string(),
-                language: facts.language.clone(),
+                language: language.map(str::to_string),
                 inline_module: inline_module(extraction, declaration.line, Some(declaration)),
                 is_file_local: declaration.visibility == extraction::Visibility::FileLocal
-                    && facts.language.as_deref() != Some("rust")
+                    && language != Some("rust")
                     && !declaration.parent.and_then(|parent| extraction.declarations.get(parent as usize)).is_some_and(|parent| {
                         extraction::modifiers(&parent.header, parent.line - parent.header_line, &parent.name).contains(&"trait")
                     }),
@@ -196,8 +197,8 @@ pub fn candidates(relations: &Relations, symbols: &[&str]) -> Vec<Candidates> {
 /// Every resolved use site of each of `names`, in their order, computed now
 /// from the files the index names rather than read out of a stored edge list.
 ///
-/// Resolution stays structural: candidates are restricted to the same
-/// language as the use site, a free call resolves only to non-method
+/// Resolution stays structural: candidates are restricted to the language
+/// the use site resolves as, through `resolves_as`, a free call resolves only to non-method
 /// declarations, a static use resolves to the named class or its method, and
 /// a member call resolves to methods. Member calls remain ambiguous when the
 /// receiver type is unknown; free and static calls also remain ambiguous when
@@ -246,14 +247,14 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
     wanted.sort();
     let php = Some("php");
     let mut return_types = ReturnTypes::default();
-    let ancestry = &Ancestry::new(relations);
+    let ancestry = &Ancestry::new(relations, &modules);
     let lineages: Vec<OnceLock<Vec<Vec<(String, Vec<&str>)>>>> = names.iter().map(|_| OnceLock::new()).collect();
     for chunk in wanted.chunks(file_facts::RESOLVE_CHUNK) {
         let needed: Vec<PathBuf> = chunk.iter().map(|p| repo_root.join(*p)).collect();
         let facts = file_facts::extracted(&needed, repo_root);
         let receivers: Vec<String> = facts
             .iter()
-            .filter(|(_, f)| f.language.as_deref() == php)
+            .filter(|(_, f)| resolves_as(f.language.as_deref()) == php)
             .flat_map(|(path, f)| {
                 let test_case = relations.roots.test_case_of(path);
                 f.extraction
@@ -279,12 +280,11 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                 let Some(extraction) = &f.extraction else {
                     return outs;
                 };
+                let language = resolves_as(f.language.as_deref());
                 let import_resolutions: Vec<ImportResolution<'_>> = extraction
                     .imports
                     .iter()
-                    .map(|import| {
-                        relations.resolve_import(path, import, f.language.as_deref(), &modules, &extraction.imports)
-                    })
+                    .map(|import| relations.resolve_import(path, import, language, &modules, &extraction.imports))
                     .collect();
                 let imported: HashMap<String, &'static str> = import_resolutions
                     .iter()
@@ -302,26 +302,26 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                         imported
                     });
                 let mut type_paths = TypePaths::new();
-                let is_php = f.language.as_deref() == php;
+                let is_php = language == php;
                 let test_case = relations.roots.test_case_of(path);
                 for (index, reference) in names.iter().enumerate().flat_map(|(index, named)| {
                     extraction
                         .references
                         .iter()
-                        .filter(move |r| same_name(f.language.as_deref(), &r.name, &named.name))
+                        .filter(move |r| same_name(language, &r.name, &named.name))
                         .map(move |reference| (index, reference))
                 }) {
                     let out = &mut outs[index];
                     let candidates = &candidates[index];
                     let candidate_types = &candidate_types[index];
                     let declared_modules = &names[index].declared_modules;
-                    let rust_scoped = crate_scoped && f.language.as_deref() == Some("rust");
+                    let rust_scoped = crate_scoped && language == Some("rust");
                     let bound_outside = |reference: &extraction::Reference| {
                         import_resolutions.iter().zip(&extraction.imports).any(|(resolution, import)| {
                             resolution
                                 .invalid_bindings
                                 .iter()
-                                .any(|binding| reference_uses_binding(f.language.as_deref(), reference, binding))
+                                .any(|binding| reference_uses_binding(language, reference, binding))
                                 && import.in_force(reference.line, &extraction.imports)
                         })
                     };
@@ -337,8 +337,17 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                     let typed = (is_php && reference.shape == RefShape::Member)
                         .then_some(reference.receiver.as_deref())
                         .flatten()
-                        .map(|class| (class.to_string(), ancestry.named_in(path, class, &extraction.imports)));
+                        .map(|class| (class.to_string(), ancestry.named_in(path, class, reference.line, &extraction.imports)));
                     let all_candidates = candidates;
+                    let named_candidates: Vec<&Candidate>;
+                    let candidates = match reference.receiver.as_deref().filter(|_| is_php && reference.shape == RefShape::Static) {
+                        Some(class) => {
+                            named_candidates =
+                                ancestry.without_namesakes(path, class, reference.line, &extraction.imports, candidates);
+                            &named_candidates
+                        }
+                        None => candidates,
+                    };
                     let inherited =
                         is_php.then(|| ancestry.inherited(path, &extraction.imports, reference, candidates)).flatten();
                     let (reference, candidates) = match &inherited {
@@ -373,7 +382,7 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                             &scope.candidates,
                             |_| true,
                             path,
-                            f,
+                            language,
                             extraction,
                             &scope.reference,
                             reference,
@@ -386,7 +395,6 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                         }
                     }
                     let before = out.len();
-                    let language = f.language.as_deref();
                     let in_calling_file: Vec<&Candidate> = candidates
                         .iter()
                         .copied()
@@ -399,7 +407,7 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                         .collect();
                     let preferred = if in_calling_file.len() == 1 { &in_calling_file } else { candidates };
                     let matched =
-                        resolve_one(preferred, |_| true, path, f, extraction, reference, reference, &imported, out);
+                        resolve_one(preferred, |_| true, path, language, extraction, reference, reference, &imported, out);
                     let without_receiver = match reference.shape {
                         RefShape::Member if untyped_member_is_ambiguous(language) => Some(RefShape::Member),
                         RefShape::Member if inside_receiver_type(extraction, reference, language) => {
@@ -442,7 +450,7 @@ pub fn use_sites(relations: &Relations, names: &[Candidates], in_file: Option<&s
                             receiver: None,
                             ..reference.clone()
                         };
-                        resolve_one(&admitted, named, path, f, extraction, &retry, reference, &imported, out);
+                        resolve_one(&admitted, named, path, language, extraction, &retry, reference, &imported, out);
                     }
                     if rust_scoped {
                         cap(&mut out[before..], CONFIDENCE_INFERRED);
@@ -653,7 +661,7 @@ fn resolve_one(
     candidates: &[&Candidate],
     proven: impl Fn(&Candidate) -> bool,
     path: &str,
-    facts: &FileFacts,
+    language: Option<&str>,
     extraction: &ExtractionResult,
     reference: &extraction::Reference,
     written: &extraction::Reference,
@@ -664,12 +672,8 @@ fn resolve_one(
         .iter()
         .copied()
         .filter(|c| {
-            shape_matches(
-                c,
-                facts.language.as_deref(),
-                reference.shape,
-                reference.receiver.as_deref(),
-            ) && (!c.is_file_local || c.file == path)
+            shape_matches(c, language, reference.shape, reference.receiver.as_deref())
+                && (!c.is_file_local || c.file == path)
         })
         .collect();
     if matching.is_empty() {
@@ -686,7 +690,7 @@ fn resolve_one(
     };
     if reference.shape == RefShape::Member
         && reference.receiver.is_none()
-        && untyped_member_is_ambiguous(facts.language.as_deref())
+        && untyped_member_is_ambiguous(language)
     {
         for candidate in matching {
             out.push(site(candidate, CONFIDENCE_AMBIGUOUS));
@@ -700,16 +704,16 @@ fn resolve_one(
         }
         let has_value_receiver = written.shape == RefShape::Member
             && match written.receiver.as_deref() {
-                None => types_member_receiver(facts.language.as_deref()),
+                None => types_member_receiver(language),
                 Some(receiver) => {
                     let named = receiver.rsplit(['\\', '.', ':']).next().unwrap_or(receiver);
-                    !types_member_receiver(facts.language.as_deref())
+                    !types_member_receiver(language)
                         && !is_self_receiver(receiver)
                         && !candidate
                             .declaration
                             .container
                             .as_deref()
-                            .is_some_and(|container| same_name(facts.language.as_deref(), container, named))
+                            .is_some_and(|container| same_name(language, container, named))
                 }
             };
         let confidence = if !proven(candidate) {
@@ -748,12 +752,10 @@ fn resolve_one(
         }
         return true;
     }
-    // Only a member call may stay ambiguous: its receiver type is not named,
-    // so several same-language methods genuinely could be the target. A free
-    // or static call names its target exactly, so an unresolved one is name
-    // coincidence, and fanning out would reintroduce the noise this model
-    // removes.
-    if reference.shape == RefShape::Member {
+    // A member call may stay ambiguous, and so may a PHP static call on a
+    // class name several namespaces declare. Any other free or static call
+    // names its target exactly, so an unresolved one is name coincidence.
+    if reference.shape == RefShape::Member || (language == Some("php") && reference.receiver.is_some()) {
         for candidate in matching {
             out.push(site(candidate, CONFIDENCE_AMBIGUOUS));
         }

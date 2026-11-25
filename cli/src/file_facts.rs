@@ -70,13 +70,15 @@ pub struct FileFacts {
     pub mtime_ns: i64,
     pub size_bytes: i64,
     pub extraction: Option<ExtractionResult>,
-    /// Why `ctags` gave this content no declarations, when it failed. Stored
-    /// so the same content is never retried and every answer names it again.
+    /// Why the file's reader, `ctags` or `mago outline`, gave this content no
+    /// declarations, when it failed. Stored so the same content is never
+    /// retried and every answer names it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extraction_failure: Option<extraction::Failure>,
-    /// `extraction::ctags_build`: the `ctags` the declarations came from.
+    /// `extraction::reader`: the `ctags` or `mago` the declarations came
+    /// from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ctags: Option<extraction::CtagsBinary>,
+    pub reader: Option<extraction::Reader>,
     /// The file's leading comment, `extraction::leading_comment`'s.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leading_comment: Option<String>,
@@ -100,17 +102,18 @@ impl FileFacts {
         serde_json::to_value(self).expect("FileFacts is serializable")
     }
 
-    /// Stored facts, read back. Facts `ctags` gave are a miss once a
-    /// different `ctags`, or one where there was none, is on `PATH`, so the
-    /// file extracts again. A stored `ctags` failure is reported again,
-    /// because the answer that uses these facts is thinner for it.
-    fn from_bytes(bytes: &[u8]) -> Option<FileFacts> {
+    /// Stored facts of a file of `repo_root`, read back. Facts `ctags` or
+    /// `mago` gave are a miss once a different build, or one where there was
+    /// none, reads the file, so it extracts again. A stored failure is
+    /// reported again, because the answer that uses these facts is thinner
+    /// for it.
+    fn from_bytes(bytes: &[u8], repo_root: &Path) -> Option<FileFacts> {
         let facts: FileFacts = serde_json::from_slice(bytes).ok()?;
-        if !extraction::ctags_build_holds(&facts.path, facts.ctags.as_ref()) {
+        if !extraction::reader_holds(&repo_root.join(&facts.path), facts.reader.as_ref()) {
             return None;
         }
         if let Some(failure) = &facts.extraction_failure {
-            extraction::report_failure(Some(&facts.path), &failure.reason);
+            extraction::report_failure(&facts.path, &failure.reason);
         }
         if facts.rank != rank(facts.cyclomatic_complexity_total) {
             return None;
@@ -143,15 +146,25 @@ impl FileFacts {
 }
 
 /// The code facts of `bytes` as the file at `path`: the per-file entry they
-/// key, else a fresh extraction. A fresh one is never stored, because only
-/// the mtime index removes a per-file entry, and it knows only the working
-/// tree's files, so a past version's entry would stay for good.
+/// key, else their revision entry, `cache::blob_key` of that key, else a
+/// fresh extraction. A fresh one that `ctags` or `mago` read, a process
+/// start each, is stored as the revision entry, which `cache::sweep` ages
+/// out, because only the mtime index removes a per-file entry and it knows
+/// only the working tree's files.
 pub fn of_bytes(bytes: &[u8], path: &str, repo_root: &Path) -> FileFacts {
     let full = repo_root.join(path);
     let key = cache::file_hash_from_bytes(bytes, &full, repo_root);
-    cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root)
-        .and_then(|stored| FileFacts::from_bytes(&stored))
-        .unwrap_or_else(|| extract_facts(&full, repo_root, bytes))
+    let blob = cache::blob_key(&key);
+    let stored = |key: &str| {
+        cache::load_bytes(cache::NAMESPACE_FILE, key, repo_root).and_then(|stored| FileFacts::from_bytes(&stored, repo_root))
+    };
+    stored(&key).or_else(|| stored(&blob)).unwrap_or_else(|| {
+        let facts = extract_facts(&full, repo_root, bytes, None);
+        if facts.reader.is_some() {
+            let _ = cache::save(cache::NAMESPACE_FILE, &blob, &facts.to_json(), repo_root);
+        }
+        facts
+    })
 }
 
 pub fn extraction_of(bytes: &[u8], path: &str, repo_root: &Path) -> Option<crate::extraction::ExtractionResult> {
@@ -226,7 +239,9 @@ fn requires_scc(functions: &[ccn::FunctionFact], extraction: &Option<ExtractionR
     functions.is_empty() || extraction.is_none()
 }
 
-/// Extract per-file code facts, with no git facts and no scc count.
+/// Extract per-file code facts, with no git facts and no scc count. A file
+/// no grammar parses takes `outlined`, its extraction already read, else
+/// `extraction::extract_without_grammar`'s.
 ///
 /// Single-parse: the CCN backend and the import/export extractor share ONE
 /// `tree_sitter::Tree` when the grammars coincide (py/ts/php — the only
@@ -234,7 +249,12 @@ fn requires_scc(functions: &[ccn::FunctionFact], extraction: &Option<ExtractionR
 /// parse of the dominant cost on those files. For CCN-only languages
 /// (go/rust/...) extraction is None anyway, so there is no second parse to
 /// eliminate.
-fn extract_facts(path: &Path, repo_root: &Path, source_bytes: &[u8]) -> FileFacts {
+fn extract_facts(
+    path: &Path,
+    repo_root: &Path,
+    source_bytes: &[u8],
+    outlined: Option<(Extraction, Vec<ccn::FunctionFact>)>,
+) -> FileFacts {
     let relative = cache::relative_to_root(path, repo_root);
     let path_str = path.to_string_lossy().to_string();
 
@@ -265,9 +285,9 @@ fn extract_facts(path: &Path, repo_root: &Path, source_bytes: &[u8]) -> FileFact
                 }
             }
             None => {
-                // No CCN grammar (e.g. markdown/json): `ctags`, when it maps
-                // the language, else the scc fallback path.
-                (Vec::new(), extraction::extract(source_bytes, &path_str), extraction::leading_comment(source_bytes, None))
+                let (extraction, functions) =
+                    outlined.unwrap_or_else(|| extraction::extract_without_grammar(source_bytes, &path_str));
+                (functions, extraction, extraction::leading_comment(source_bytes, None))
             }
         };
     let (extraction, extraction_failure) = match extraction {
@@ -297,7 +317,7 @@ fn extract_facts(path: &Path, repo_root: &Path, source_bytes: &[u8]) -> FileFact
         size_bytes,
         extraction,
         extraction_failure,
-        ctags: extraction::ctags_build(&path_str),
+        reader: extraction::reader(path),
         leading_comment,
         ..FileFacts::default()
     }
@@ -524,8 +544,15 @@ pub fn extracted_within(paths: &[PathBuf], repo_root: &Path, limit: Option<Insta
     complete.then(|| resolved.into_iter().map(|(rel, _, facts)| (rel, facts)).collect())
 }
 
+/// One resolved path: `(rel, git_rel, facts)` and the mtime index entry it
+/// writes, if any.
+type Resolved = (String, String, FileFacts, Option<(String, Stamp, String)>);
+
 /// Each readable path's code facts, as `(rel, git_rel, facts)`, and whether
-/// `limit` left none out.
+/// `limit` left none out. The `.sharp` files no entry answers are outlined
+/// from disk, one `mago` start per `RESOLVE_CHUNK`, and a file whose stamp
+/// moved after its bytes were read is extracted from those bytes on its
+/// own, so stored facts are always those of the bytes their key names.
 fn resolve(paths: &[PathBuf], repo_root: &Path, limit: Option<Instant>) -> (Vec<(String, String, FileFacts)>, bool) {
     let cut = AtomicBool::new(false);
     let can_persist = cache::git_dir(repo_root).is_some();
@@ -569,18 +596,24 @@ fn resolve(paths: &[PathBuf], repo_root: &Path, limit: Option<Instant>) -> (Vec<
             abs,
         });
     }
-    // Parallel resolve. Each job yields (rel, git_rel, FileFacts, Option<new
-    // index entry>). Index entries are merged single-threaded afterward and
-    // the index is persisted exactly once.
-    let resolved: Vec<(String, String, FileFacts, Option<(String, Stamp, String)>)> = jobs
+    /// A job no stored entry answers: the bytes read and the key they make.
+    struct Miss<'a> {
+        job: &'a Job,
+        data: Vec<u8>,
+        key: String,
+    }
+    let past_limit = || limit.is_some_and(|limit| Instant::now() >= limit);
+    // Parallel lookup. A stored entry answers a job as (rel, git_rel,
+    // FileFacts, Option<new index entry>); every other job is a miss.
+    let looked_up: Vec<Result<Resolved, Miss>> = jobs
         .par_iter()
         .filter_map(|j| {
             // (1) in-memory stat fast-path — no I/O beyond the cached
             // entry load when the stamp matches the once-loaded index.
             if let Some(k) = index.get(&j.rel).and_then(|e| stamp_matches(e, &j.stamp)) {
                 if let Some(bytes) = cache::load_bytes(cache::NAMESPACE_FILE, k, repo_root) {
-                    if let Some(f) = FileFacts::from_bytes(&bytes) {
-                        return Some((j.rel.clone(), j.git_rel.clone(), f, None));
+                    if let Some(f) = FileFacts::from_bytes(&bytes, repo_root) {
+                        return Some(Ok((j.rel.clone(), j.git_rel.clone(), f, None)));
                     }
                 }
             }
@@ -588,18 +621,48 @@ fn resolve(paths: &[PathBuf], repo_root: &Path, limit: Option<Instant>) -> (Vec<
             let data = fs::read(&j.abs).ok()?;
             let key = cache::file_hash_from_bytes(&data, &j.abs, repo_root);
             if let Some(bytes) = cache::load_bytes(cache::NAMESPACE_FILE, &key, repo_root) {
-                if let Some(f) = FileFacts::from_bytes(&bytes) {
-                    return Some((j.rel.clone(), j.git_rel.clone(), f, Some((j.rel.clone(), j.stamp.clone(), key))));
+                if let Some(f) = FileFacts::from_bytes(&bytes, repo_root) {
+                    return Some(Ok((j.rel.clone(), j.git_rel.clone(), f, Some((j.rel.clone(), j.stamp.clone(), key)))));
                 }
             }
-            // (3) fresh real extraction (no lite-facts). A file whose code
-            // gives no complexity of its own takes scc's, so only such a
-            // file runs the whole-tree scc count.
-            if limit.is_some_and(|limit| Instant::now() >= limit) {
+            Some(Err(Miss { job: j, data, key }))
+        })
+        .collect();
+    let mut resolved: Vec<Resolved> = Vec::with_capacity(looked_up.len());
+    let mut misses: Vec<Miss> = Vec::new();
+    for found in looked_up {
+        match found {
+            Ok(stored) => resolved.push(stored),
+            Err(miss) => misses.push(miss),
+        }
+    }
+    let mut outlined: Vec<Option<(Extraction, Vec<ccn::FunctionFact>)>> = misses.iter().map(|_| None).collect();
+    let sharp: Vec<usize> = (0..misses.len()).filter(|&at| extraction::sharp::reads(&misses[at].job.rel)).collect();
+    for chunk in sharp.chunks(RESOLVE_CHUNK) {
+        if past_limit() {
+            break;
+        }
+        let paths: Vec<&str> = chunk.iter().map(|&at| misses[at].job.rel.as_str()).collect();
+        let unchanged = |at: usize| {
+            let job = misses[chunk[at]].job;
+            fs::metadata(&job.abs).is_ok_and(|md| stamp_of(&md) == job.stamp)
+        };
+        for (&at, read) in chunk.iter().zip(extraction::sharp::extract_on_disk(repo_root, &paths, unchanged)) {
+            outlined[at] = read;
+        }
+    }
+    // (3) fresh real extraction (no lite-facts). A file whose code
+    // gives no complexity of its own takes scc's, so only such a
+    // file runs the whole-tree scc count.
+    let extracted: Vec<Resolved> = misses
+        .into_par_iter()
+        .zip(outlined)
+        .filter_map(|(Miss { job: j, data, key }, outlined)| {
+            if outlined.is_none() && past_limit() {
                 cut.store(true, Ordering::Relaxed);
                 return None;
             }
-            let mut facts = extract_facts(&j.abs, repo_root, &data);
+            let mut facts = extract_facts(&j.abs, repo_root, &data, outlined);
             let mut storable = can_persist;
             if requires_scc(&facts.functions, &facts.extraction) {
                 let scc = scc.get_or_init(|| repo_context::metrics(repo_root));
@@ -613,6 +676,7 @@ fn resolve(paths: &[PathBuf], repo_root: &Path, limit: Option<Instant>) -> (Vec<
             Some((j.rel.clone(), j.git_rel.clone(), facts, Some((j.rel.clone(), j.stamp.clone(), key))))
         })
         .collect();
+    resolved.extend(extracted);
 
     // Merge index updates and persist ONCE (was the O(N²) fsync storm).
     let mut updates = Vec::new();

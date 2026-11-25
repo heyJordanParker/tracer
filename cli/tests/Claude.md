@@ -8,11 +8,11 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - The suite drives the `trace` binary as a subprocess.
 - `TRACE_BIN` selects the binary under test.
 - `TRACE_BIN` defaults to `trace` on `PATH`.
-- A test that checks trimming builds a fixture whose answer is over the 30,000 characters every agent gets, because no flag or variable sizes the output.
-- The suite asserts exit codes, stdout, stderr, JavaScript Object Notation shape, and wall-clock latency.
+- A test that checks trimming builds a fixture whose answer is over the 30,000 characters every agent gets, because no flag or variable lowers it.
+- The suite asserts exit codes, stdout, stderr, JSON shape, and latency.
 - `src/lib.rs` is the shared test harness.
 - Each test fixture owns a hermetic on-disk git repository and a scratch folder beside it, and suffixes every session id its runs pass, in the environment and in a hook's `session_id`, so each fixture's session records start empty and are deleted with it.
-- A test that runs `trace` itself, to hold its stdin or stdout, starts it from `Fixture::command`, the one place the invoking agent's session identity is removed, the fixture's suffix is applied, and the test process becomes `CLAUDE_PID`, so a build a test's hook starts ends with the test run.
+- A test that runs `trace` itself, to hold its stdin or stdout, starts it from `Fixture::command`, which suffixes its session ids for the free `command`, the one place the invoking agent's identity is removed and the test process is `CLAUDE_PID`, so a build a test's hook starts ends with the test run.
 - `tests/background_build.rs` runs alone in its own test binary, because `build.lock` is one per user.
 - `Fixture::record(session, agent)` reads an Agent's `record.json`.
 - `Fixture::hook(event, harness, input, flags, env)` runs `trace hook` with `input` on stdin and a 20-second deadline unless `flags` name one, and `Run::context` reads its answer's extra context.
@@ -43,8 +43,8 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `tests/enrichment.rs` pins the surface on the first and second `context` of one session, on `read`, `info`, a window, `--offset`/`--limit`, the batch `--json` `results[].content`, `read --revision`, and a budget-trimmed read.
 - `tests/enrichment.rs` pins the `calls:` block on a windowed `context` and `read`, its `--json` key, its source hidden once the session reads it, its absence on a whole-file read, every call named when its call sites overrun the budget, a repeated function's source shown once, one head per function with all its lines once heads per call overrun, one line per file once those overrun too with the code still printed inside the budget, a trimmed window's hint continuing after its last printed line, a call used in more files than the work budget naming the function its line resolves to with its source and no `callers` count, a call defined in more files than the work budget named with its `defined_in` count and no source, a call on a base class naming its declared method beside the overrides, and the work budget resolving every cheap name before a costly one.
 - `tests/enrichment.rs` pins that a warm file call times one `git status`, one `rev-parse HEAD`, and one `for-each-ref` and no `ls-files` or `show-toplevel`, and that a 300-entry directory line costs no per-file facts.
-- `tests/search.rs` pins matches grouped under their declarations and the `declaration` and `type` JavaScript Object Notation fields on `grep`, `grep --revision`, and `pattern`, ripgrep's flags on `grep`, and several path arguments. `output.rs`'s unit tests pin the one-line-per-directory listing when bare paths overrun the budget, trimmed to the directories the budget holds and how many are left.
-- `tests/git.rs` pins the `changed:`, `removed:`, `added:`, and `touches:` rows on a `diff` row and their four JavaScript Object Notation arrays.
+- `tests/search.rs` pins matches grouped under their declarations and the `declaration` and `type` JSON fields on `grep`, `grep --revision`, and `pattern`, ripgrep's flags on `grep`, and several path arguments. `output.rs`'s unit tests pin the one-line-per-directory listing when bare paths overrun the budget, trimmed to the directories the budget holds and how many are left.
+- `tests/git.rs` pins the `changed:`, `removed:`, `added:`, and `touches:` rows on a `diff` row and their four JSON arrays.
 - `tests/git.rs` pins that a partial clone answers `grep` without fetching and still fetches for `read --revision`, and that a blobless clone stores its history, keeps an unchanged rename's history, fetches a folder at an old revision in one request, and exits 2 for a revision file it can't fetch, while a treeless clone, whose walk git ends early, stores that walk as a floor and walks no more until HEAD moves.
 - `tests/architecture_commands.rs` pins `api`'s `internal` level per language and the author's internal marks, above a declaration or on its line, carried to a Rust `impl` and a Go method, and never from prose; `--output`'s file staying unchanged across a body edit and matching `--revision HEAD` on a clean tree; `--revision` reading a commit's files, its three exit-2 cases, and a collapsed file's command keeping it; every depth listed unless `--max-depth` limits it; and an ignored folder named on the command line listed by `api`, `read`, and `structure`, without the files an ignore pattern matches.
 - `tests/git.rs` pins that `history --contains` names the enclosing declaration `grep` names and spawns no ctags.
@@ -55,17 +55,16 @@ Black-box behavior contract for the `trace` binary, pinning the observable surfa
 - `calls.rs`'s unit tests pin other files' call sites printing before the reading file's when only one entry's sites fit.
 - `tests/cache_and_backend.rs` pins that a file spelled differently on a case-insensitive disk settles in the relations index, so a warm call takes no lock.
 - `tests/architecture_commands.rs` pins the surface row on a `defines`, `usages`, and `dependencies` result and the unfabricated module row, a missing symbol naming the repository searched, and a path given as the symbol naming the `--path` command.
-- `tests/session.rs` and `tests/concurrency.rs` pin the session directory baseline and the `status` and `diff` directory block.
+- `tests/session.rs` and `tests/concurrency.rs` pin the session directory baseline and the `status` and `diff` directory block. A baseline test runs `cache build` first, since a cold call may get no relations.
 - `tests/session.rs` pins the record's doc entries and read coverage.
 - `tests/cache_and_backend.rs` pins that neither `cache clear` nor `cache clear --all` touches the session record.
 - `tests/enrichment.rs` pins doc delivery: a doc longer than the budget arriving in parts, every line once and in order; a doc read in part continuing after the read; a doc sent whole staying loaded after a partial read; Markdown read verbatim counting as read; several paths with `--skip`; and `--agent` keeping a Subagent's record its own.
-- `tests/concurrency.rs` pins that concurrent doc deliveries for one session never send the same lines.
-- `tests/concurrency.rs` pins that each of one Agent's parallel windowed `context` calls resolves its `calls:` before it takes the Agent's lock, read from the order of its `calls` and `lock session` timing lines.
+- `tests/concurrency.rs` pins that concurrent doc deliveries for one session never send the same lines, and that each of one Agent's parallel windowed `context` calls resolves its `calls:` before it takes the Agent's lock.
 - `tests/docs_status.rs` pins that a `trace docs` or `read --docs` whose stdout closes before it prints records no doc as sent, in text and `--json`, and that `trace docs --json --filter` records none.
-- `tests/concurrency.rs` holds the deadlock tripwire: a 600-source fixture whose primer runs twenty times under a ten-second deadline.
+- `tests/concurrency.rs` holds a deadlock tripwire: a large fixture's primer run 20 times, each under a deadline.
 - `tests/speed.rs` contains loose regression tripwires for command latency.
 - Binary-file `read` exits 0 and names the file's size instead of its bytes.
-- `survey` outside a git repository exits 0 with structurally valid empty JavaScript Object Notation.
-- `status` outside a git repository exits 0 with structurally valid empty JavaScript Object Notation.
+- `status` outside a git repository exits 0 with structurally valid empty JSON.
 - Explicit not-found errors use stderr and exit 2.
 - A failing `ctags` is named on stderr on the call that extracts the file and on every call that reads the stored failure, the other files still answer, and the run exits 2.
+- `tests/sharp.rs` reads `.sharp` through stub `mago`s that exit 64 on any other call, so it pins tracer's flags, its rows and failures, PHP and Sharp resolving together, and one start per chunk.

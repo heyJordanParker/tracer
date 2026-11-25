@@ -259,6 +259,7 @@ fn eight_concurrent_history_searches_walk_the_commits_once() {
 #[test]
 fn concurrent_agents_share_one_parseable_directory_baseline() {
     let f = standard_repo();
+    f.trace(&["cache", "build", "."]).ok();
     let f = &f;
     thread::scope(|scope| {
         let handles: Vec<_> = (0..8)

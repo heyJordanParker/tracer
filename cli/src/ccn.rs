@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
-use tree_sitter::{Language, Node, Parser};
+use tree_sitter::{Language, Node};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionFact {
@@ -275,18 +275,6 @@ pub fn lang_for_path(path: &str) -> Option<(&'static str, Language)> {
                 })
         })?;
     language_for(&ext)
-}
-
-/// Per-function CCN facts for a source file across all ten languages.
-/// None for genuinely unsupported extensions (caller falls back to scc).
-pub fn analyze(source: &[u8], path: &str) -> Option<Vec<FunctionFact>> {
-    let (lang_name, language) = lang_for_path(path)?;
-    let mut parser = Parser::new();
-    if parser.set_language(&language).is_err() {
-        return Some(vec![]);
-    }
-    let tree = parser.parse(source, None)?;
-    Some(facts_from_tree(&tree, source, lang_name))
 }
 
 /// CCN facts from an already-parsed tree. Decoupled from the parse so the

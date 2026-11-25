@@ -1124,6 +1124,127 @@ fn php_this_self_and_static_resolve_to_the_enclosing_class() {
 }
 
 #[test]
+fn php_static_call_resolves_to_the_class_its_namespace_names_beside_a_namesake() {
+    let f = Fixture::new();
+    f.write("composer.json", r#"{"autoload":{"psr-4":{"PA\\":"pa/","PB\\":"pb/"}}}"#);
+    f.write(
+        "pa/Report.php",
+        concat!(
+            "<?php\n",
+            "namespace PA;\n",
+            "class Report {\n",
+            "    public static function same(int $a, int $b): bool { return $a == $b; }\n",
+            "    public static function inAnyOrder(): bool { return Report::same(1, 2); }\n",
+            "    public static function viaSelf(): bool { return self::same(1, 2); }\n",
+            "}\n",
+        ),
+    );
+    f.write(
+        "pa/Other.php",
+        "<?php\nnamespace PA;\nclass Other {\n    public static function go(): bool { return Report::same(1, 2); }\n}\n",
+    );
+    f.write(
+        "pb/Report.php",
+        "<?php\nnamespace PB;\nclass Report {\n    public static function same(int $a, int $b): bool { return $a != $b; }\n}\n",
+    );
+    f.commit("two classes named Report in two namespaces");
+    let r = f.trace(&["callers", "same", "--json"]);
+    r.ok();
+    let v = r.view();
+    assert_eq!(
+        caller_rows(&v, "pa/Report.php::same"),
+        vec![row("pa/Report.php", 5, "EXTRACTED"), row("pa/Report.php", 6, "EXTRACTED"), row("pa/Other.php", 4, "INFERRED")],
+        "{v}"
+    );
+    assert_eq!(caller_rows(&v, "pb/Report.php::same"), Vec::<(String, i64, String)>::new(), "{v}");
+}
+
+#[test]
+fn php_static_call_no_namespace_tells_apart_lists_every_namesake_ambiguous() {
+    let f = Fixture::new();
+    f.write("first/Report.php", "<?php\nclass Report {\n    public static function same() { return 1; }\n}\n");
+    f.write("second/Report.php", "<?php\nclass Report {\n    public static function same() { return 2; }\n}\n");
+    f.write("run.php", "<?php\nfunction go() { return Report::same(); }\n");
+    f.commit("two global classes named Report");
+    let r = f.trace(&["callers", "same", "--json"]);
+    r.ok();
+    let v = r.view();
+    assert_eq!(caller_rows(&v, "first/Report.php::same"), vec![row("run.php", 2, "AMBIGUOUS")], "{v}");
+    assert_eq!(caller_rows(&v, "second/Report.php::same"), vec![row("run.php", 2, "AMBIGUOUS")], "{v}");
+}
+
+#[test]
+fn php_member_call_on_a_fully_qualified_namesake_stays_a_caller_of_that_class() {
+    let f = Fixture::new();
+    f.write("composer.json", r#"{"autoload":{"psr-4":{"PA\\":"pa/","PB\\":"pb/"}}}"#);
+    f.write("pa/Report.php", "<?php\nnamespace PA;\nclass Report {\n    public function same() { return 1; }\n}\n");
+    f.write("pb/Report.php", "<?php\nnamespace PB;\nclass Report {\n    public function same() { return 2; }\n}\n");
+    f.write(
+        "pa/Qualified.php",
+        "<?php\nnamespace PA;\nclass Qualified {\n    public function go() { $r = new \\PB\\Report(); return $r->same(); }\n}\n",
+    );
+    f.commit("a member call on the other namespace's Report");
+    let r = f.trace(&["callers", "same", "--json"]);
+    r.ok();
+    let v = r.view();
+    assert!(caller_rows(&v, "pb/Report.php::same").iter().any(|(file, line, _)| file == "pa/Qualified.php" && *line == 4), "{v}");
+}
+
+#[test]
+fn php_fully_qualified_static_call_resolves_to_the_class_psr4_maps_it_to() {
+    let f = Fixture::new();
+    f.write("composer.json", r#"{"autoload":{"psr-4":{"PA\\":"pa/","PB\\":"pb/"}}}"#);
+    f.write("pa/Report.php", "<?php\nnamespace PA;\nclass Report {\n    public static function same() { return 1; }\n}\n");
+    f.write("pb/Report.php", "<?php\nnamespace PB;\nclass Report {\n    public static function same() { return 2; }\n}\n");
+    f.write(
+        "pa/Other.php",
+        "<?php\nnamespace PA;\nclass Other {\n    public static function go() { return \\PB\\Report::same(); }\n}\n",
+    );
+    f.commit("a fully qualified static call on the other namespace's Report");
+    let r = f.trace(&["callers", "same", "--json"]);
+    r.ok();
+    let v = r.view();
+    assert_eq!(caller_rows(&v, "pb/Report.php::same"), vec![row("pa/Other.php", 4, "INFERRED")], "{v}");
+    assert_eq!(caller_rows(&v, "pa/Report.php::same"), Vec::<(String, i64, String)>::new(), "{v}");
+}
+
+#[test]
+fn php_fully_qualified_static_call_no_root_maps_lists_every_namesake_ambiguous() {
+    let f = Fixture::new();
+    f.write("composer.json", r#"{"autoload":{"psr-4":{"PA\\":"pa/"}}}"#);
+    f.write("pa/Report.php", "<?php\nnamespace PA;\nclass Report {\n    public static function same() { return 1; }\n}\n");
+    f.write("pb/Report.php", "<?php\nnamespace PB;\nclass Report {\n    public static function same() { return 2; }\n}\n");
+    f.write(
+        "pa/Other.php",
+        "<?php\nnamespace PA;\nclass Other {\n    public static function go() { return \\PB\\Report::same(); }\n}\n",
+    );
+    f.commit("a fully qualified static call on a namespace no root maps");
+    let r = f.trace(&["callers", "same", "--json"]);
+    r.ok();
+    let v = r.view();
+    assert_eq!(caller_rows(&v, "pa/Report.php::same"), vec![row("pa/Other.php", 4, "AMBIGUOUS")], "{v}");
+    assert_eq!(caller_rows(&v, "pb/Report.php::same"), vec![row("pa/Other.php", 4, "AMBIGUOUS")], "{v}");
+}
+
+#[test]
+fn php_qualified_static_call_resolves_through_the_use_that_binds_its_first_segment() {
+    let f = Fixture::new();
+    f.write("composer.json", r#"{"autoload":{"psr-4":{"PA\\":"pa/","PB\\":"pb/"}}}"#);
+    f.write("pa/Report.php", "<?php\nnamespace PA;\nclass Report {\n    public static function same() { return 1; }\n}\n");
+    f.write("pb/Sub/Report.php", "<?php\nnamespace PB\\Sub;\nclass Report {\n    public static function same() { return 2; }\n}\n");
+    f.write(
+        "pa/Other.php",
+        "<?php\nnamespace PA;\nuse PB\\Sub;\nclass Other {\n    public static function go() { return Sub\\Report::same(); }\n}\n",
+    );
+    f.commit("a static call qualified by a namespace a use binds");
+    let r = f.trace(&["callers", "same", "--json"]);
+    r.ok();
+    let v = r.view();
+    assert_eq!(caller_rows(&v, "pb/Sub/Report.php::same"), vec![row("pa/Other.php", 5, "INFERRED")], "{v}");
+    assert_eq!(caller_rows(&v, "pa/Report.php::same"), Vec::<(String, i64, String)>::new(), "{v}");
+}
+
+#[test]
 fn php_this_call_to_an_inherited_method_resolves_to_the_parent() {
     let f = Fixture::new();
     f.write("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#);

@@ -1,9 +1,12 @@
 //! `trace doctor` — verify required external binaries.
 //! Reports platform, lists found/missing binaries, prints per-platform
-//! install instructions, exits 1 when anything is missing.
+//! install instructions, exits 1 when a required one is missing. `mago`,
+//! which reads `.sharp` files, is optional: it is listed with its install
+//! command and never fails the check.
 
+use crate::extraction::sharp::Mago;
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// (name, darwin, linux, windows). List order is the order binaries are
@@ -40,6 +43,13 @@ const REQUIRED_BINARIES: &[(&str, &str, &str, &str)] = &[
         "scoop install ripgrep",
     ),
 ];
+
+/// How to install `mago`, which reads `.sharp` files: the shell installer
+/// from php-sharp's GitHub releases, or the Composer package that puts it in
+/// the project's `vendor/bin`.
+const MAGO_INSTALL: &str = "curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/heyJordanParker/php-sharp/master/sharp/mago/scripts/install.sh | bash  # or composer require --dev heyjordanparker/mago-sharp";
+
+const MAGO_UPDATE: &str = "tracer reads .sharp files with mago 0.8.1 or later, which has `mago outline`: mago self-update, or composer update heyjordanparker/mago-sharp";
 
 /// Mirrors `deps.detect_platform`: darwin / linux / windows, else linux.
 pub fn detect_platform() -> &'static str {
@@ -155,6 +165,22 @@ pub fn run() -> Result<()> {
             println!("  \u{2717} {name}");
             println!("    install: {}", instruction_for(entry, platform));
         }
+        println!();
+    }
+    println!("Optional:");
+    match crate::extraction::sharp::find(Path::new(".")) {
+        Mago::Outlines(_) => println!("  \u{2713} mago, for .sharp files"),
+        Mago::WithoutOutline(binary) => {
+            println!("  \u{2717} mago, for .sharp files: {} has no outline command", binary.path());
+            println!("    update: {MAGO_UPDATE}");
+        }
+        Mago::Missing => {
+            println!("  \u{2717} mago, for .sharp files");
+            println!("    install: {MAGO_INSTALL}");
+        }
+    }
+    println!();
+    if !missing.is_empty() {
         return Err(crate::process::fail(1, ""));
     }
     println!("All required binaries installed.");

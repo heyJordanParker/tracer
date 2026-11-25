@@ -7,11 +7,12 @@
 //! nothing persists — the `cache::save` chokepoint hard-gates on
 //! `worktree_root_for` and no-ops when it returns `None`.
 //!
-//! Each schema's directory holds two kinds of entry, both JSON written as a
+//! Each schema's directory holds three kinds of entry, all JSON written as a
 //! single line (no indent, the `jsonfmt` byte format) via `save`:
-//! content-addressed per-file entries, which are immutable, and repo-wide
-//! entries, each swept by `evict_prefixed` so a superseded key leaves nothing
-//! behind. Another schema's directory stays until no build has written in it
+//! content-addressed per-file entries, which are immutable and which the
+//! mtime index removes once superseded; revision entries, `blob_key`, which
+//! `sweep` removes once old; and repo-wide entries, each swept by
+//! `evict_prefixed` so a superseded key leaves nothing behind. Another schema's directory stays until no build has written in it
 //! for `stale_schema_age`. Session records are not cache: `crate::session`
 //! keeps them outside every repository.
 //!
@@ -108,20 +109,29 @@ impl Drop for Held {
     }
 }
 
-/// Remove the stale schemas and the leftovers of killed calls. The listing
-/// update runs it, since it runs whenever the tree changed, and so do
-/// `trace cache build` and `cache clear`.
+/// Remove the stale schemas, the stale revision entries, and the leftovers
+/// of killed calls. The listing update runs it, since it runs whenever the
+/// tree changed, and so do `trace cache build` and `cache clear`.
 pub fn sweep(repo_root: &Path) {
     if let Ok(dir) = schema_directory(NAMESPACE_FILE, repo_root) {
         evict_stale_schemas(&dir);
-        sweep_leftovers(&dir, &repo_root.join(CACHE_DIR_NAME).join(TEMPORARY_DIR_NAME));
+        sweep_aged(&dir, &repo_root.join(CACHE_DIR_NAME).join(TEMPORARY_DIR_NAME));
     }
 }
+
+/// The key of a revision entry: the facts of a file's bytes at a revision,
+/// keyed as the per-file entry of the same bytes and path. No index names
+/// it, so `sweep` removes it once nothing wrote it for `stale_schema_age`.
+pub fn blob_key(content_key: &str) -> String {
+    format!("{BLOB_PREFIX}{content_key}")
+}
+
+const BLOB_PREFIX: &str = "blob_";
 
 /// Bump whenever extraction, the `FileFacts` shape, or a repo-wide index
 /// shape changes — a new schema writes into its own directory, so old
 /// entries become unreachable automatically.
-pub const SCHEMA_VERSION: u32 = 55;
+pub const SCHEMA_VERSION: u32 = 60;
 
 /// A build in use writes its schema's git-activity key at least once a day,
 /// because that key carries the date, so a week without a write means no build
@@ -513,23 +523,31 @@ fn evict_stale_schemas(current: &Path) {
     }
 }
 
-/// Delete what a killed trace left behind: a `save` temp (`*.tmp`) in this
-/// schema's directory, and any file in `.tracer-cache/tmp/`. Signals and the
-/// watchdog end trace without running destructors, so these outlive it.
-fn sweep_leftovers(schema: &Path, temporary: &Path) {
-    let old = |entry: &fs::DirEntry| {
+/// Delete what a killed trace left behind, a `save` temp (`*.tmp`) in this
+/// schema's directory and any file in `.tracer-cache/tmp/`, once
+/// `leftover_age` old, and a revision entry once `stale_schema_age` old.
+/// Signals and the watchdog end trace without running destructors, so the
+/// leftovers outlive it.
+fn sweep_aged(schema: &Path, temporary: &Path) {
+    let older = |entry: &fs::DirEntry, limit: Duration| {
         entry
             .metadata()
             .and_then(|metadata| metadata.modified())
-            .is_ok_and(|written| written.elapsed().is_ok_and(|age| age > leftover_age))
+            .is_ok_and(|written| written.elapsed().is_ok_and(|age| age > limit))
     };
     for entry in fs::read_dir(schema).into_iter().flatten().flatten() {
-        if entry.path().extension().is_some_and(|extension| extension == "tmp") && old(&entry) {
-            let _ = fs::remove_file(entry.path());
+        let path = entry.path();
+        let limit = match path.extension().and_then(|extension| extension.to_str()) {
+            Some("tmp") => leftover_age,
+            Some("json") if entry.file_name().to_str().is_some_and(|name| name.starts_with(BLOB_PREFIX)) => stale_schema_age,
+            _ => continue,
+        };
+        if older(&entry, limit) {
+            let _ = fs::remove_file(path);
         }
     }
     for entry in fs::read_dir(temporary).into_iter().flatten().flatten() {
-        if old(&entry) {
+        if older(&entry, leftover_age) {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -601,35 +619,38 @@ fn is_cache_entry(p: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{leftover_age, sweep_leftovers};
+    use super::{leftover_age, stale_schema_age, sweep_aged};
     use std::fs;
     use std::path::Path;
     use std::time::SystemTime;
 
-    fn write(path: &Path, aged: bool) {
+    fn write(path: &Path, age: std::time::Duration) {
         let file = fs::File::create(path).unwrap();
-        if aged {
-            file.set_modified(SystemTime::now() - leftover_age * 2).unwrap();
-        }
+        file.set_modified(SystemTime::now() - age).unwrap();
     }
 
     #[test]
-    fn a_killed_calls_leftovers_are_swept_and_live_files_kept() {
+    fn a_killed_calls_leftovers_and_old_revision_entries_are_swept_and_live_files_kept() {
         let root = tempfile::tempdir().unwrap();
         let (schema, temporary) = (root.path().join("schema"), root.path().join("tmp"));
         fs::create_dir_all(&schema).unwrap();
         fs::create_dir_all(&temporary).unwrap();
-        write(&schema.join("key.123.0.tmp"), true);
-        write(&schema.join("key.456.0.tmp"), false);
-        write(&schema.join("key.json"), true);
-        write(&temporary.join("tmpAbc.rb"), true);
-        write(&temporary.join("tmpDef.rb"), false);
+        let (old, new) = (leftover_age * 2, std::time::Duration::ZERO);
+        write(&schema.join("key.123.0.tmp"), old);
+        write(&schema.join("key.456.0.tmp"), new);
+        write(&schema.join("key.json"), stale_schema_age * 2);
+        write(&schema.join("blob_old.json"), stale_schema_age * 2);
+        write(&schema.join("blob_recent.json"), old);
+        write(&temporary.join("tmpAbc.rb"), old);
+        write(&temporary.join("tmpDef.rb"), new);
 
-        sweep_leftovers(&schema, &temporary);
+        sweep_aged(&schema, &temporary);
 
         assert!(!schema.join("key.123.0.tmp").exists());
         assert!(schema.join("key.456.0.tmp").exists());
-        assert!(schema.join("key.json").exists());
+        assert!(schema.join("key.json").exists(), "a per-file entry is the mtime index's to remove");
+        assert!(!schema.join("blob_old.json").exists());
+        assert!(schema.join("blob_recent.json").exists());
         assert!(!temporary.join("tmpAbc.rb").exists());
         assert!(temporary.join("tmpDef.rb").exists());
     }

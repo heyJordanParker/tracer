@@ -1,6 +1,7 @@
 //! `trace read`: a file, method, or range as written, numbered by line, in
 //! the worktree or at a git ref. Method-by-name resolution and the
-//! symbol-diff body comparison are AST-derived via `crate::ccn`. A whole
+//! symbol-diff body comparison read the functions and declarations the
+//! file's facts hold, at a ref through `file_facts::of_bytes`. A whole
 //! file's leading license or generated-file notice folds to one line.
 
 use super::context;
@@ -335,15 +336,14 @@ fn trim_to_budget(lines: &mut Vec<RenderedLine>, budget: usize) -> bool {
     true
 }
 
-/// Find `method_name` in `source` via the AST CCN backend and return its
-/// source lines. Matches exact name or qualified suffix. Leading
-/// comment lines directly above the symbol are pulled in via walk-back.
+/// Find `method_name` among `source`'s `functions` and return its source
+/// lines. Matches exact name or qualified suffix. Leading comment lines
+/// directly above the symbol are pulled in via walk-back.
 fn extract_method_from_source<'a>(
     source: &'a str,
-    file_for_language: &str,
+    functions: &[ccn::FunctionFact],
     method_name: &str,
 ) -> Option<Vec<SourceLine<'a>>> {
-    let functions = ccn::analyze(source.as_bytes(), file_for_language)?;
     // PHP qualifies a method as `Class::name`, the other languages as
     // `Class.name`; a bare name reaches either.
     let dotted = format!(".{method_name}");
@@ -499,39 +499,28 @@ fn load_at_revision(revision: &str, repo_root: &Path, relative: &str) -> Option<
     crate::git_activity::blob(repo_root, revision, relative).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Function name -> (start_line, end_line) via the AST CCN backend, used
-/// by the symbol-diff body comparison.
-fn functions_map(
-    source: Option<&str>,
-    relative: &str,
-) -> std::collections::HashMap<String, (i64, i64)> {
-    let mut m = std::collections::HashMap::new();
-    let src = match source {
-        Some(s) => s,
-        None => return m,
-    };
-    if let Some(fns) = ccn::analyze(src.as_bytes(), relative) {
-        for f in fns {
-            m.insert(f.name.clone(), (f.start_line, f.start_line + f.nloc - 1));
-        }
-    }
-    m
+/// Function name -> (start_line, end_line) of one side's facts, used by the
+/// symbol-diff body comparison.
+fn functions_map(side: Option<(&str, &file_facts::FileFacts)>) -> std::collections::HashMap<String, (i64, i64)> {
+    side.map(|(_, facts)| facts.functions.iter())
+        .into_iter()
+        .flatten()
+        .map(|f| (f.name.clone(), (f.start_line, f.start_line + f.nloc - 1)))
+        .collect()
 }
 
-fn exports_of(source: Option<&str>, relative: &str) -> Vec<Value> {
-    let src = match source {
-        Some(s) => s,
-        None => return vec![],
-    };
-    match extraction::extract(src.as_bytes(), relative).extracted() {
-        Some(r) => r.exports().map(|e| json!({"name": e.name, "kind": e.kind, "line": e.line})).collect(),
-        None => vec![],
-    }
+fn exports_of(side: Option<(&str, &file_facts::FileFacts)>) -> Vec<Value> {
+    side.and_then(|(_, facts)| facts.extraction.as_ref())
+        .map(|r| r.exports().map(|e| json!({"name": e.name, "kind": e.kind, "line": e.line})).collect())
+        .unwrap_or_default()
 }
 
+/// The exports one side adds and removes, and the functions whose body
+/// changed, between the source at a ref and the worktree's, each side with
+/// its own facts.
 fn symbol_diff(
-    ref_source: Option<&str>,
-    worktree_source: Option<&str>,
+    ref_side: Option<(&str, &file_facts::FileFacts)>,
+    worktree_side: Option<(&str, &file_facts::FileFacts)>,
     relative: &str,
 ) -> Option<Value> {
     let extension = Path::new(relative)
@@ -543,8 +532,8 @@ fn symbol_diff(
         return None;
     }
 
-    let ref_exports = exports_of(ref_source, relative);
-    let work_exports = exports_of(worktree_source, relative);
+    let ref_exports = exports_of(ref_side);
+    let work_exports = exports_of(worktree_side);
     let key = |e: &Value| {
         (
             e["name"].as_str().unwrap_or("").to_string(),
@@ -567,13 +556,13 @@ fn symbol_diff(
         .cloned()
         .collect();
 
-    let ref_fns = functions_map(ref_source, relative);
-    let work_fns = functions_map(worktree_source, relative);
-    let ref_lines: Vec<&str> = ref_source
-        .map(|s| s.split('\n').collect())
+    let ref_fns = functions_map(ref_side);
+    let work_fns = functions_map(worktree_side);
+    let ref_lines: Vec<&str> = ref_side
+        .map(|(source, _)| source.split('\n').collect())
         .unwrap_or_default();
-    let work_lines: Vec<&str> = worktree_source
-        .map(|s| s.split('\n').collect())
+    let work_lines: Vec<&str> = worktree_side
+        .map(|(source, _)| source.split('\n').collect())
         .unwrap_or_default();
 
     let mut changed: Vec<Value> = Vec::new();
@@ -668,7 +657,6 @@ fn render_one(
     as_diff: bool,
     docs_on: bool,
     session_dedupe: &mut std::collections::BTreeSet<String>,
-    budget: Option<usize>,
     once: bool,
 ) -> Result<RenderedRead> {
     let file_path_raw = Path::new(file_arg);
@@ -708,9 +696,13 @@ fn render_one(
         }
     }
 
+    let facts = match revision {
+        Some(_) => Some(file_facts::of_bytes(source.as_bytes(), &relative, &repo_root)),
+        None => file_facts::get(&file_path, &repo_root),
+    };
     let mut between_resolved_lines: Option<Vec<i64>> = None;
     let selected: Vec<SourceLine<'_>> = if let Some(m) = method {
-        match extract_method_from_source(&source, &relative, m) {
+        match facts.as_ref().and_then(|facts| extract_method_from_source(&source, &facts.functions, m)) {
             Some(lines) => lines,
             None => {
                 // Name where the word does appear, so the refusal carries the
@@ -760,10 +752,6 @@ fn render_one(
     let total_lines = line_count(&source);
     let content_hash = session::content_hash(&source);
     let content_size = source.len();
-    let mut facts = file_facts::get(&file_path, &repo_root);
-    if let (Some(facts), Some(_)) = (facts.as_mut(), revision) {
-        facts.extraction = extraction::extract(source.as_bytes(), &relative).extracted();
-    }
     // The front matter: at a ref, the commit the source came from, in `git
     // log`'s own words; in the worktree, the file's facts and its directory.
     // A file outside any git repository has neither.
@@ -790,7 +778,12 @@ fn render_one(
             let worktree_source = std::fs::read(&file_path)
                 .ok()
                 .map(|bytes| String::from_utf8_lossy(&bytes).to_string());
-            symbol_diff(Some(source.as_str()), worktree_source.as_deref(), &relative)
+            let worktree_facts = file_facts::get(&file_path, &repo_root);
+            symbol_diff(
+                facts.as_ref().map(|facts| (source.as_str(), facts)),
+                worktree_source.as_deref().zip(worktree_facts.as_ref()),
+                &relative,
+            )
         })
         .flatten();
     let file_key = file_path.to_string_lossy();
@@ -838,6 +831,7 @@ fn render_one(
     // calls in what the content and its docs leave, at least a quarter, then
     // the content in the rest. The `# <file>` header, the blank line after
     // the rows, and the trim marker naming `file_arg` also count.
+    let budget = crate::output::budget();
     let front_matter_size = head.len().saturating_sub(header.len() + 1);
     let reserved = relative.len() + file_arg.len() + 100;
     let docs_command = docs::shell_command(
@@ -1081,23 +1075,15 @@ pub fn run(
     // Several files share one budget evenly. Text prints each file as it
     // renders and records it once flushed, so the next file compares against
     // what this one showed.
-    let budget = crate::output::budget().map(|budget| budget / files.len().max(1));
+    let share = crate::output::budget().map(|budget| budget / files.len().max(1));
     let mut output = (!as_json).then(|| std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout().lock()));
     let mut results: Vec<RenderedRead> = Vec::new();
     let mut failed = false;
     for f in &files {
-        let mut rendered = match render_one(
-            f,
-            method.as_deref(),
-            line_range,
-            between_ref,
-            revision,
-            as_diff,
-            docs_on,
-            &mut session_dedupe,
-            budget,
-            !as_json,
-        ) {
+        let rendering = crate::output::within(share, || {
+            render_one(f, method.as_deref(), line_range, between_ref, revision, as_diff, docs_on, &mut session_dedupe, !as_json)
+        });
+        let mut rendered = match rendering {
             Ok(rendered) => rendered,
             Err(error) => {
                 eprintln!("Error: {error:#}");
