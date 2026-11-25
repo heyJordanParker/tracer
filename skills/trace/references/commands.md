@@ -46,8 +46,7 @@ Template:
 
 IF a trace call is slower than expected:
 ### Time its phases with `TRACE_TIMING=1`
-`TRACE_TIMING=1 trace <cmd>` prints one line per phase to stderr in microseconds — the freshness sweep, each decoded cache entry by key, every git subprocess as `timing git <first two args>`, facts, render, and total. Stdout is unchanged.
-Example: a warm `TRACE_TIMING=1 trace context <file>` prints `timing git status`, `timing git rev-parse HEAD`, and `timing git for-each-ref`, and no `ls-files` or `show-toplevel` line.
+`TRACE_TIMING=1 trace <cmd>` prints one line per phase to stderr in microseconds: the freshness sweep, each decoded cache entry by key, every git subprocess as `timing git <first two args>`, facts, render, and total. Stdout is unchanged.
 
 IF passing more than one path to `trace context`:
 ### Add `--no-record`
@@ -55,11 +54,11 @@ Multiple paths require `--no-record` and cannot combine with `--directory`, `--o
 
 IF a path argument names a path that does not exist:
 ### Read the error, then the rest of the answer
-The missing path is named on stderr, every other path still answers, and the command exits 2, as ripgrep does.
+The missing path is named on stderr, every other path still answers, and the command exits 2.
 
-IF stderr says `ctags failed`:
+IF stderr says `ctags failed` or `mago outline failed`:
 ### Treat the named file's declarations as missing
-`universal-ctags` extracts every language without a tree-sitter extractor, and the answer lacks the declarations it failed to give. Every other file still answers, and the command exits 2. `trace doctor` checks the `ctags` install.
+`mago outline` reads `.sharp`, `universal-ctags` what tree-sitter can't. The answer lacks the failed file's declarations, the rest still answer, and the command exits 2. A failed batch, `on <n> files`, is retried per file. A `.sharp` file gets no declarations and no failure when no `mago` has `outline`. `trace doctor` checks both.
 
 ## 2. Know each command's edge cases
 

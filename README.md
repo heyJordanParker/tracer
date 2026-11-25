@@ -50,7 +50,7 @@ Homebrew installs `ripgrep`, `ast-grep`, `scc`, and `universal-ctags` beside it.
 
 ### Requirements
 
-`trace` runs `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`. `trace doctor` checks each one and prints the install command for anything missing.
+`trace` runs `git`, `ripgrep`, `ast-grep`, `scc`, and `universal-ctags`, and `mago` for PHP# `.sharp` files when it is installed. `trace doctor` checks each one and prints the install command for anything missing.
 
 ## What an agent gets
 
